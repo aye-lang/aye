@@ -115,7 +115,8 @@ removed in cff3f60.
   tag value.
 - **Hit by:** the std.http golden (`tests/cases/std_http.ore`), which
   prints names through its own `match`.
-- **Status:** open.
+- **Status:** fixed in O1.7: `@tagName(x)` gives the name of an error,
+  enum or tagged-union tag as a `[]u8`; `std_http` uses it.
 
 #### 52. A method cannot be used as a function value
 

@@ -611,6 +611,8 @@ pub enum Intrinsic {
     Hash,
     /// The hash `args[0]` (a `u64`) mixed with the scalar `args[1]`.
     HashMix,
+    /// `@tagName(x)`: the name of an error or enum tag, a static `[]u8`.
+    TagName,
     /// `@reduceAdd(v)`, `@reduceMin(v)`, `@reduceMax(v)`: the sum (wrapping
     /// for integers), least or greatest lane of a `simd`.
     ReduceAdd,
@@ -3653,6 +3655,16 @@ impl<'a> Checker<'a> {
                     return err(E0107, v.span, format!("`@hash` cannot hash a `{}`: {why}", v.ty));
                 }
                 (TExprKind::Intrinsic { op: Intrinsic::Hash, args: vec![v] }, Type::Int(IntTy::U64))
+            }
+            ExprKind::Builtin { name, args } if name == "tagName" => {
+                let [a] = args.as_slice() else {
+                    return err(E0022, span, "`@tagName` takes one argument, an error or enum value");
+                };
+                let v = self.value(a, None)?;
+                if !matches!(v.ty, Type::ErrorSet(_) | Type::Enum(_)) {
+                    return err(E0116, v.span, format!("`@tagName` needs an error or enum value, found type `{}`", v.ty));
+                }
+                (TExprKind::Intrinsic { op: Intrinsic::TagName, args: vec![v] }, Type::Slice(Box::new(Type::Int(IntTy::U8)), false))
             }
             ExprKind::Builtin { name, args } if name == "hasLink" => {
                 let lib = match args.as_slice() {

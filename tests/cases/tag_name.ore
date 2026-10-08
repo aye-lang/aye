@@ -1,0 +1,49 @@
+// @tagName: the name of an error tag, an enum tag and a tagged-union tag.
+
+error Fail { NotFound, Denied }
+
+enum Color { Red, Green, Blue }
+
+enum Shape {
+    Circle { r: i32 }
+    Square { w: i32 }
+    Dot
+}
+
+fn open(n: i32) Fail!i32 {
+    if n == 0 {
+        return Fail.NotFound
+    }
+    if n < 0 {
+        return Fail.Denied
+    }
+    return n
+}
+
+fn risky(n: i32) !i32 {
+    return try open(n)
+}
+
+pub fn main() {
+    let a = open(0) catch |e| {
+        @println(@tagName(e))
+        0
+    }
+    @println(a)
+    let b = open(-1) catch |e| {
+        @println(@tagName(e))
+        0
+    }
+    let r = risky(0) catch |e| {
+        @println(@tagName(e))
+        0
+    }
+    @println(b + r)
+    let c = Color.Blue
+    @println(@tagName(c))
+    @println(@tagName(Color.Red))
+    let s = Shape.Square { w: 3 }
+    @println(@tagName(s))
+    @println(@tagName(Shape.Dot))
+    @println(@tagName(Shape.Circle { r: 1 }))
+}

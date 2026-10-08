@@ -11,18 +11,6 @@ import std.http.Response
 import std.mem.Allocator
 import std.text.Builder
 
-fn tag(e: ParseError) []u8 {
-    return match e {
-        .Incomplete => "Incomplete"
-        .BadRequest => "BadRequest"
-        .UnsupportedVersion => "UnsupportedVersion"
-        .RequestLineTooLong => "RequestLineTooLong"
-        .HeadersTooLarge => "HeadersTooLarge"
-        .BodyTooLarge => "BodyTooLarge"
-        .OutOfMemory => "OutOfMemory"
-    }
-}
-
 fn show(alloc: Allocator, label: []u8, buf: []u8, limits: Limits) {
     if http.parse(alloc, buf, limits) |p| {
         var req = p.request
@@ -50,7 +38,7 @@ fn show(alloc: Allocator, label: []u8, buf: []u8, limits: Limits) {
     } else |e| {
         @print(label)
         @print(": error ")
-        @print(tag(e))
+        @print(@tagName(e))
         @print(" -> ")
         @print(http.errorStatus(e))
         @println()
@@ -80,7 +68,7 @@ pub fn main() !void {
         @println()
     } else |e| {
         @print("unexpected ")
-        @print(tag(e))
+        @print(@tagName(e))
         @println()
     }
 
@@ -93,7 +81,7 @@ pub fn main() !void {
         req.deinit()
     } else |e| {
         @print("unexpected ")
-        @print(tag(e))
+        @print(@tagName(e))
         @println()
     }
 
