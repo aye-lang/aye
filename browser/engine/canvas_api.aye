@@ -1277,7 +1277,6 @@ fn akCanvasHit(it: *mut Interp, a: Args) JsError!Value {
     return js.boolVal(try svg.contains(it.alloc, pic, x, y, it.toBoolean(it.arg(a, 3))))
 }
 
-
 // Normalize SVG path strings through the existing path parser. addPath
 // and transformed Path2D calls use this too, so relative commands, arcs
 // and quadratic curves need no second parser in the JS bindings.
@@ -1497,7 +1496,6 @@ fn drawTextMask(t: *CanvasMask, area: CanvasArea, px: []mut u8) {
         }
     }
 }
-
 
 struct CanvasTextBounds {
     x0: f64

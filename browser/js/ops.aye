@@ -2,7 +2,6 @@
 
 import std.math
 
-
 pub fn boolNumber(b: bool) f64 {
     if b {
         return 1.0

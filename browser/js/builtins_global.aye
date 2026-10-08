@@ -52,8 +52,6 @@ fn globalEval(it: *mut Interp, a: Args) JsError!Value {
 
 let URI_HEX = "0123456789ABCDEF"
 
-
-
 // Characters encodeURIComponent keeps; encodeURI also keeps `reserved`.
 fn uriUnreserved(c: u8) bool {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '!' || c == '~' || c == '*' || c == '\'' || c == '(' || c == ')'

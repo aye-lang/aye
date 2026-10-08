@@ -18,13 +18,13 @@ pub struct AncestorFilter {
     bits: [4]u64
 
     pub fn empty() AncestorFilter {
-        return AncestorFilter { bits: [4]u64{ 0, 0, 0, 0 } }
+        return AncestorFilter { bits: [4]u64{0, 0, 0, 0} }
     }
 
     /// A filter that may have every key.
     pub fn full() AncestorFilter {
         let all: u64 = 0xffffffffffffffff
-        return AncestorFilter { bits: [4]u64{ all, all, all, all } }
+        return AncestorFilter { bits: [4]u64{all, all, all, all} }
     }
 
     fn add(self: *mut Self, key: u64) {

@@ -4656,4 +4656,3 @@ pub struct Interp {
         return self.newObjectOf(Class.Host, proto, ObjData.Host { tag: tag, index: index, generation: generation })
     }
 }
-

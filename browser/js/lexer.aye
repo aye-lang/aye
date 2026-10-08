@@ -989,4 +989,3 @@ fn endsExpr(k: Tok) bool {
 }
 
 extern fn strtod(s: [*]u8, end: ?[*]u8) f64
-

@@ -348,7 +348,6 @@ let WEAK_STRESS =
     \\})();
     \\out
 
-
 test "weak collections under GC stress" {
     var it = try Interp.create(@testAllocator())
     defer it.deinit()
