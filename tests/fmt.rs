@@ -235,3 +235,27 @@ fn repo_is_formatted() {
         unformatted.join("\n")
     );
 }
+
+#[test]
+fn rust_is_formatted() {
+    let out = match Command::new("cargo")
+        .args(["fmt", "--check"])
+        .current_dir(root())
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => return eprintln!("skipped: cargo fmt not runnable: {e}"),
+    };
+    let err = String::from_utf8_lossy(&out.stderr);
+    if err.contains("rustfmt") && err.contains("not installed") {
+        return eprintln!("skipped: rustfmt is not installed");
+    }
+    let hunks = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("Diff in "))
+        .count();
+    assert!(
+        out.status.success(),
+        "cargo fmt --check: {hunks} unformatted hunks; run `cargo fmt`\n{err}"
+    );
+}

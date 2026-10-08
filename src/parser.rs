@@ -1928,7 +1928,9 @@ impl Parser {
                 }
             },
             _ => {
-                return Err(self.unexpected("pattern (`.Variant`, an integer or character, or `_`)"));
+                return Err(
+                    self.unexpected("pattern (`.Variant`, an integer or character, or `_`)")
+                );
             }
         }
         self.expect(&Tok::FatArrow)?;
