@@ -84,7 +84,23 @@ fn parse_args() -> Result<Args, String> {
     })
 }
 
+/// Rust ignores SIGPIPE, so `println!` panics when stdout is closed
+/// (`aye spec | head`). Restore the default: the process ends quietly, like
+/// any Unix tool.
+#[cfg(unix)]
+fn restore_sigpipe() {
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    // SAFETY: plain libc call, at startup before any thread exists.
+    unsafe { signal(SIGPIPE, SIG_DFL) };
+}
+
 fn main() -> ExitCode {
+    #[cfg(unix)]
+    restore_sigpipe();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let is_help = |a: &String| matches!(a.as_str(), "--help" | "-h");
     // `aye help`, `aye --help`, `aye <cmd> --help` (before a `--`).
