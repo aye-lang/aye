@@ -13,11 +13,12 @@ as the acceptance test of `std.http`. Finished steps are in
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
 | Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.3a | cloud once X1.2 is done; local until then |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | PW wrap-up, then P7 maintenance | P3.48 (merge) | local (archives in `target/sites/`, screenshots) |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | PW wrap-up, then P7 maintenance | P3.48a, then P3.58 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
-Order of dispatch: the browser wrap-ups P3.48, P3.62 and P3.58 first
-(O1.2 and O1.3 are merged: a3498da, 56967d4), with X1.1 beside them;
+Order of dispatch: the browser wrap-ups P3.48a, P3.62, P3.58 and
+P3.58a first (P3.48, O1.2 and O1.3 are merged: 34f6f93, a3498da,
+56967d4), with X1.1 beside them;
 then lane cards in lane priority. Project steps go when their condition
 holds: X1.2 once the user enables cloud, X2.2 at a point with no open
 branch. The browser resumes when Ore criteria O6–O9 are met, in the

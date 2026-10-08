@@ -44,9 +44,10 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
   backlog (P3.50–P3.61).
 - Archives live in each checkout's `target/sites/` (untracked), so steps
   that replay sites or take screenshots run locally.
-- P3.48 is done on `worktree-agent-ae5e6f75817463272` (d540bf2, has
-  `main` up to c8ce6da merged in); its recaptured Mistral archive is in
-  that worktree's `target/sites/mistral`.
+- P3.48 is merged (34f6f93). Its recaptured Mistral archive is in
+  `.claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral`
+  (206 files); the main checkout's is older (202 files, 2026-10-07), so
+  it may not be installed yet (P3.48a).
 - P3.58 is half done: WIP 34c2234 on `worktree-agent-a0b64f7b014b9b6ea`,
   not built (native `TypedArray` in `browser/js/typed.ore`, test
   `browser/tests/js/256_typed_array_views.js`).
@@ -68,18 +69,18 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 
 ## Cards: PW wrap-up
 
-#### P3.48: merge Mistral fixes and its archive
+#### P3.48a: install the recaptured Mistral archive
 - lane: browser
-- goal: merge `worktree-agent-ae5e6f75817463272` into `main` and install its recaptured Mistral archive in the main checkout.
+- goal: the main checkout replays Mistral from the archive P3.48 recaptured (new bundle hash), and the check passes.
 - serves: M2
-- files: none new (merge); `target/sites/mistral/` of the main checkout (untracked)
-- verify: full suite per `docs/plan.md` rule 5, then `python3 browser/tools/page_load.py check --site mistral` → exit 0
-- depends on: –
+- files: `target/sites/mistral/` of the main checkout (untracked; nothing to commit)
+- verify: `diff -rq .claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral target/sites/mistral` → no output, then `browser/build.sh && python3 browser/tools/page_load.py check --site mistral` → exit 0
+- depends on: P3.48 (merged, 34f6f93)
 - parallel with: one other local build/test agent at most
-- where: local (the archive and the screenshots are on this machine)
-- model: sonnet
-- time box: 45 min
-- notes: commit audit first (`git log --oneline main..worktree-agent-ae5e6f75817463272`: `document.fonts`, `'prop' in style`, class-field `super`, `DOMTokenList` iterators, a GC root fix, merges). Main moved since c8ce6da (O1.2, O1.3, open-source prep): merge `main` into the branch first. Copy the archive from `.claude/worktrees/agent-ae5e6f75817463272/target/sites/mistral`; take `check --screens --site mistral` before and after.
+- where: local (archives are on this machine)
+- model: haiku (script-runner)
+- time box: 20 min
+- notes: run in the main checkout `/Users/solemnis/Documents/anyknown-com/ore`. If `diff -rq` already prints nothing, only run the check. Move the old directory aside (`target/sites/mistral.old`), do not delete it, until the check passes.
 
 #### P3.62: practices entry for P3.48
 - lane: browser
@@ -92,7 +93,7 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 - where: cloud (docs only, no archives; local is fine before X1.2)
 - model: sonnet
 - time box: 20 min
-- notes: cite the P3.48 commits from `git log --oneline` of its merge.
+- notes: cite the P3.48 commits (`git log --oneline 34f6f93^1..34f6f93^2`).
 
 #### P3.58: typed array views share one buffer
 - lane: browser
@@ -100,12 +101,12 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 - serves: M2
 - files: `browser/js/typed.ore`, `browser/js/interp.ore` (index and property hooks), `browser/js/lib.ore` (the typed-array part), `browser/tests/js/256_typed_array_views.js`
 - verify: `cargo test --release --test browser js_conformance` → exit 0, with 256 matching Node 22's output (`node browser/tests/js/256_typed_array_views.js`)
-- depends on: P3.48 merged (so the merge order is fixed)
+- depends on: P3.48 (merged, 34f6f93)
 - parallel with: not with other `browser/js/` steps
 - where: local (the WIP is in a local worktree)
 - model: sonnet
 - time box: 45 min
-- notes: resume in `worktree-agent-a0b64f7b014b9b6ea` at 34c2234 (not built). Symptoms: `Uint32Array` read 2568463228 as -1726504068; a `Uint8Array` over another view's `.buffer` saw 2 of 8 bytes. If P3.48 took test number 256, renumber the new test.
+- notes: resume in `worktree-agent-a0b64f7b014b9b6ea` at 34c2234 (not built). Symptoms: `Uint32Array` read 2568463228 as -1726504068; a `Uint8Array` over another view's `.buffer` saw 2 of 8 bytes. Merge `main` in first (P3.48, O1.2, O1.3 landed since the WIP).
 
 #### P3.58a: merge typed arrays, tighten MDN
 - lane: browser
