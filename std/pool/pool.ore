@@ -48,6 +48,7 @@ pub fn Pool(comptime T: type) type {
             }
         }
 
+        /// Frees the slots.
         pub fn deinit(self: *mut Self) {
             self.alloc.free(self.slots)
             self.slots = []mut Slot(T){}
@@ -55,6 +56,7 @@ pub fn Pool(comptime T: type) type {
             self.len = 0
         }
 
+        /// Stores `value` in a free slot (or a new one) and returns its handle.
         pub fn insert(self: *mut Self, value: T) AllocError!Handle(T) {
             if self.free_list |i| {
                 let slot = &mut self.slots[i]
@@ -92,6 +94,8 @@ pub fn Pool(comptime T: type) type {
 
         // Every handle to the slot becomes stale. Removing through a stale
         // handle does nothing.
+        /// Removes the value of `h`; its slot is reused. A stale handle does
+        /// nothing.
         pub fn remove(self: *mut Self, h: Handle(T)) {
             if self.get(h) == null {
                 return
@@ -102,6 +106,8 @@ pub fn Pool(comptime T: type) type {
             self.free_list = h.index
         }
 
+        /// A pointer to the value of `h`; null for a stale handle. Valid until
+        /// the next insert.
         pub fn get(self: *Self, h: Handle(T)) ?*mut T {
             let slot = &mut self.slots[h.index]
             if slot.generation != h.generation { return null }

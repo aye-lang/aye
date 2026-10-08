@@ -1,0 +1,143 @@
+// std.net (O1.3): a thread serves an echo on a port the system picks
+// (port 0); `main` connects, sends 1 MiB in 64 KiB pieces and reads each
+// piece back. Then the errors: a read that times out, and a connection to
+// a closed port.
+
+import std.heap.General
+import std.net
+import std.net.ConnectError
+import std.net.Listener
+import std.net.ReadError
+import std.thread
+
+let MIB: usize = 1 << 20
+let PIECE: usize = 65536
+
+struct Server {
+    listener: Listener
+    echoed: usize = 0
+}
+
+fn serve(s: *mut Server) {
+    let c = s.listener.accept() catch |e| {
+        @println("accept failed")
+        return
+    }
+    defer c.close()
+    var buf = @zeroed([4096]u8)
+    while true {
+        let n = c.read(buf[..]) catch |e| {
+            @println("server read failed")
+            return
+        }
+        if n == 0 {
+            return
+        }
+        c.write(buf[0..n]) catch |e| {
+            @println("server write failed")
+            return
+        }
+        s.echoed += n
+    }
+}
+
+fn echo(port: u16, out: []mut u8, back: []mut u8) !void {
+    let c = try net.connect("localhost", port)
+    defer c.close()
+    for i in 0..out.len {
+        out[i] = (i * 7 % 251) as u8
+    }
+    var off: usize = 0
+    while off < out.len {
+        try c.write(out[off..off + PIECE])
+        var got: usize = 0
+        while got < PIECE {
+            let n = try c.readTimeout(back[off + got..off + PIECE], 5000)
+            if n == 0 {
+                @println("the server closed early")
+                return
+            }
+            got += n
+        }
+        off += PIECE
+    }
+    var same = true
+    for i in 0..out.len {
+        if out[i] != back[i] {
+            same = false
+        }
+    }
+    @print("echoed ")
+    @print(off)
+    @print(" bytes, same: ")
+    @println(same)
+}
+
+// A server that accepts and says nothing: the client's read times out.
+fn silent(l: *mut Listener) {
+    let c = l.accept() catch |e| {
+        return
+    }
+    var buf = @zeroed([16]u8)
+    // Ends when the client closes.
+    let _ = c.read(buf[..]) catch |e| {
+        0
+    }
+    c.close()
+}
+
+fn timeout() !void {
+    var l = try net.listen("127.0.0.1", 0)
+    defer l.close()
+    let t = try thread.spawn(Listener, silent, &mut l)
+    let c = try net.connect("127.0.0.1", l.port())
+    var buf = @zeroed([16]u8)
+    let n = c.readTimeout(buf[..], 50) catch |e| {
+        @print("read timed out: ")
+        @println(e == ReadError.TimedOut)
+        0
+    }
+    c.close()
+    t.join()
+}
+
+fn refused() !void {
+    let l = try net.listen("127.0.0.1", 0)
+    let port = l.port()
+    l.close()
+    let c = net.connect("127.0.0.1", port) catch |e| {
+        @print("connect to a closed port refused: ")
+        @println(e == ConnectError.ConnectionRefused)
+        return
+    }
+    c.close()
+    @println("connected to a closed port")
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    var s = Server { listener: try net.listen("localhost", 0) }
+    defer s.listener.close()
+    @print("port picked: ")
+    @println(s.listener.port() != 0)
+    let t = try thread.spawn(Server, serve, &mut s)
+    let out = try alloc.alloc(0 as u8, MIB)
+    defer alloc.free(out)
+    let back = try alloc.alloc(0 as u8, MIB)
+    defer alloc.free(back)
+    try echo(s.listener.port(), out, back)
+    t.join()
+    @print("server echoed ")
+    @print(s.echoed)
+    @println(" bytes")
+    try timeout()
+    try refused()
+    let bad = net.connect("example.com", 80) catch |e| {
+        @print("connect to a name is an invalid address: ")
+        @println(e == ConnectError.InvalidAddress)
+        return
+    }
+    bad.close()
+}

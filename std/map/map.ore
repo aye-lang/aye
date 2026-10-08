@@ -34,6 +34,7 @@ pub fn StrMapIterator(comptime V: type) type {
         slots: []mut StrSlot(V)
         next_slot: usize
 
+        /// The next entry, in any order; null after the last one.
         pub fn next(self: *mut Self) ?StrEntry(V) {
             while self.next_slot < self.slots.len {
                 let i = self.next_slot
@@ -60,6 +61,7 @@ pub fn StrMap(comptime V: type) type {
             return Self { slots: []mut StrSlot(V){}, count: 0, alloc: alloc }
         }
 
+        /// Frees the table; the keys are not freed (the map never owned them).
         pub fn deinit(self: *mut Self) {
             self.alloc.free(self.slots)
             self.slots = []mut StrSlot(V){}
@@ -84,6 +86,7 @@ pub fn StrMap(comptime V: type) type {
             self.count += 1
         }
 
+        /// The value of `key`, or null.
         pub fn get(self: *Self, key: []u8) ?V {
             if self.find(key) |i| {
                 return self.slots[i].value
@@ -91,6 +94,8 @@ pub fn StrMap(comptime V: type) type {
             return null
         }
 
+        /// A pointer to the value of `key`, or null; valid until the next put
+        /// or remove.
         pub fn getPtr(self: *Self, key: []u8) ?*mut V {
             if self.find(key) |i| {
                 return &mut self.slots[i].value
@@ -98,6 +103,7 @@ pub fn StrMap(comptime V: type) type {
             return null
         }
 
+        /// Is `key` in the map?
         pub fn contains(self: *Self, key: []u8) bool {
             return self.find(key) != null
         }
@@ -132,6 +138,7 @@ pub fn StrMap(comptime V: type) type {
             return false
         }
 
+        /// Walks the entries in any order.
         pub fn iterator(self: *Self) StrMapIterator(V) {
             return StrMapIterator(V) { slots: self.slots, next_slot: 0 }
         }
@@ -203,6 +210,7 @@ pub fn IntMapIterator(comptime K: type, comptime V: type) type {
         slots: []mut IntSlot(K, V)
         next_slot: usize
 
+        /// The next entry, in any order; null after the last one.
         pub fn next(self: *mut Self) ?IntEntry(K, V) {
             while self.next_slot < self.slots.len {
                 let i = self.next_slot
@@ -228,6 +236,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
             return Self { slots: []mut IntSlot(K, V){}, count: 0, alloc: alloc }
         }
 
+        /// Frees the table.
         pub fn deinit(self: *mut Self) {
             self.alloc.free(self.slots)
             self.slots = []mut IntSlot(K, V){}
@@ -253,6 +262,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
             self.count += 1
         }
 
+        /// The value of `key`, or null.
         pub fn get(self: *Self, key: K) ?V {
             if self.find(bits(K, key)) |i| {
                 return self.slots[i].value
@@ -260,6 +270,8 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
             return null
         }
 
+        /// A pointer to the value of `key`, or null; valid until the next put
+        /// or remove.
         pub fn getPtr(self: *Self, key: K) ?*mut V {
             if self.find(bits(K, key)) |i| {
                 return &mut self.slots[i].value
@@ -267,6 +279,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
             return null
         }
 
+        /// Is `key` in the map?
         pub fn contains(self: *Self, key: K) bool {
             return self.find(bits(K, key)) != null
         }
@@ -299,6 +312,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
             return false
         }
 
+        /// Walks the entries in any order.
         pub fn iterator(self: *Self) IntMapIterator(K, V) {
             return IntMapIterator(K, V) { slots: self.slots, next_slot: 0 }
         }
@@ -367,6 +381,7 @@ pub fn HashMapIterator(comptime K: type, comptime V: type) type {
         slots: []mut HashSlot(K, V)
         next_slot: usize
 
+        /// The next entry, in any order; null after the last one.
         pub fn next(self: *mut Self) ?HashEntry(K, V) {
             while self.next_slot < self.slots.len {
                 let i = self.next_slot
@@ -393,6 +408,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
             return Self { slots: []mut HashSlot(K, V){}, count: 0, alloc: alloc }
         }
 
+        /// Frees the table.
         pub fn deinit(self: *mut Self) {
             self.alloc.free(self.slots)
             self.slots = []mut HashSlot(K, V){}
@@ -418,6 +434,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
             self.count += 1
         }
 
+        /// The value of `key`, or null.
         pub fn get(self: *Self, key: K) ?V {
             if self.find(key, @hash(key)) |i| {
                 return self.slots[i].value
@@ -425,6 +442,8 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
             return null
         }
 
+        /// A pointer to the value of `key`, or null; valid until the next put
+        /// or remove.
         pub fn getPtr(self: *Self, key: K) ?*mut V {
             if self.find(key, @hash(key)) |i| {
                 return &mut self.slots[i].value
@@ -432,6 +451,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
             return null
         }
 
+        /// Is `key` in the map?
         pub fn contains(self: *Self, key: K) bool {
             return self.find(key, @hash(key)) != null
         }
@@ -464,6 +484,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
             return false
         }
 
+        /// Walks the entries in any order.
         pub fn iterator(self: *Self) HashMapIterator(K, V) {
             return HashMapIterator(K, V) { slots: self.slots, next_slot: 0 }
         }

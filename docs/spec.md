@@ -1503,6 +1503,31 @@ std is built into the compiler. Import it with `import std` (then use
 `std.fs...`), `import std.fs` (then `fs...`) or by item (`import
 std.mem.Allocator`).
 
+The modules. Those marked "below" are listed in full in this section; for
+the others, the command on their line prints every pub declaration with
+its documentation (from std's source, so it is always current):
+
+```
+std.mem       Allocator, AllocError, byte slices: eql, copy, set, indexOf    below
+std.heap      allocators: General (leak checks in debug), Arena              below
+std.fs        files, stdin/stdout/stderr, readFile, line reader              below
+std.list      List(T), a growable array                                      below
+std.map       StrMap, IntMap, HashMap                                        below
+std.text      bytes as text: compare, search, split, parse, UTF-8, Builder   below
+std.math      f64 functions (libm), generic minOf, maxOf, absOf, clampOf     below
+std.sort      sort(T, items, less), in place                                 below
+std.pool      Pool(T): values in reusable slots, generational Handle(T)      ore doc --signatures std.pool
+std.time      monotonicMs, sleep                                             ore doc --signatures std.time
+std.thread    OS threads: spawn, spawnWithStack (deep recursion), join       ore doc --signatures std.thread
+std.sync      Mutex, Channel(T), Atomic(T)                                   below
+std.coro      coroutines: create, resume, yield                              below
+std.testing   the leak-checked allocator of a test                           below
+std.log       err, info: formatted lines to stderr                           below
+std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
+std.os        args, exit                                                     below
+std.net       TCP over IPv4: listen, connect, Listener, Conn                 below
+```
+
 ### std.mem
 
 ```
@@ -1774,43 +1799,6 @@ pub fn main() {
 }
 ```
 
-### std.pool
-
-```
-std.pool.Pool(T)                           values in reusable slots
-std.pool.Handle(T) { index: u32, generation: u32 }   names a value; stale after remove
-Pool.init(alloc: Allocator, capacity: u32) Pool(T)   capacity: slots of the first allocation
-Pool.deinit(self: *mut Self)
-Pool.insert(self: *mut Self, value: T) AllocError!Handle(T)
-Pool.get(self: *Self, h: Handle(T)) ?*mut T          null for a stale handle; valid until the next insert
-Pool.remove(self: *mut Self, h: Handle(T))           a stale handle does nothing
-```
-
-### std.time
-
-```
-std.time.monotonicMs() u64                 milliseconds on a clock that never goes back
-std.time.sleep(ms: u64)                    wait at least ms milliseconds
-```
-
-### std.thread
-
-```
-std.thread.spawn(comptime T: type, f: fn(*mut T), arg: *mut T) SpawnError!Thread   run f(arg) in a new thread (8 MiB stack)
-std.thread.spawnWithStack(comptime T: type, f: fn(*mut T), arg: *mut T, stack: usize) SpawnError!Thread   a stack of at least `stack` bytes
-Thread.join(self: Self)                    wait until the thread's function returns; join every thread once
-std.thread.SpawnError { SystemResources }
-```
-
-`arg` must stay valid until the thread is joined. What threads share goes
-through `std.sync`; an allocator (`General`, `Arena`) is not thread-safe:
-give each thread its own. A panic in any thread ends the program; each
-thread has its own error return trace. The main thread's stack is 8 MiB
-(the system's); for deep recursion (a tree-walking interpreter) run the
-work on a thread with a large stack, `spawnWithStack(Job, run, &mut job,
-1 << 30)`, and `join` it: the memory is reserved, and only what is used is
-taken.
-
 ### std.sync
 
 ```
@@ -2053,6 +2041,32 @@ pub fn main() {
     std.os.exit(status)
 }
 ```
+
+### std.net
+
+TCP over IPv4. A host is dotted IPv4 (`127.0.0.1`, `0.0.0.0` to listen
+on every interface) or `localhost`; there is no name lookup
+(InvalidAddress). Writes never raise SIGPIPE.
+
+```
+std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system picks one
+std.net.connect(host: []u8, port: u16) ConnectError!Conn
+Listener.accept(self: Self) AcceptError!Conn   waits for the next connection
+Listener.port(self: Self) u16                  the port it listens on
+Listener.close(self: Self)
+Conn.read(self: Self, buf: []mut u8) ReadError!usize   waits; at most buf.len bytes; 0 when the peer closed
+Conn.readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize   read, waiting at most ms (poll)
+Conn.write(self: Self, bytes: []u8) WriteError!void    write everything
+Conn.close(self: Self)
+error ListenError { InvalidAddress, AddressInUse, AccessDenied, ListenFailed }
+error ConnectError { InvalidAddress, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
+error AcceptError { AcceptFailed }
+error ReadError { TimedOut, ConnectionReset, ReadFailed }
+error WriteError { ConnectionClosed, WriteFailed }
+```
+
+A server listens on port 0, serves on a `std.thread`, and its tests
+connect to `Listener.port()` (`tests/cases/net_echo.ore`).
 
 ### A complete CLI
 

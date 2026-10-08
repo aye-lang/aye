@@ -23,6 +23,7 @@ pub fn List(comptime T: type) type {
             self.count = 0
         }
 
+        /// The number of elements.
         pub fn len(self: *Self) usize {
             return self.count
         }
@@ -32,6 +33,7 @@ pub fn List(comptime T: type) type {
             return self.buf[..self.count]
         }
 
+        /// Adds `value` at the end; the memory doubles when full.
         pub fn append(self: *mut Self, value: T) AllocError!void {
             if self.count == self.buf.len {
                 try self.grow(value)

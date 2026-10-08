@@ -71,6 +71,7 @@ pub fn sign(x: f64) f64 {
     return x
 }
 
+/// The smaller of `a` and `b`.
 pub fn min(a: f64, b: f64) f64 {
     if b < a {
         return b
@@ -78,6 +79,7 @@ pub fn min(a: f64, b: f64) f64 {
     return a
 }
 
+/// The larger of `a` and `b`.
 pub fn max(a: f64, b: f64) f64 {
     if b > a {
         return b
@@ -85,6 +87,7 @@ pub fn max(a: f64, b: f64) f64 {
     return a
 }
 
+/// `x` without its sign.
 pub fn abs(x: f64) f64 {
     if x < 0.0 {
         return -x

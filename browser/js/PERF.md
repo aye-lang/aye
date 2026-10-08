@@ -25,13 +25,12 @@ which binary runs first each round, on the unchanged workloads:
 | --- | ---: | ---: | ---: | ---: |
 | array | 0.130128 | 0.090359 | 1.44× | 96751118 |
 | closures | 1.457652 | 0.967120 | 1.51× | 306584040 |
-| DeltaBlue | 0.224524 | 0.220059 | 1.02× | 2282550 |
 | JSON | 0.370532 | 0.267565 | 1.38× | 20672500 |
 | methods | 0.146244 | 0.112598 | 1.30× | 267460185993 |
 | NavierStokes | 5.194493 | 2.958638 | 1.76× | 77 |
 | Richards | 0.465513 | 0.442238 | 1.05× | 2916400 |
 | strings | 1.532163 | 0.053901 | 28.43× | 650400 |
-| **Geometric mean** | | | **1.95×** | |
+| **Geometric mean** | | | **2.14×** | |
 
 Reproduce (the baseline binary must be saved before editing the engine):
 
@@ -45,10 +44,9 @@ BENCH_BIN=target/anyknown BENCH_BASELINE=/tmp/anyknown-baseline \
 ```
 
 The runner can also time one binary, or select workloads by name.
-Richards, DeltaBlue, and NavierStokes retain the upstream Octane
-algorithms, assertions, and license notices; only their harness is
-ported. DeltaBlue's separate GPL notice/text is included in the benchmark
-directory. The other five workloads are original to this suite.
+Richards and NavierStokes retain the upstream Octane algorithms,
+assertions, and license notices; only their harness is ported. The other
+five workloads are original to this suite.
 
 ### Real page
 
