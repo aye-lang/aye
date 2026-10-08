@@ -68,7 +68,7 @@ built-in database and cloud clients (`@cimport` covers them).
 - std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
-- Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #51 (tag names, O1.7).
+- Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 - Stale: `README.md:405-410` says `ore fmt`, `ore doc` and `Pool` are missing (O6.4).
 
@@ -101,7 +101,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - where: cloud
 - model: sonnet
 - time box: 45 min
-- notes: run it when few branches are open, for example right before or after X2.2.
+- notes: runs right after X2.2 (decision 2026-10-08: names and style settle before more features). Also `cargo fmt` over the Rust sources (1116 hunks on 2026-10-08, never formatted) with a test or check that keeps it so; one commit per formatter so reviews stay readable.
 
 #### P2.9: AddressSanitizer golden for gap #3
 - lane: ore
@@ -117,32 +117,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - notes: model the golden on the ThreadSanitizer one in `tests/golden.rs`. Keep the debug free queue (it catches double free and write-after-free); poison only under ASan. Also try the TSan golden with Homebrew clang (`-fsanitize=thread`): if it runs, M10's last item (milestones.md table) becomes done.
 
 ## Cards: O1 server basics
-
-#### O1.4a: std.http serve
-- lane: ore
-- goal: `serve(alloc, addr, ctx, handler)` over `std.net`: a thread per connection, keep-alive, port 0 with the bound port reported.
-- serves: O6
-- files: `std/http/`, `tests/cases/`
-- verify: `cargo test --release --test golden` → exit 0, with a golden: server on a thread, two requests on one connection, one malformed (400)
-- depends on: O1.4
-- parallel with: O1.5, O1.5a, O1.6
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: this is what F1.1 builds on; a `curl -i` against it by hand is quoted in the report.
-
-#### O1.7: tag names as strings (gap #51)
-- lane: ore
-- goal: a builtin `@tagName(x)` gives the name of an error tag or enum tag as `[]u8` (a static string), so a program can print an error without writing its own `match`.
-- serves: O3 (gap #51), AI-writability (agents reach for it first; Zig has `@errorName`/`@tagName`)
-- files: `src/sema.rs`, `src/cgen.rs` (a static name table per error set / enum), `docs/spec.md` (builtins list, one line), `tests/cases/`, `tests/errors/` (non-tag argument), `src/codes.rs` if a new code is needed, `browser/COMPILER_GAPS.md` #51; then simplify `tests/cases/std_http.ore` to use it
-- verify: `cargo test --release --test golden` → exit 0, with a golden printing an error tag, an enum tag and a tagged-union tag, and an error test for `@tagName(3)`
-- depends on: –
-- parallel with: not with other `src/` sema/cgen steps
-- where: cloud (local until X1.2)
-- model: sonnet
-- time box: 45 min
-- notes: name it to match the existing builtins' style (check `docs/spec.md`'s builtin list first).
 
 #### O1.5: std.fs breadth
 - lane: ore

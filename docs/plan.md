@@ -12,12 +12,15 @@ as the acceptance test of `std.http`. Finished steps are in
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.4a, O1.7 | cloud once X1.2 is done; local until then |
+| Ore/Aye language ([`plans/ore.md`](plans/ore.md)) | 1, most slots | P2 leftovers + O1 server basics | X2.2 rename, then P2.4 (fmt), then F1.1 | cloud once X1.2 is done; local until then |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
 
-Order of dispatch: the browser wrap-ups are all merged (P3.62
-ac9721d), so lane cards go in lane priority, with X1.1 beside them. Project steps go when their condition
+Order of dispatch (2026-10-08): names and style first. X2.1 (rename
+script), then X2.2 (rename, isolated), then P2.4 (`aye fmt` and
+`cargo fmt` over the repo), then the local move to
+`~/Documents/ayelang/aye`; after that lane cards in lane priority
+(F1.1 first, it builds on O1.4a), with X1.1 beside them. Project steps go when their condition
 holds: X1.2 once the user enables cloud, X2.2 at a point with no open
 branch. The browser resumes when Ore criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
