@@ -1,0 +1,36 @@
+// std.net host names and IPv6 (O1.3b): connect to a listener by name
+// (`localhost`) and by IPv6 literal (`::1`); an unresolvable name
+// (`.invalid` never resolves) is UnknownHost.
+
+import std.net
+import std.net.ConnectError
+import std.net.Listener
+
+fn roundTrip(host: []u8, l: Listener) !void {
+    let c = try net.connect(host, l.port())
+    let s = try l.accept()
+    try c.write("ping")
+    var buf = @zeroed([8]u8)
+    let n = try s.readTimeout(buf[..], 5000)
+    @print(host)
+    @print(": ")
+    @println(n == 4 && buf[0] == 'p' && buf[3] == 'g')
+    c.close()
+    s.close()
+}
+
+pub fn main() !void {
+    let l4 = try net.listen("127.0.0.1", 0)
+    defer l4.close()
+    try roundTrip("localhost", l4)
+    let l6 = try net.listen("::1", 0)
+    defer l6.close()
+    try roundTrip("::1", l6)
+    let bad = net.connect("no-such-host.invalid", 80) catch |e| {
+        @print("unknown name: ")
+        @println(e == ConnectError.UnknownHost)
+        return
+    }
+    bad.close()
+    @println("connected to an unknown name")
+}

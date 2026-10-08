@@ -134,8 +134,8 @@ pub fn main() !void {
     @println(" bytes")
     try timeout()
     try refused()
-    let bad = net.connect("example.com", 80) catch |e| {
-        @print("connect to a name is an invalid address: ")
+    let bad = net.connect("", 80) catch |e| {
+        @print("connect to an empty host is an invalid address: ")
         @println(e == ConnectError.InvalidAddress)
         return
     }
