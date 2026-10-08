@@ -94,6 +94,18 @@ removed in cff3f60.
   the C symbol. `std/net` calls `listen` and `connect` this way; only
   `ore_std_errno` stays in the prelude (the errno symbol differs per OS).
 
+#### 50. No per-OS declarations
+
+- **Need:** declare a different `extern fn` or struct layout per target
+  OS.
+- **Workaround:** `ore_std_errno` stays in the C prelude (`src/cgen.rs`)
+  because the errno symbol is `__error` on macOS and `__errno_location`
+  on Linux. `std/net/net.ore` declares `struct addrinfo` with the fields
+  `ai_canonname` and `ai_addr` as `first` and `second` (their order
+  differs per OS) and picks at run time with `isDarwin()`.
+- **Hit by:** O1.3b (`std.net`: errno, `struct addrinfo`).
+- **Status:** open.
+
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs
