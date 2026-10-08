@@ -95,6 +95,13 @@ its area. Nothing else of the plan.
 10. **Report:** commits (hash and one line each), the verify result, the
     full-suite result, follow-ups as proposed steps. A lesson goes into
     `docs/practices/` in the same commit as its fix.
+11. **Cloud steps** (Ubuntu 24.04 VM, a fresh clone): if a tool is
+    missing, run `sudo sh scripts/setup-ubuntu.sh` first. Work on a
+    branch `<step id>-<slug>` from `main`, push it and open a pull
+    request to `main` whose body is the report (rule 10). Never push to
+    `main` or merge; main merges one PR at a time and runs the macOS
+    checklist. The VM is Linux, so `scripts/linux.sh` is not used
+    there; the checklist's `browser/build.sh` runs as is.
 
 Merging (main's side):
 

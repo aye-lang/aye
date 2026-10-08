@@ -157,6 +157,32 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
+#### O1.12: diagnostics that name the fix
+- lane: aye
+- goal: two errors that cost rounds in the O1.11 eval say what to write instead: E0022 for `@println(a, b)` names one `@print` per value (or `std.text.Builder`); E0006 on `and`/`or`/`not` where an operator is expected suggests `&&`/`||`/`!`; both appear in `docs/spec.md` §18 Pitfalls.
+- serves: AI-writability; O4, O13
+- files: `src/sema.rs` or wherever E0022 is raised, `src/parser.rs` (E0006 message), `src/codes.rs` (explanations), `docs/spec.md` §18, `tests/errors/` (new goldens)
+- verify: `cargo test --release` → exit 0, with new `tests/errors` goldens for `@println(1, 2)` and `if a and b {`, whose expected output contains the suggestion
+- depends on: –
+- parallel with: F1.1; not with O1.13 (both edit `docs/spec.md`)
+- where: cloud
+- model: sonnet
+- time box: 45 min
+- notes: from `docs/aye-eval.md` (cli_grep, file_lines). `tests/spec.rs` caps `docs/spec.md` at 30k tokens: keep the pitfall lines short. `codes::tests::examples_are_accurate` checks the examples in `src/codes.rs`.
+
+#### O1.13: `aye spec` that fits one tool output
+- lane: aye
+- goal: `aye spec` prints a core of at most ~40 KB (syntax, types, errors, memory, modules, the §15 std index, pitfalls) plus a list of the other sections, and `aye spec <section>` prints one section; §15 lists `std.http`'s main calls (`listen`, `Server.run`, request and response) so agents use it instead of raw `std.net`.
+- serves: AI-writability; O4 (the spec within ~30k tokens), O13
+- files: `src/main.rs` (spec command), `docs/spec.md` (section split markers, §15), `tests/spec.rs`, `README.md` if it shows `aye spec`
+- verify: `cargo test --release` → exit 0, with tests that `aye spec | wc -c` ≤ 40000, that every section name in its list prints non-empty with `aye spec <name>`, and that the concatenation of all sections equals `docs/spec.md`
+- depends on: O1.12 merged (both edit `docs/spec.md`)
+- parallel with: F1.1
+- where: cloud
+- model: opus (what goes in the core is design judgment)
+- time box: 45 min
+- notes: eval evidence: 81.5 KB spec read back in chunks was most input tokens; http_hello used `std.net` because the spec only points at `aye doc`. The eval rerun (`scripts/eval.py --runs 3`) needs a `claude` login: main runs it locally after the merge.
+
 ## Cards: O3 std breadth (next)
 
 #### O3.1: std.json parse
@@ -269,8 +295,6 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
-- O1.12 (from O1.11) diagnostics that cost eval rounds: E0022 (`@println` with several args) names `@print` per value or `std.text.Builder`; E0006 on `and`/`or`/`not` suggests `&&`/`||`/`!`; both in the spec's pitfalls. Verify: `tests/errors` goldens, then `eval.py --tasks cli_grep,file_lines --runs 3` shows fewer check calls.
-- O1.13 (from O1.11) `aye spec` is 81.5 KB, read back in chunks by every agent; list std.http's main API in §15 and try a compact or sectioned spec. Verify: http_hello uses `std.http`, input tokens fall in `docs/aye-eval.md`.
 - O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
