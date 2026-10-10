@@ -2225,6 +2225,9 @@ end. The edits of one diagnostic are applied together.
   inside.
 - C's `void *` is `?[*]u8`; pass `&mut x` where C wants a pointer, and
   `@ptrCast` it when C wants a `void *`.
+- `@print`/`@println` take one value: `@println(a, b)` is an error. Print
+  each value with its own `@print`, or build the line with `std.text.Builder`.
+- Logic is `&&`, `||`, `!`; `and`, `or` and `not` are not keywords.
 - Output to stdout is `@print`/`@println` or `std.fs.stdout().write(bytes)`;
   `std.log` writes to stderr.
 - `main` is `pub fn main()` or `pub fn main() !void`; arguments come from
