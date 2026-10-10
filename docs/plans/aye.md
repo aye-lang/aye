@@ -104,19 +104,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O1 server basics
 
-#### O1.13a: the spec core fits Claude Code's inline tool output
-- lane: aye
-- goal: `aye spec` prints at most 28000 bytes, so a headless agent sees it inline; §15 (std index) and §18 (pitfalls) move to the front of the core, right after §1, so a truncated read still shows them.
-- serves: AI-writability; O4, O13
-- files: `src/main.rs` (`SPEC_SPLITS`, the core list and order), `tests/spec.rs` (cap 40000 → 28000), `docs/spec.md` only if a section must shrink
-- verify: `cargo test --release --test spec` → exit 0 with `aye_spec_core_is_small` at 28000; `target/release/aye spec | wc -c` ≤ 28000; then `python3 scripts/eval.py --runs 1 --tasks http_hello` → 0 refused calls and no `aye spec all` in the transcript
-- depends on: –
-- parallel with: all std steps
-- where: local
-- model: opus (what leaves the core is design judgment: candidates §12 modules 1.9 KB, §9 memory details, the §4 statement forms that §1 already shows)
-- time box: 45 min
-- notes: eval 2026-10-10 (`docs/aye-eval.md`): the 38.6 KB core was saved to a file by Claude Code's Bash tool ("Output too large"), its `Read` refused by `--restricted`; every run lost 1-3 turns and 2 of 3 http_hello runs never saw `std.http`. `aye spec <name>` keeps printing whole sections.
-
 #### O1.11a: eval harness fixes
 - lane: aye
 - goal: `scripts/eval.py` runs each agent in a short working directory (`/tmp/aye-eval/<stamp>/<task>-<n>`) and records in `docs/aye-eval.md` which std modules each `main.aye` imports.

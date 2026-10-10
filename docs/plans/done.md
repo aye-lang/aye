@@ -47,6 +47,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O1.12a | 2026-10-10 | E0006 hint goldens for `or` and `and` outside `if`; the `not` hint fires only when an operand follows `not` (`keyword_not_var` has none) | 8e5e383 |
 | O1.11 rerun | 2026-10-10 | `scripts/eval.py --runs 3` on c96dc27: 15/15 pass, median 12 turns and 1 check; `std.json` used 3/3, `std.http` 1/3; the 38.6 KB spec core exceeded Claude Code's inline output limit (→ O1.13a, O1.11a); findings in `docs/aye-eval.md` | (docs) |
 | O3.5 | 2026-10-10 | `https://` in the `std.http` client over libcurl connect-only (`@linkOptional("libcurl")`, private `Stream`, checks always on, `caFile`, `TlsFailed`, `HttpsUnsupported` without libcurl); golden `std_http_client_tls` against `openssl s_server` (macOS and Linux); `tests/golden.rs` learns `X.needs`/`X.tools` skip files | 53672fc |
+| O1.13a | 2026-10-10 | `aye spec` core 26847 bytes (cap 28000), order §1, 15, 18, 4 intro, enums, 5, conversions, 6, 7, arrays/slices, optionals, 8; functions, constants, structs, pointers, match, §9, §12 leave the core with a trailer hint each; eval http_hello: pass, 8 turns, 0 refused calls | 93c73ed |
 
 ## Browser lane
 
