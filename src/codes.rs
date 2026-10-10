@@ -2512,6 +2512,28 @@ pub fn main() {
 }
 "#,
 }
+E0117 = 117 {
+    "unknown target",
+    "`--target` (of `aye build`, `run`, `test`, `emit-c` and `check`) names the machine the program is built for: `aarch64-macos`, `x86_64-macos`, `aarch64-linux`, `x86_64-linux`, `wasm32-wasip1` or `wasm32-freestanding`. Without it the target is the machine the compiler runs on. The WebAssembly targets need clang with the wasm32 backend and, for `wasm32-wasip1`, the WASI sysroot and resource directory (`AYE_WASI_SYSROOT` and `AYE_WASI_RESOURCE_DIR`, or Homebrew's `llvm`, `wasi-libc` and `wasi-runtimes`).",
+    "aye build --target wasm32 hello.aye\n",
+    "aye build --target wasm32-wasip1 hello.aye\n",
+}
+E0118 = 118 {
+    "std module not available on this target",
+    "The target has no `std.net` (or `http`, `process`, `thread`, `coro`, ...): `wasm32-wasip1` has no sockets, processes or threads, and `wasm32-freestanding` also no `fs` or `os`. An `import` of such a module is an error when the program is built, checked or emitted for that target (`--target`). Leave the import out, or build for a target that has the module.",
+    r#"// Checked with --target wasm32-wasip1.
+import std.net
+
+pub fn main() {
+    @println("hello")
+}
+"#,
+    r#"// Checked with --target wasm32-wasip1.
+pub fn main() {
+    @println("hello")
+}
+"#,
+}
 }
 
 #[cfg(test)]
@@ -2529,9 +2551,15 @@ mod tests {
 
     /// Check an example. One with `// file: path` lines is several files:
     /// they are written to a new directory, and `main.aye` is checked.
-    fn check(name: &str, text: &str) -> Result<(), Vec<crate::diag::Diag>> {
+    fn check(
+        name: &str,
+        text: &str,
+        target: &'static driver::Target,
+    ) -> Result<(), Vec<crate::diag::Diag>> {
         if !text.starts_with("// file: ") {
-            return driver::check(&format!("{name}.aye"), text).map(|_| ());
+            let mut root = driver::Root::single(&format!("{name}.aye"), text);
+            root.target = target;
+            return driver::front_end(root, None).result.map(|_| ());
         }
         let dir = std::env::temp_dir().join(format!(
             "aye-codes-{}-{name}-{}",
@@ -2546,9 +2574,9 @@ mod tests {
             std::fs::write(&p, body).unwrap();
         }
         let main = dir.join("main.aye");
-        let r = driver::front_end(driver::Root::load(main.to_str().unwrap()).unwrap(), None)
-            .result
-            .map(|_| ());
+        let mut root = driver::Root::load(main.to_str().unwrap()).unwrap();
+        root.target = target;
+        let r = driver::front_end(root, None).result.map(|_| ());
         let _ = std::fs::remove_dir_all(&dir);
         r
     }
@@ -2563,7 +2591,22 @@ mod tests {
             if info.code == E0114 && libclang || !libclang && info.fix.contains("@cimport") {
                 continue;
             }
-            match check("wrong", info.wrong) {
+            // E0117's examples are command lines: the name after `--target`.
+            if info.code == E0117 {
+                let target = |cmd: &str| {
+                    let name = cmd.split("--target ").nth(1).unwrap();
+                    name.split_whitespace().next().unwrap().to_string()
+                };
+                assert!(driver::find_target(&target(info.wrong)).is_err());
+                assert!(driver::find_target(&target(info.fix)).is_ok());
+                continue;
+            }
+            // E0118's examples are checked for a target without `std.net`.
+            let target = match info.code {
+                E0118 => driver::find_target("wasm32-wasip1").unwrap(),
+                _ => driver::host_target(),
+            };
+            match check("wrong", info.wrong, target) {
                 Ok(_) => panic!("{}: the wrong example compiles", info.code),
                 Err(ds) => assert!(
                     ds.iter().any(|d| d.code == info.code),
@@ -2572,7 +2615,7 @@ mod tests {
                     ds.iter().map(|d| d.to_string()).collect::<Vec<_>>()
                 ),
             }
-            if let Err(ds) = check("fix", info.fix) {
+            if let Err(ds) = check("fix", info.fix, target) {
                 panic!(
                     "{}: the fix does not compile: {:?}",
                     info.code,

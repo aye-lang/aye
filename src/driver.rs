@@ -39,6 +39,179 @@ impl Mode {
 /// At most this many diagnostics are reported.
 const MAX_DIAGS: usize = 50;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Os {
+    Macos,
+    Linux,
+    /// WebAssembly with WASI preview 1 (wasi-libc).
+    Wasip1,
+    /// WebAssembly with no libc: the host provides imports.
+    Freestanding,
+}
+
+/// What a program is built for (`--target`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Target {
+    pub name: &'static str,
+    /// clang's `--target`.
+    pub triple: &'static str,
+    pub os: Os,
+    /// The suffix of the executable (default output name of `build`).
+    pub ext: &'static str,
+    /// The std modules the target lacks (`net` is `std.net`).
+    pub lacks: &'static [&'static str],
+}
+
+/// WASI preview 1 has no sockets, processes or threads (`std.sync` stays,
+/// single-threaded); coroutines need stack switching.
+const WASIP1_LACKS: &[&str] = &["net", "http", "process", "thread", "coro"];
+/// The same, and no file system, arguments or environment.
+const FREESTANDING_LACKS: &[&str] = &["net", "http", "process", "thread", "coro", "fs", "os"];
+
+/// The targets, by their `--target` names.
+pub const TARGETS: &[Target] = &[
+    Target {
+        name: "aarch64-macos",
+        triple: "aarch64-apple-macos",
+        os: Os::Macos,
+        ext: "",
+        lacks: &[],
+    },
+    Target {
+        name: "x86_64-macos",
+        triple: "x86_64-apple-macos",
+        os: Os::Macos,
+        ext: "",
+        lacks: &[],
+    },
+    Target {
+        name: "aarch64-linux",
+        triple: "aarch64-linux-gnu",
+        os: Os::Linux,
+        ext: "",
+        lacks: &[],
+    },
+    Target {
+        name: "x86_64-linux",
+        triple: "x86_64-linux-gnu",
+        os: Os::Linux,
+        ext: "",
+        lacks: &[],
+    },
+    Target {
+        name: "wasm32-wasip1",
+        triple: "wasm32-wasip1",
+        os: Os::Wasip1,
+        ext: ".wasm",
+        lacks: WASIP1_LACKS,
+    },
+    Target {
+        name: "wasm32-freestanding",
+        triple: "wasm32-unknown-unknown",
+        os: Os::Freestanding,
+        ext: ".wasm",
+        lacks: FREESTANDING_LACKS,
+    },
+];
+
+/// The target `name`, or the text of E0117.
+pub fn find_target(name: &str) -> Result<&'static Target, String> {
+    TARGETS.iter().find(|t| t.name == name).ok_or_else(|| {
+        let names: Vec<&str> = TARGETS.iter().map(|t| t.name).collect();
+        format!("unknown target `{name}`; targets are {}", names.join(", "))
+    })
+}
+
+/// The target of the machine the compiler runs on (the default).
+pub fn host_target() -> &'static Target {
+    let host = match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => "aarch64-macos",
+        ("x86_64", "macos") => "x86_64-macos",
+        ("aarch64", "linux") => "aarch64-linux",
+        _ => "x86_64-linux",
+    };
+    find_target(host).unwrap()
+}
+
+/// Homebrew's prefix of `formula`, if brew is there and the formula is
+/// installed.
+fn brew_prefix(formula: &str) -> Option<PathBuf> {
+    let out = Command::new("brew")
+        .args(["--prefix", formula])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    (out.status.success() && dir.is_dir()).then_some(dir)
+}
+
+/// A directory of the WASI toolchain: the environment variable `var`, else
+/// `sub` in the Homebrew prefix of `formula`.
+fn wasi_dir(var: &str, formula: &str, sub: &str) -> Option<PathBuf> {
+    match std::env::var_os(var) {
+        Some(d) => Some(PathBuf::from(d)),
+        None => brew_prefix(formula).map(|p| p.join(sub)),
+    }
+    .filter(|d| d.is_dir())
+}
+
+impl Target {
+    pub fn is_wasm(&self) -> bool {
+        matches!(self.os, Os::Wasip1 | Os::Freestanding)
+    }
+
+    fn is_host(&self) -> bool {
+        self.name == host_target().name
+    }
+
+    /// The clang command for this target, with the flags that select it:
+    /// `--target`, and for WASI the sysroot and resource directory
+    /// (`AYE_WASI_SYSROOT`, `AYE_WASI_RESOURCE_DIR`, else Homebrew's
+    /// `wasi-libc` and `wasi-runtimes`) and Homebrew's `llvm` clang, whose
+    /// Apple counterpart has no wasm backend.
+    fn clang(&self) -> Result<Command, String> {
+        let mut cmd = if self.is_wasm() {
+            let brew = brew_prefix("llvm").map(|p| p.join("bin/clang"));
+            Command::new(brew.filter(|c| c.exists()).unwrap_or("clang".into()))
+        } else {
+            Command::new("clang")
+        };
+        if self.os == Os::Wasip1 {
+            let (Some(sysroot), Some(resources)) = (
+                wasi_dir("AYE_WASI_SYSROOT", "wasi-libc", "share/wasi-sysroot"),
+                wasi_dir(
+                    "AYE_WASI_RESOURCE_DIR",
+                    "wasi-runtimes",
+                    "share/wasi-runtimes",
+                ),
+            ) else {
+                return Err(format!(
+                    "target {} needs the WASI sysroot and resource directory: set AYE_WASI_SYSROOT and AYE_WASI_RESOURCE_DIR, or `brew install llvm wasi-libc wasi-runtimes`",
+                    self.name
+                ));
+            };
+            cmd.arg(format!("--target={}", self.triple))
+                .arg(format!("--sysroot={}", sysroot.display()))
+                .arg(format!("-resource-dir={}", resources.display()));
+        } else if !self.is_host() {
+            cmd.arg(format!("--target={}", self.triple));
+        }
+        Ok(cmd)
+    }
+
+    /// Can programs be built for this target here: a native one always
+    /// (clang may still lack its sysroot), WASI when the sysroot is there
+    /// and clang has the wasm32 backend.
+    pub fn toolchain_available(&self) -> bool {
+        let Ok(cmd) = self.clang() else { return false };
+        !self.is_wasm()
+            || Command::new(cmd.get_program())
+                .arg("--print-targets")
+                .output()
+                .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32"))
+    }
+}
+
 /// The root module of a program: its files, and the directory that
 /// `import` paths start from.
 pub struct Root {
@@ -46,6 +219,8 @@ pub struct Root {
     pub base: PathBuf,
     /// The examples of doc comments are tests (`aye test`).
     pub doc_tests: bool,
+    /// What the program is built for.
+    pub target: &'static Target,
 }
 
 impl Root {
@@ -83,6 +258,7 @@ impl Root {
             files,
             base: p.to_path_buf(),
             doc_tests: false,
+            target: host_target(),
         })
     }
 
@@ -100,6 +276,7 @@ impl Root {
             }],
             base,
             doc_tests: false,
+            target: host_target(),
         }
     }
 }
@@ -125,7 +302,7 @@ pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
 /// file and position. A stage runs only if the previous one had no errors,
 /// so a syntax error never causes follow-up type errors.
 pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
-    let (files, ast) = module::load(root.files, &root.base, root.doc_tests);
+    let (files, ast) = module::load(root.files, &root.base, root.doc_tests, root.target);
     let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
     let diags = |errs: Vec<Error>| {
         let mut d: Vec<Diag> = errs.into_iter().map(|e| e.with_file(&names)).collect();
@@ -200,6 +377,7 @@ pub struct CProgram {
     pub links: Vec<String>,
     /// More flags for clang (`--cflags`), such as `-fsanitize=thread`.
     pub cflags: Vec<String>,
+    pub target: &'static Target,
 }
 
 /// Run the front end, OIR lowering and C generation for an executable of a
@@ -212,11 +390,12 @@ pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<CProgram, 
 /// `test` blocks are left out. File names are used in diagnostics, `#line`
 /// directives and panic messages.
 pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
+    let target = root.target;
     let checked = front_end(root, Some(true));
     let mut typed = checked.result?;
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
-    let links = linked(&typed);
+    let links = linked(&typed, target);
     let ir = oir::lower(&typed, &links);
     let c = cgen::emit(
         &ir,
@@ -229,15 +408,20 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         c,
         links,
         cflags: Vec::new(),
+        target,
     })
 }
 
 /// The libraries the program is linked with: those of `@link`, and those
-/// of `@linkOptional` that are installed.
-fn linked(p: &sema::Program) -> Vec<String> {
+/// of `@linkOptional` that are installed (none are on a wasm target).
+fn linked(p: &sema::Program, target: &Target) -> Vec<String> {
     p.links
         .iter()
-        .chain(p.optional_links.iter().filter(|l| link_available(l)))
+        .chain(
+            p.optional_links
+                .iter()
+                .filter(|l| !target.is_wasm() && link_available(l)),
+        )
         .cloned()
         .collect()
 }
@@ -288,6 +472,7 @@ pub fn compile_tests_to_c(
     root: Root,
     mode: Mode,
 ) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
+    let target = root.target;
     let checked = front_end(
         Root {
             doc_tests: true,
@@ -296,7 +481,7 @@ pub fn compile_tests_to_c(
         Some(false),
     );
     let typed = checked.result?;
-    let links = linked(&typed);
+    let links = linked(&typed, target);
     let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
     let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
@@ -305,6 +490,7 @@ pub fn compile_tests_to_c(
             c,
             links,
             cflags: Vec::new(),
+            target,
         },
         typed.tests,
         files,
@@ -358,6 +544,11 @@ pub fn run_tests(
 ) -> Result<Vec<TestResult>, TestError> {
     let (mut c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
     c.cflags = cflags.to_vec();
+    if c.target.is_wasm() {
+        return Err(TestError::Run(
+            "test needs a wasm runtime (O2.3)".to_string(),
+        ));
+    }
     if let Some(m) = module
         && !tests.iter().any(|t| t.module == m)
     {
@@ -547,22 +738,27 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
 /// Compile generated C to an executable with clang, linked with the
 /// program's libraries.
 pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
-    let mut cmd = Command::new("clang");
-    // `-pthread`: std.thread and std.sync call pthreads.
-    cmd.args([
-        "-std=gnu11",
-        "-fwrapv",
-        "-fno-strict-aliasing",
-        "-pthread",
-        "-Wno-incompatible-library-redeclaration",
-    ])
-    .args(mode.clang_flags())
-    .args(&p.cflags)
-    .args(["-x", "c", "-", "-o"])
-    .arg(out)
-    // std.math calls libm.
-    .arg("-lm")
-    .stdin(Stdio::piped());
+    if p.target.os == Os::Freestanding {
+        return Err(format!(
+            "building for {} needs its own runtime (O2.4)",
+            p.target.name
+        ));
+    }
+    let mut cmd = p.target.clang()?;
+    cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing"]);
+    // `-pthread`: std.thread and std.sync call pthreads (wasi-libc has
+    // none, and `-pthread` breaks its link).
+    if !p.target.is_wasm() {
+        cmd.arg("-pthread");
+    }
+    cmd.arg("-Wno-incompatible-library-redeclaration")
+        .args(mode.clang_flags())
+        .args(&p.cflags)
+        .args(["-x", "c", "-", "-o"])
+        .arg(out)
+        // std.math calls libm.
+        .arg("-lm")
+        .stdin(Stdio::piped());
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).
     // `-lm` is always there.
@@ -587,6 +783,12 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
             return Err(format!(
                 "clang failed: check that the libraries of `@link` ({}) are installed (if they are, this is a compiler bug)",
                 p.links.join(", ")
+            ));
+        }
+        if !p.target.is_host() {
+            return Err(format!(
+                "clang failed for target {} (check that its toolchain and sysroot are installed; if they are, this is a compiler bug)",
+                p.target.name
             ));
         }
         return Err("clang failed on the generated C (this is a compiler bug)".to_string());

@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files):
-  aye build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>]
-  aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [-- args...]
-  aye emit-c <path> [--mode debug|safe|fast]
-  aye check <path> [--json]
+  aye build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
+  aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [--target <target>] [-- args...]
+  aye emit-c <path> [--mode debug|safe|fast] [--target <target>]
+  aye check <path> [--json] [--target <target>]
   aye fix <path>
-  aye test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast] [--cflags <flags>]
+  aye test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
+  (--target: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding; default: this machine)
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
   aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
   aye cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Aye declarations `@cimport` makes of a C header)
@@ -80,6 +81,8 @@ struct Args {
     prog_args: Vec<String>,
     /// `--cflags "..."`: more flags for clang.
     cflags: Vec<String>,
+    /// `--target name`.
+    target: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -89,6 +92,7 @@ fn parse_args() -> Result<Args, String> {
         (None, None, Mode::Debug, false, String::new(), None);
     let mut prog_args = Vec::new();
     let mut cflags = Vec::new();
+    let mut target = None;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--" if cmd == "run" => prog_args.extend(it.by_ref()),
@@ -109,6 +113,9 @@ fn parse_args() -> Result<Args, String> {
                         .map(String::from),
                 );
             }
+            "--target" if matches!(cmd.as_str(), "build" | "run" | "test" | "emit-c" | "check") => {
+                target = Some(it.next().ok_or("`--target` needs a target name")?)
+            }
             "--mode" => {
                 let m = it.next().ok_or("`--mode` needs a value")?;
                 mode = Mode::parse(&m).ok_or(format!("unknown mode `{m}`"))?;
@@ -128,6 +135,7 @@ fn parse_args() -> Result<Args, String> {
         module,
         prog_args,
         cflags,
+        target,
     })
 }
 
@@ -196,13 +204,22 @@ fn main() -> ExitCode {
         eprintln!("aye: unknown command `{}`\n{USAGE}", args.cmd);
         return ExitCode::from(2);
     }
-    let root = match Root::load(&args.file) {
+    let target = match args.target.as_deref().map(driver::find_target) {
+        Some(Ok(t)) => t,
+        Some(Err(e)) => {
+            eprintln!("error[{}]: {e}", codes::E0117);
+            return ExitCode::FAILURE;
+        }
+        None => driver::host_target(),
+    };
+    let mut root = match Root::load(&args.file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("aye: {e}");
             return ExitCode::FAILURE;
         }
     };
+    root.target = target;
     if args.cmd == "check" {
         let res = driver::front_end(root, None).result;
         if args.json {
@@ -246,10 +263,15 @@ fn main() -> ExitCode {
     }
     let exe = match (&args.cmd[..], &args.out) {
         ("build", Some(o)) => PathBuf::from(o),
-        ("build", None) => {
-            PathBuf::from(Path::new(&args.file).file_stem().unwrap_or("main".as_ref()))
-        }
-        _ => std::env::temp_dir().join(format!("aye-run-{}", std::process::id())),
+        ("build", None) => PathBuf::from(format!(
+            "{}{}",
+            Path::new(&args.file)
+                .file_stem()
+                .unwrap_or("main".as_ref())
+                .to_string_lossy(),
+            target.ext
+        )),
+        _ => std::env::temp_dir().join(format!("aye-run-{}{}", std::process::id(), target.ext)),
     };
     c.cflags = args.cflags.clone();
     if let Err(e) = driver::cc(&c, &exe, args.mode) {
@@ -259,7 +281,11 @@ fn main() -> ExitCode {
     if args.cmd == "build" {
         return ExitCode::SUCCESS;
     }
-    let status = Command::new(&exe).args(&args.prog_args).status();
+    let status = if target.is_wasm() {
+        run_wasm(&exe, &args.prog_args)
+    } else {
+        Command::new(&exe).args(&args.prog_args).status()
+    };
     let _ = std::fs::remove_file(&exe);
     match status {
         Ok(s) => match s.code() {
@@ -269,11 +295,32 @@ fn main() -> ExitCode {
                 ExitCode::from(128u8.wrapping_add(s.signal().unwrap_or(0) as u8))
             }
         },
+        Err(e) if target.is_wasm() && e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("aye: run needs a wasm runtime (O2.3): `node` was not found");
+            ExitCode::FAILURE
+        }
         Err(e) => {
             eprintln!("aye: cannot run {}: {e}", exe.display());
             ExitCode::FAILURE
         }
     }
+}
+
+/// Run the WASI module `wasm` under Node (`node:wasi`), which preopens the
+/// working directory.
+fn run_wasm(wasm: &Path, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
+    const RUNNER: &str = "import { readFile } from 'node:fs/promises';
+import { WASI } from 'node:wasi';
+const [file, ...args] = process.argv.slice(1);
+const wasi = new WASI({ version: 'preview1', args: [file, ...args], env: process.env, preopens: { '.': '.' }, returnOnExit: true });
+const { instance } = await WebAssembly.instantiate(await readFile(file), wasi.getImportObject());
+process.exitCode = wasi.start(instance);
+";
+    Command::new("node")
+        .args(["--no-warnings", "--input-type=module", "-e", RUNNER])
+        .arg(wasm)
+        .args(args)
+        .status()
 }
 
 /// `aye fmt [--check] <path>`: format a `.aye` file, or every `.aye` file

@@ -22,6 +22,7 @@
 use crate::ast::{self, ArmBody, ExprKind, Item as AstItem, StmtKind, TypeExprKind};
 use crate::codes::*;
 use crate::diag::{Error, Span};
+use crate::driver::Target;
 use crate::{cimport, lexer, parser};
 use std::collections::HashMap;
 use std::path::Path;
@@ -350,6 +351,8 @@ struct Loader<'a> {
     base: &'a Path,
     /// Add the doc comments' examples as tests (`aye test`).
     doc_tests: bool,
+    /// What the program is built for: it lacks some std modules.
+    target: &'a Target,
     files: Vec<SourceFile>,
     /// Each file's syntax tree; `None` after a syntax error.
     asts: Vec<Option<ast::File>>,
@@ -377,10 +380,12 @@ pub fn load(
     root: Vec<SourceFile>,
     base: &Path,
     doc_tests: bool,
+    target: &Target,
 ) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
     let mut l = Loader {
         base,
         doc_tests,
+        target,
         files: Vec::new(),
         asts: Vec::new(),
         modules: Vec::new(),
@@ -690,6 +695,20 @@ impl Loader<'_> {
         }
     }
 
+    /// Is `std.<seg>` (`seg` in the module `q`) a module the target lacks?
+    /// Then report E0118.
+    fn lacks(&mut self, q: usize, seg: &str, span: Span) -> bool {
+        if self.modules[q].path != "std" || !self.target.lacks.contains(&seg) {
+            return false;
+        }
+        let msg = format!(
+            "`std.{seg}` is not available on target `{}`",
+            self.target.name
+        );
+        self.report(Error::new(E0118, span, msg));
+        true
+    }
+
     /// The item `name` of module `m`: canonical name, kind, `pub`.
     fn item_of(&self, m: usize, name: &str) -> Option<(String, Kind, bool)> {
         let module = &self.modules[m];
@@ -895,6 +914,9 @@ impl Loader<'_> {
                 self.edge(q, *span);
                 return Binding::Item(canon, kind);
             }
+            if self.lacks(q, seg, *sp) {
+                return Binding::Bad;
+            }
             let sub = format!("{}.{seg}", self.modules[q].path);
             match self.module(&sub, *sp) {
                 Some(s) => q = s,
@@ -1053,6 +1075,9 @@ impl Loader<'_> {
                 }
                 self.edge(q, *sp);
                 return Ok((Res::Item(canon, kind), i + 1));
+            }
+            if self.lacks(q, seg, *sp) {
+                return Err(silent());
             }
             let sub = format!("{}.{seg}", self.modules[q].path);
             match self.module(&sub, *sp) {
