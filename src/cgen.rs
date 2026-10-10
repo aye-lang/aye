@@ -508,6 +508,101 @@ AYE_RT void aye_std_rewinddir(uint8_t *dir) { aye_rt_rewinddir(dir); }
 /* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
    and Aye has no per-OS declarations, so this helper stays. */
 AYE_RT int32_t aye_std_errno(void) { return *aye_rt_errno_loc(); }
+/* std.os.getenv: the value (not a copy), or null. `name` is not
+   NUL-terminated. */
+extern char *aye_rt_getenv(const char *) __asm__(AYE_SYM("getenv"));
+AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
+    char *p = aye_c_path(name, len);
+    if (!p) return 0;
+    char *v = aye_rt_getenv(p);
+    aye_rt_free(p);
+    return (uint8_t *)v;
+}
+/* std.process.spawn: `args` holds `argc` NUL-terminated strings one after
+   another; `modes` has two bits per stream, stdin lowest (0: inherit, 1: a
+   pipe). `out` gets the process id, then the parent's end of the stdin,
+   stdout and stderr pipes (-1 where there is none). Returns 0 or the errno
+   of the failure, including that of `execvp` in the child, which reports it
+   through a close-on-exec pipe. Every pipe end is close-on-exec; `dup2`
+   clears the flag on the child's 0, 1 and 2. */
+extern int aye_rt_pipe(int *) __asm__(AYE_SYM("pipe"));
+extern int aye_rt_close(int) __asm__(AYE_SYM("close"));
+extern int aye_rt_dup2(int, int) __asm__(AYE_SYM("dup2"));
+extern int aye_rt_fork(void) __asm__(AYE_SYM("fork"));
+extern int aye_rt_execvp(const char *, char *const *) __asm__(AYE_SYM("execvp"));
+extern long aye_rt_read_fd(int, void *, size_t) __asm__(AYE_SYM("read"));
+extern long aye_rt_write_fd(int, const void *, size_t) __asm__(AYE_SYM("write"));
+extern int aye_rt_waitpid(int, int *, int) __asm__(AYE_SYM("waitpid"));
+extern int aye_rt_fcntl(int, int, ...) __asm__(AYE_SYM("fcntl"));
+extern void aye_rt_exit_now(int) __asm__(AYE_SYM("_exit")) __attribute__((noreturn));
+AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t *out) {
+    int pp[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
+    int ep[2] = {-1, -1};
+    int err = 0;
+    int pid = -1;
+    char **argv = aye_rt_malloc(((size_t)argc + 1) * sizeof(char *));
+    if (!argv) return 12;
+    char *a = (char *)args;
+    for (int i = 0; i < argc; i++) {
+        argv[i] = a;
+        while (*a) a++;
+        a++;
+    }
+    argv[argc] = 0;
+    for (int s = 0; s < 3; s++) {
+        if (((modes >> (2 * s)) & 3) == 0) continue;
+        if (aye_rt_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
+        aye_rt_fcntl(pp[s][0], 2, 1);
+        aye_rt_fcntl(pp[s][1], 2, 1);
+    }
+    if (aye_rt_pipe(ep) != 0) { err = *aye_rt_errno_loc(); goto fail; }
+    aye_rt_fcntl(ep[0], 2, 1);
+    aye_rt_fcntl(ep[1], 2, 1);
+    aye_rt_fflush(0);
+    pid = aye_rt_fork();
+    if (pid < 0) { err = *aye_rt_errno_loc(); goto fail; }
+    if (pid == 0) {
+        for (int s = 0; s < 3; s++) {
+            if (pp[s][0] < 0) continue;
+            if (aye_rt_dup2(s == 0 ? pp[s][0] : pp[s][1], s) < 0) goto child_fail;
+        }
+        aye_rt_execvp(argv[0], argv);
+    child_fail:;
+        int e = *aye_rt_errno_loc();
+        aye_rt_write_fd(ep[1], &e, sizeof e);
+        aye_rt_exit_now(127);
+    }
+    aye_rt_close(ep[1]);
+    ep[1] = -1;
+    long n;
+    do {
+        n = aye_rt_read_fd(ep[0], &err, sizeof err);
+    } while (n < 0 && *aye_rt_errno_loc() == 4);
+    if (n == (long)sizeof err) {
+        int st;
+        while (aye_rt_waitpid(pid, &st, 0) < 0 && *aye_rt_errno_loc() == 4) {}
+        goto fail;
+    }
+    err = 0;
+    aye_rt_close(ep[0]);
+    out[0] = pid;
+    for (int s = 0; s < 3; s++) {
+        out[s + 1] = -1;
+        if (pp[s][0] < 0) continue;
+        aye_rt_close(s == 0 ? pp[s][0] : pp[s][1]);
+        out[s + 1] = s == 0 ? pp[s][1] : pp[s][0];
+    }
+    aye_rt_free(argv);
+    return 0;
+fail:
+    for (int s = 0; s < 3; s++) {
+        if (pp[s][0] >= 0) { aye_rt_close(pp[s][0]); aye_rt_close(pp[s][1]); }
+    }
+    if (ep[0] >= 0) aye_rt_close(ep[0]);
+    if (ep[1] >= 0) aye_rt_close(ep[1]);
+    aye_rt_free(argv);
+    return err ? err : 5;
+}
 AYE_RT double aye_std_inf(void) { return __builtin_inf(); }
 AYE_RT double aye_std_nan(void) { return __builtin_nan(""); }
 AYE_RT uint64_t aye_std_monotonic_ns(void) {

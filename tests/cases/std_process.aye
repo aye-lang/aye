@@ -1,0 +1,77 @@
+// O1.6: std.process: spawn with inherited and piped streams, wait,
+// kill; std.os.getenv.
+
+import std
+import std.heap.General
+import std.process
+import std.process.Stdio
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    // Inherited streams: the child writes to our stdout.
+    @println("inherit")
+    let argv1 = [_][]u8{"/bin/echo", "from echo"}
+    var echo = try process.spawn(alloc, argv1[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    let st = try echo.wait()
+    @println(st.code)
+
+    // A piped stdout, read to the end.
+    let argv2 = [_][]u8{"/bin/echo", "piped", "words"}
+    var piped = try process.spawn(alloc, argv2[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit)
+    let out = try piped.stdout.?.readAll(alloc)
+    @print(out)
+    alloc.free(out)
+    piped.stdout.?.close()
+    @println((try piped.wait()).code)
+
+    // `cat` echoes what is written to its stdin; closing stdin ends it.
+    let argv3 = [_][]u8{"/bin/cat"}
+    var cat = try process.spawn(alloc, argv3[..], Stdio.Pipe, Stdio.Pipe, Stdio.Inherit)
+    try cat.stdin.?.write("through cat\n")
+    try cat.stdin.?.write("twice\n")
+    cat.closeStdin()
+    let back = try cat.stdout.?.readAll(alloc)
+    @print(back)
+    alloc.free(back)
+    cat.stdout.?.close()
+    @println((try cat.wait()).code)
+
+    // A non-zero exit status, and an exit by signal.
+    let argv4 = [_][]u8{"/bin/sh", "-c", "exit 3"}
+    var sh = try process.spawn(alloc, argv4[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    let failed = try sh.wait()
+    @println(failed.code)
+    @println(failed.success())
+    @println(st.success())
+
+    let argv5 = [_][]u8{"/bin/sleep", "30"}
+    var sleeper = try process.spawn(alloc, argv5[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    try sleeper.kill()
+    let killed = try sleeper.wait()
+    @println(killed.signal)
+    @println(killed.success())
+
+    // stderr piped: the shell writes to it.
+    let argv6 = [_][]u8{"/bin/sh", "-c", "echo oops >&2"}
+    var err = try process.spawn(alloc, argv6[..], Stdio.Inherit, Stdio.Inherit, Stdio.Pipe)
+    let msg = try err.stderr.?.readAll(alloc)
+    @print(msg)
+    alloc.free(msg)
+    err.stderr.?.close()
+    _ = try err.wait()
+
+    // The environment.
+    @println(std.os.getenv("PATH") != null)
+    @println(std.os.getenv("AYE_SURELY_NOT_SET_O16") == null)
+
+    // A program that does not exist.
+    let argv7 = [_][]u8{"/no/such/program"}
+    _ = process.spawn(alloc, argv7[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit) catch |e| {
+        @println(@tagName(e))
+        return
+    }
+    @println("unreachable")
+}
