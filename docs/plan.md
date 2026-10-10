@@ -13,14 +13,13 @@ as the acceptance test of `std.http`. Finished steps are in
 A new session starts in `~/Documents/ayelang/aye`; the full suite was
 green on main at fefa325 (28 cards merged on 2026-10-10; O6, O8 and O9
 hold). The state is this file's lane table, [`plans/done.md`](plans/done.md)
-and `git worktree list`. Two branches are committed but **not merged**:
+and `git worktree list`. All agent branches are merged. Notes:
 
-- **O2.7** (freestanding runtime gaps), worktree
-  `.claude/worktrees/agent-a164625c58d6885e7`, commit eb4efa4: libm via
-  `__builtin_*` and `env.Math` imports, `env.strtod`, `env.aye_clock`,
-  `env.aye_fmt_double`, pthread stubs; freestanding golden 3 → 11, sweep
-  73 → 78 of 116. Left: `aye check browser`, `browser/build.sh`,
-  `scripts/linux.sh` golden, `git merge main`, rerun golden, then merge.
+- **O2.7** merged (freestanding golden 3 → 11). Its Linux golden run
+  exposed two pre-existing bugs, first thing tomorrow: **O5.2c** (the
+  `aye test` CPU time limit does not trigger on Linux) and **O3.1b**
+  (`std.json` cannot read back `DBL_MAX` on glibc). Until O5.2c lands,
+  `scripts/linux.sh` golden fails on `tests/time_limit.aye`.
 - **O1.17b** (first-exec stall): merged as a docs-only decisions entry.
   Cause: macOS `syspolicyd`/Gatekeeper/XProtect assess every new
   executable on first exec (~0.37 s, includes a network notarization
@@ -46,8 +45,8 @@ Then, in order:
    the Linux triples compile on Linux, cross-linking from a Mac needs a
    sysroot, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 and O5.2 done. **O9 holds** (checked on 91fb479: `aye test
    <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
-   `--json`, leak-is-failure, all golden-covered). O1.17a done. In flight: O2.7 (freestanding runtime), O1.17b
-   (first-exec stall). Next: O5.1a, O2.8.
+   `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. Next: O5.2c, O3.1b, then
+   O5.1a, O2.8, O1.17b round 2.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
    15/15 and showed the spec core is still too large for Claude Code's
@@ -57,7 +56,7 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O2.7, O1.17b, then O5.1a | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O5.2c, O3.1b, then O5.1a | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
