@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
+mod common;
+
 #[path = "browser/perf.rs"]
 mod perf;
 
@@ -292,35 +294,36 @@ fn layout_system_font() {
 
 #[test]
 fn aye_unit_tests() {
-    for module in [
-        "browser",
-        "browser/url",
-        "browser/dom",
-        "browser/encoding",
-        "browser/font",
-        "browser/image",
-    ] {
-        let out = aye().arg("test").arg(module).output().unwrap();
+    // The modules are independent; `aye test` writes to its own temp file.
+    // The last two import other browser modules, so they are tested from
+    // the root.
+    let runs: [&[&str]; 8] = [
+        &["test", "browser"],
+        &["test", "browser/url"],
+        &["test", "browser/dom"],
+        &["test", "browser/encoding"],
+        &["test", "browser/font"],
+        &["test", "browser/image"],
+        &["test", "browser", "--module", "svg"],
+        &["test", "browser", "--module", "js"],
+    ];
+    let failures: Vec<String> = common::run_queue(&runs, |args| {
+        let out = aye().args(*args).output().unwrap();
         let stdout = text(&out.stdout);
-        assert!(
-            out.status.success() && stdout.contains(" passed; 0 failed"),
-            "`aye test {module}` failed:\n{stdout}{}",
-            text(&out.stderr)
-        );
-    }
-    // Modules that import other browser modules, tested from the root.
-    for module in ["svg", "js"] {
-        let out = aye()
-            .args(["test", "browser", "--module", module])
-            .output()
-            .unwrap();
-        let stdout = text(&out.stdout);
-        assert!(
-            out.status.success() && stdout.contains(" passed; 0 failed"),
-            "`aye test browser --module {module}` failed:\n{stdout}{}",
-            text(&out.stderr)
-        );
-    }
+        if out.status.success() && stdout.contains(" passed; 0 failed") {
+            None
+        } else {
+            Some(format!(
+                "`aye {}` failed:\n{stdout}{}",
+                args.join(" "),
+                text(&out.stderr)
+            ))
+        }
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// `anyknown args...` must exit with `status` and print exactly `stdout`
@@ -2413,26 +2416,10 @@ fn js_conformance() {
     );
     anyknown();
     let bless = std::env::var_os("ANYKNOWN_BLESS").is_some();
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    let failures: Vec<String> = std::thread::scope(|s| {
-        let handles: Vec<_> = scripts
-            .chunks(scripts.len().div_ceil(threads))
-            .map(|chunk| {
-                s.spawn(move || {
-                    chunk
-                        .iter()
-                        .filter_map(|js| js_case(js, bless))
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap())
-            .collect()
-    });
+    let failures: Vec<String> = common::run_queue(&scripts, |js| js_case(js, bless))
+        .into_iter()
+        .flatten()
+        .collect();
     assert!(
         failures.is_empty(),
         "{} of {} JS scripts failed:\n\n{}",
@@ -2745,28 +2732,12 @@ fn jsdom_fixtures() {
         }
     }
     anyknown();
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    let failures: Vec<String> = std::thread::scope(|s| {
-        let handles: Vec<_> = runs
-            .chunks(runs.len().div_ceil(threads))
-            .map(|chunk| {
-                s.spawn(move || {
-                    chunk
-                        .iter()
-                        .filter_map(|(args, page, golden, err)| {
-                            jsdom_case(args, page, golden, err.as_deref(), bless)
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap())
-            .collect()
-    });
+    let failures: Vec<String> = common::run_queue(&runs, |(args, page, golden, err)| {
+        jsdom_case(args, page, golden, err.as_deref(), bless)
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     assert!(
         failures.is_empty(),
         "{} of {} DOM fixture runs failed:\n\n{}",
@@ -2817,43 +2788,37 @@ fn jsdom_gc_stress() {
         .filter(|p| p.extension().is_some_and(|e| e == "html") && !p.ends_with("gc_wrappers.html"))
         .collect();
     pages.sort();
+    // The slowest pages first, so that they do not all run at the end.
+    const SLOW: [&str; 4] = [
+        "virtual_clock.html",
+        "wrapper_identity.html",
+        "weak_nodes.html",
+        "layout_many_changes.html",
+    ];
+    pages.sort_by_key(|p| !SLOW.iter().any(|s| p.ends_with(s)));
     anyknown();
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    let failures: Vec<String> = std::thread::scope(|s| {
-        let handles: Vec<_> = pages
-            .chunks(pages.len().div_ceil(threads))
-            .map(|chunk| {
-                s.spawn(move || {
-                    let mut bad = Vec::new();
-                    for page in chunk {
-                        let rel = page
-                            .strip_prefix(root())
-                            .unwrap()
-                            .to_string_lossy()
-                            .into_owned();
-                        let out = Command::new(anyknown())
-                            .current_dir(root())
-                            .env("ANYKNOWN_JS_GC", "stress")
-                            .args(["dump", "--tree", "--js", &rel])
-                            .output()
-                            .unwrap();
-                        let want = std::fs::read_to_string(page.with_extension("tree"))
-                            .unwrap_or_default();
-                        if !out.status.success() || rooted(&text(&out.stdout)) != want {
-                            bad.push(format!("{rel}: {}\n{}", out.status, text(&out.stderr)));
-                        }
-                    }
-                    bad
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap())
-            .collect()
-    });
+    let failures: Vec<String> = common::run_queue(&pages, |page| {
+        let rel = page
+            .strip_prefix(root())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let out = Command::new(anyknown())
+            .current_dir(root())
+            .env("ANYKNOWN_JS_GC", "stress")
+            .args(["dump", "--tree", "--js", &rel])
+            .output()
+            .unwrap();
+        let want = std::fs::read_to_string(page.with_extension("tree")).unwrap_or_default();
+        if !out.status.success() || rooted(&text(&out.stdout)) != want {
+            Some(format!("{rel}: {}\n{}", out.status, text(&out.stderr)))
+        } else {
+            None
+        }
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     assert!(
         failures.is_empty(),
         "{} DOM fixtures failed under GC stress:\n\n{}",
