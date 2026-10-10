@@ -1,0 +1,179 @@
+// O1.5: std.fs.stat, readDir, mkdir, remove and rename, in a directory
+// under /tmp named after the process id (removed at the end).
+
+import std
+import std.heap.General
+import std.mem.Allocator
+import std.text.Builder
+
+extern fn getpid() i32
+extern fn symlink(target: [*]u8, link: [*]u8) i32
+
+fn byName(a: std.fs.DirEntry, b: std.fs.DirEntry) bool {
+    var n = b.name.len
+    if a.name.len < n {
+        n = a.name.len
+    }
+    for i in 0..n {
+        if a.name[i] != b.name[i] {
+            return a.name[i] < b.name[i]
+        }
+    }
+    return a.name.len < b.name.len
+}
+
+fn kindName(k: std.fs.Kind) []u8 {
+    return match k {
+        .File => "file"
+        .Dir => "dir"
+        .Symlink => "symlink"
+        .Other => "other"
+    }
+}
+
+// `dir/name` in `b` (without a NUL).
+fn at(b: *mut Builder, dir: []u8, name: []u8) []u8 {
+    b.clear()
+    b.append(dir) catch unreachable
+    b.append("/") catch unreachable
+    b.append(name) catch unreachable
+    return b.bytes()
+}
+
+fn list(alloc: Allocator, dir: []u8) !void {
+    let found = try std.fs.readDir(alloc, dir)
+    defer found.deinit()
+    std.sort.sort(std.fs.DirEntry, found.items, byName)
+    for e in found.items {
+        @print(e.name)
+        @print(" ")
+        @println(kindName(e.kind))
+    }
+}
+
+fn write(path: []u8, text: []u8) !void {
+    let f = try std.fs.create(path)
+    defer f.close()
+    try f.write(text)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var d = Builder.init(alloc)
+    defer d.deinit()
+    try d.append("/tmp/aye-std-fs-dir-")
+    try d.appendInt(getpid() as i64)
+    let dir = d.bytes()
+    var p = Builder.init(alloc)
+    defer p.deinit()
+    var q = Builder.init(alloc)
+    defer q.deinit()
+
+    // mkdir
+    @println(std.fs.exists(dir))
+    try std.fs.mkdir(dir)
+    @println(std.fs.exists(dir))
+    std.fs.mkdir(dir) catch |e| {
+        @println(match e {
+            .Exists => "mkdir: exists"
+            _ => "mkdir: other error"
+        })
+    }
+    std.fs.mkdir(at(&mut p, dir, "no/such")) catch |e| {
+        @println(match e {
+            .NotFound => "mkdir: not found"
+            _ => "mkdir: other error"
+        })
+    }
+    try std.fs.mkdir(at(&mut p, dir, "sub"))
+    try write(at(&mut p, dir, "b.txt"), "hello\n")
+    try write(at(&mut p, dir, "a.txt"), "x")
+    try write(at(&mut p, dir, "empty"), "")
+
+    // A symbolic link to b.txt (NUL-terminated paths).
+    try q.append("b.txt")
+    try q.appendByte(0)
+    _ = at(&mut p, dir, "link")
+    try p.appendByte(0)
+    @println(symlink(q.bytes().ptr, p.bytes().ptr))
+
+    // stat
+    let s = try std.fs.stat(at(&mut p, dir, "b.txt"))
+    @print(s.size)
+    @print(" ")
+    @println(kindName(s.kind))
+    @println(s.mtime > 1600000000000000000)
+    @println(s.mtime == std.fs.mtime(at(&mut p, dir, "b.txt")).?)
+    let e = try std.fs.stat(at(&mut p, dir, "empty"))
+    @print(e.size)
+    @print(" ")
+    @println(kindName(e.kind))
+    let sub = try std.fs.stat(at(&mut p, dir, "sub"))
+    @println(kindName(sub.kind))
+    let ln = try std.fs.stat(at(&mut p, dir, "link"))
+    @println(kindName(ln.kind))
+    if std.fs.stat(at(&mut p, dir, "missing")) |_| {
+        @println("stat: found")
+    } else |err| {
+        @println(match err {
+            .NotFound => "stat: not found"
+            _ => "stat: other error"
+        })
+    }
+
+    // readDir
+    try list(alloc, dir)
+    try list(alloc, at(&mut p, dir, "sub"))
+    if std.fs.readDir(alloc, at(&mut p, dir, "missing")) |found| {
+        found.deinit()
+        @println("readDir: found")
+    } else |err| {
+        @println(match err {
+            .NotFound => "readDir: not found"
+            _ => "readDir: other error"
+        })
+    }
+    if std.fs.readDir(alloc, at(&mut p, dir, "b.txt")) |found| {
+        found.deinit()
+        @println("readDir: found")
+    } else |err| {
+        @println(match err {
+            .NotADirectory => "readDir: not a directory"
+            _ => "readDir: other error"
+        })
+    }
+
+    // rename
+    try std.fs.rename(at(&mut p, dir, "a.txt"), at(&mut q, dir, "c.txt"))
+    @println(std.fs.exists(at(&mut p, dir, "a.txt")))
+    @println(std.fs.exists(at(&mut p, dir, "c.txt")))
+    std.fs.rename(at(&mut p, dir, "a.txt"), at(&mut q, dir, "d.txt")) catch |err| {
+        @println(match err {
+            .NotFound => "rename: not found"
+            _ => "rename: other error"
+        })
+    }
+
+    // remove: files, a link and empty directories; not a full directory.
+    std.fs.remove(dir) catch |err| {
+        @println(match err {
+            .NotEmpty => "remove: not empty"
+            _ => "remove: other error"
+        })
+    }
+    for name in [5][]u8{"b.txt", "c.txt", "empty", "link", "sub"} {
+        try std.fs.remove(at(&mut p, dir, name))
+    }
+    try list(alloc, dir)
+    try std.fs.remove(dir)
+    @println(std.fs.exists(dir))
+    std.fs.remove(dir) catch |err| {
+        @println(match err {
+            .NotFound => "remove: not found"
+            _ => "remove: other error"
+        })
+    }
+}

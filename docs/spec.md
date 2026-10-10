@@ -1603,12 +1603,23 @@ error OpenError { NotFound, AccessDenied, OpenFailed }
 error ReadError { ReadFailed, OutOfMemory }
 error WriteError { WriteFailed }
 error ReadFileError = OpenError || ReadError
+error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathFailed }
+error ReadDirError = PathError || AllocError
+enum Kind { File, Dir, Symlink, Other }
+struct Stat { size: u64, mtime: i64, kind: Kind }
+struct DirEntry { name: []u8, kind: Kind }
+struct DirEntries { items: []mut DirEntry }   (and private fields)
 struct File { fd: i32 }
 std.fs.open(path: []u8) OpenError!File      open a file for reading
 std.fs.create(path: []u8) OpenError!File    create (or empty) a file for writing
 std.fs.exists(path: []u8) bool              is there a file or directory at path?
 std.fs.mtime(path: []u8) ?i64               its modification time in ns since 1970; null if stat fails
 std.fs.readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8   the whole file; free with alloc.free
+std.fs.stat(path: []u8) PathError!Stat                  size, mtime (ns since 1970) and kind; a symlink is not followed
+std.fs.readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries   the entries, no "." or ".."; unordered; free with deinit
+std.fs.mkdir(path: []u8) PathError!void                  create a directory (the parent must exist)
+std.fs.remove(path: []u8) PathError!void                 delete a file, symlink or empty directory
+std.fs.rename(from: []u8, to: []u8) PathError!void       rename or move; replaces an existing "to"
 std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File
@@ -1620,7 +1631,12 @@ File.close(self: Self)
 struct Reader                                                    a file and a buffer from alloc
 Reader.readLine(self: *mut Self) ReadError!?[]u8   the next line without \n or \r\n; null at the end; valid until the next call
 Reader.deinit(self: *mut Self)
+DirEntries.deinit(self: Self)                       free the entries and their names
 ```
+
+`readDir` gives the entries in the order the file system does; sort them
+for a stable output. A `DirEntry`'s kind is `Other` where the file system
+does not say what the entry is.
 
 `readLine` reads only what it needs, so an interactive program answers
 each line as it arrives:
