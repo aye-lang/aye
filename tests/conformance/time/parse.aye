@@ -1,0 +1,64 @@
+import std.time
+
+fn rfc(s: []u8) {
+    @print("rfc ")
+    @print(s)
+    @print(" -> ")
+    if time.parseRfc3339(s) |d| {
+        @println(d.toUnixMs())
+    } else |e| {
+        @println("invalid")
+    }
+}
+
+fn http(s: []u8) {
+    @print("http ")
+    @print(s)
+    @print(" -> ")
+    if time.parseHttp(s) |d| {
+        @println(d.toUnixMs())
+    } else |e| {
+        @println("invalid")
+    }
+}
+
+pub fn main() {
+    rfc("2026-10-10T07:20:00Z")
+    rfc("2026-10-10T12:50:00+05:30")
+    rfc("2026-10-09T23:20:00-08:00")
+    rfc("2026-10-10T07:20:00.5Z")
+    rfc("2026-10-10T07:20:00.123456Z")
+    rfc("2026-10-10t07:20:00z")
+    rfc("1970-01-01T00:00:00+00:00")
+    rfc("1970-01-01T00:00:00-00:00")
+    rfc("2000-01-01T00:00:00+01:00")
+    rfc("1970-01-01T00:00:00+01:00")
+    rfc("2024-02-29T00:00:00Z")
+    rfc("2026-02-29T00:00:00Z")
+    rfc("2026-13-10T07:20:00Z")
+    rfc("2026-00-10T07:20:00Z")
+    rfc("2026-10-32T07:20:00Z")
+    rfc("2026-10-10T24:00:00Z")
+    rfc("2026-10-10T07:60:00Z")
+    rfc("2026-10-10T07:20:60Z")
+    rfc("2026-10-10T07:20:00")
+    rfc("2026-10-10T07:20:00Zx")
+    rfc("2026-10-10 07:20:00Z")
+    rfc("2026-10-10T07:20:00.Z")
+    rfc("2026-10-10T07:20:00+0530")
+    rfc("2026-10-10T07:20:00+24:00")
+    rfc("2026-10-10")
+    rfc("")
+    http("Sat, 10 Oct 2026 07:20:00 GMT")
+    http("Thu, 01 Jan 1970 00:00:00 GMT")
+    http("Tue, 29 Feb 2000 23:59:59 GMT")
+    http("Fri, 10 Oct 2026 07:20:00 GMT")
+    http("Sat, 10 Oct 2026 07:20:00 UTC")
+    http("Sat, 10 Oct 2026 07:20:00")
+    http("Sat, 1 Oct 2026 07:20:00 GMT")
+    http("Sat, 10 Foo 2026 07:20:00 GMT")
+    http("Sat, 10 Oct 2026 07:20:60 GMT")
+    http("Wed, 29 Feb 2023 00:00:00 GMT")
+    http("Sat 10 Oct 2026 07:20:00 GMT")
+    http("")
+}

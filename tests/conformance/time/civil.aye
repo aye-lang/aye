@@ -1,0 +1,44 @@
+import std.heap.General
+import std.mem.Allocator
+import std.time
+
+// Floor division of milliseconds by 1000, for the HTTP form, which drops them.
+fn floorSeconds(ms: i64) i64 {
+    var s = ms / 1000
+    if ms % 1000 < 0 {
+        s -= 1
+    }
+    return s * 1000
+}
+
+fn show(alloc: Allocator, ms: i64) !void {
+    let d = time.fromUnixMs(ms)
+    let rfc = try d.formatRfc3339(alloc)
+    defer alloc.free(rfc)
+    let http = try d.formatHttp(alloc)
+    defer alloc.free(http)
+    let fromRfc = try time.parseRfc3339(rfc)
+    let fromHttp = try time.parseHttp(http)
+    let ok = d.toUnixMs() == ms && fromRfc.toUnixMs() == ms && fromHttp.toUnixMs() == floorSeconds(ms)
+    @print(ms)
+    @print(" ")
+    @print(rfc)
+    @print(" ")
+    @print(http)
+    @print(" ")
+    @print(d.weekday)
+    @print(" ")
+    @println(ok)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let all = [18]i64{0, -1, -86400000, 951782400000, 951868800000, -2208988800000, -2203977600000, -2203891200000, 1791616800000, 1760080800123, 2147483647000, 2147483648000, 4107456000000, 4107542400000, 1709208000005, 253402300799999, -62135596800000, -11670998400000}
+    var i: usize = 0
+    while i < all.len {
+        try show(alloc, all[i])
+        i += 1
+    }
+}
