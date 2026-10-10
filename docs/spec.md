@@ -60,7 +60,7 @@ files all belong to it (see section 12). The root module must declare
 aye run <path> [--mode debug|safe|fast] [-- args...]  build to a temp file and run (args go to the program)
 aye build <path> [-o out] [--mode m]                  build an executable (default name: the file or directory name)
     [--cflags "flags"]                                (build, run, test) more clang flags: --cflags -fsanitize=thread
-    [--target t]                                      (build, run, test, emit-c, check) t: aarch64-macos x86_64-macos aarch64-linux x86_64-linux wasm32-wasip1 wasm32-freestanding; unknown E0117, std module the target lacks E0118; wasm32-wasip1 programs run under Node's `node:wasi`
+    [--target t]                                      (build, run, test, emit-c, check) t: aarch64-macos x86_64-macos aarch64-linux x86_64-linux wasm32-wasip1 wasm32-freestanding; unknown E0117, std module the target lacks E0118; wasm32-wasip1 programs run under Node's `node:wasi`; wasm32-freestanding has no libc and no `main` is needed: `pub extern fn` is exported to JS, `main` is exported as `aye_main`, output and abort are the imports `env.aye_write(fd, ptr, len)` and `env.aye_abort()`
 aye check <path> [--json]                             report all compile errors; no C, no clang
 aye fix <path>                                        apply the fix-its of `aye check` in place, repeat (at most 10 rounds)
 aye test <path> [--filter text] [--json] [--mode m]   run the root module's `test` blocks, each in its own process

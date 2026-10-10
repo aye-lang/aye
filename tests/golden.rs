@@ -14,6 +14,13 @@
 //!   passed; M skipped` counts them. Skipped: a program that imports a std
 //!   module the target lacks (E0118), and one with `X.native` (an empty
 //!   marker file), `X.needs` or `X.tools`.
+//!   A case with `X.freestanding` (a marker whose first line is the
+//!   arguments for the loader, if any) also runs built for
+//!   wasm32-freestanding under `tests/wasm/loader.mjs`, in every mode: with
+//!   no arguments `main` runs and the goldens are `X.out` and `X.panic` (a
+//!   panic exits with status 134); with arguments the loader calls that
+//!   export, and stdout is `X.freestanding.out`. The line `golden
+//!   (wasm32-freestanding): N passed` counts them.
 //! - `tests/ffi/X.aye`: like `tests/cases`, for programs that link C
 //!   libraries with `@link`; skipped when `pkg-config` does not know a
 //!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
@@ -99,6 +106,13 @@ fn wasm_skip_reason(path: &Path) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// The wasm32-freestanding target, if programs can be built and run for it
+/// here (clang with the wasm32 backend, and `node`).
+fn freestanding_target() -> Option<&'static Target> {
+    let t = driver::find_target("wasm32-freestanding").unwrap();
+    (t.toolchain_available() && driver::node_available()).then_some(t)
 }
 
 /// `f` for a program, unless it does not run on wasm32-wasip1.
@@ -837,6 +851,136 @@ fn cli_target_wasm(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// A `tests/cases` program with `X.freestanding`, built for
+/// wasm32-freestanding and run by `tests/wasm/loader.mjs` (see the top of
+/// this file for the goldens).
+fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Result<(), String> {
+    let src = read(path).unwrap();
+    let marker = read(&path.with_extension("freestanding")).unwrap_or_default();
+    let args: Vec<&str> = marker
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    let golden = if args.is_empty() {
+        "out"
+    } else {
+        "freestanding.out"
+    };
+    let expected_out = read(&path.with_extension(golden)).ok_or("missing golden")?;
+    let expected_panic = read(&path.with_extension("panic")).filter(|_| args.is_empty());
+    let modes: &[Mode] = if expected_panic.is_some() {
+        &[Mode::Debug, Mode::Safe]
+    } else {
+        &[Mode::Debug, Mode::Safe, Mode::Fast]
+    };
+    for &mode in modes {
+        let mut root = Root::single(&name(path), &src);
+        root.target = target;
+        let c = driver::compile_root(root, mode).map_err(|d| join(&d))?;
+        let exe = work.join(format!(
+            "{}-{mode:?}-{}",
+            path.file_stem().unwrap().to_string_lossy(),
+            target.name
+        ));
+        driver::cc(&c, &exe, mode)?;
+        let out = target
+            .run_command(&exe)
+            .args(&args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stdout != expected_out {
+            return Err(format!(
+                "[{mode:?}] stdout mismatch\n--- expected\n{expected_out}--- got\n{stdout}"
+            ));
+        }
+        match &expected_panic {
+            Some(p) => {
+                if out.status.code() != Some(134) || stderr != *p {
+                    return Err(format!(
+                        "[{mode:?}] expected exit status 134 and stderr\n{p}--- got {}\n{stderr}",
+                        out.status
+                    ));
+                }
+            }
+            None => {
+                if !out.status.success() || !stderr.is_empty() {
+                    return Err(format!(
+                        "[{mode:?}] program failed ({}):\n{stderr}",
+                        out.status
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `aye build --target wasm32-freestanding` links a program with no `main`,
+/// only `pub extern fn add`, into a module with no WASI imports; the loader
+/// calls `add 2 3` and prints 5. Skipped without clang's wasm32 backend or
+/// `node`.
+fn cli_target_freestanding(work: &Path) -> Result<(), String> {
+    if freestanding_target().is_none() {
+        println!("skipped cli/aye build --target wasm32-freestanding: no wasm32 clang or no node");
+        return Ok(());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = work.join("export_only.aye");
+    std::fs::write(
+        &src,
+        "pub extern fn add(a: i32, b: i32) i32 {\n    return a + b\n}\n",
+    )
+    .map_err(|e| e.to_string())?;
+    let wasm = work.join("export_only.wasm");
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            "wasm32-freestanding",
+            src.to_str().unwrap(),
+            "-o",
+            wasm.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!(
+            "`aye build --target wasm32-freestanding`: {code:?}\n{err}"
+        ));
+    }
+    let bytes = std::fs::read(&wasm).map_err(|e| e.to_string())?;
+    if bytes[..4] != *b"\0asm" {
+        return Err(format!("not a wasm file: {:02x?}", &bytes[..4]));
+    }
+    if bytes.windows(13).any(|w| w == b"wasi_snapshot") {
+        return Err("the module imports WASI".to_string());
+    }
+    let out = Command::new("node")
+        .args([
+            "tests/wasm/loader.mjs",
+            wasm.to_str().unwrap(),
+            "add",
+            "2",
+            "3",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() || stdout != "5\n" {
+        return Err(format!(
+            "loader.mjs add 2 3: {}\n{stdout}{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}
+
 /// Run `cmd` and wait at most `secs` seconds for it (`None` on a timeout:
 /// it is killed).
 fn output_within(cmd: &mut Command, secs: u64) -> Option<std::process::Output> {
@@ -1282,6 +1426,7 @@ fn main() {
     let asan_cases = cases("asan");
     let mod_cases = module_dirs();
     let wasm = wasm_target();
+    let freestanding = freestanding_target();
     type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
     fn add<'a>(
         jobs: &mut Vec<(String, Job<'a>)>,
@@ -1348,6 +1493,21 @@ fn main() {
         } else {
             println!("skipped wasm32-wasip1 goldens: no WASI toolchain or no node");
         }
+        if let Some(t) = freestanding {
+            for p in run_cases
+                .iter()
+                .filter(|p| p.with_extension("freestanding").exists())
+            {
+                let w = &work;
+                add(
+                    &mut jobs,
+                    format!("freestanding/cases/{}", name(p)),
+                    move || freestanding_case(p, w, t),
+                );
+            }
+        } else {
+            println!("skipped wasm32-freestanding goldens: no wasm32 clang or no node");
+        }
         add(&mut jobs, "example1".to_string(), example1);
         let w = &work;
         add(&mut jobs, "cli/aye run".to_string(), move || cli_run(w));
@@ -1363,6 +1523,11 @@ fn main() {
             &mut jobs,
             "cli/aye build --target wasm32-wasip1".to_string(),
             move || cli_target_wasm(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target wasm32-freestanding".to_string(),
+            move || cli_target_freestanding(w),
         );
         add(&mut jobs, "cli/aye check".to_string(), cli_check);
         add(
@@ -1446,6 +1611,20 @@ fn main() {
         println!(
             "golden (wasm32-wasip1): {} passed; {skipped} skipped; {bad} failed",
             total - bad - skipped
+        );
+    }
+    if freestanding.is_some() {
+        let total = results
+            .iter()
+            .filter(|(n, _)| n.starts_with("freestanding/"))
+            .count();
+        let bad = results
+            .iter()
+            .filter(|(n, r)| n.starts_with("freestanding/") && r.is_err())
+            .count();
+        println!(
+            "golden (wasm32-freestanding): {} passed; {bad} failed",
+            total - bad
         );
     }
     if failed > 0 {

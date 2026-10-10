@@ -202,7 +202,8 @@ impl Target {
     /// The command that runs the program `exe` built for this target:
     /// the program itself, or for WASI Node's `node:wasi` with
     /// `scripts/wasi-run.mjs` (stdio inherited, arguments and environment
-    /// passed, the current directory and /tmp preopened).
+    /// passed, the current directory and /tmp preopened), or for
+    /// freestanding Node with `tests/wasm/loader.mjs`.
     pub fn run_command(&self, exe: &Path) -> Command {
         if !self.is_wasm() {
             return Command::new(exe);
@@ -215,7 +216,11 @@ impl Target {
             "--single-threaded-gc",
             "--input-type=module",
             "-e",
-            WASI_RUNNER,
+            if self.os == Os::Freestanding {
+                JS_LOADER
+            } else {
+                WASI_RUNNER
+            },
         ])
         .arg(exe);
         cmd
@@ -236,6 +241,9 @@ impl Target {
 
 /// The Node script that runs a WASI program (`Target::run_command`).
 const WASI_RUNNER: &str = include_str!("../scripts/wasi-run.mjs");
+
+/// The Node script that runs a freestanding program (`tests/wasm/loader.mjs`).
+const JS_LOADER: &str = include_str!("../tests/wasm/loader.mjs");
 
 /// Is `node` there to run wasm programs?
 pub fn node_available() -> bool {
@@ -424,7 +432,8 @@ pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<CProgram, 
 /// directives and panic messages.
 pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let target = root.target;
-    let checked = front_end(root, Some(true));
+    // A freestanding program may only export functions.
+    let checked = front_end(root, Some(target.os != Os::Freestanding));
     let mut typed = checked.result?;
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
@@ -766,12 +775,7 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
 /// Compile generated C to an executable with clang, linked with the
 /// program's libraries.
 pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
-    if p.target.os == Os::Freestanding {
-        return Err(format!(
-            "building for {} needs its own runtime (O2.4)",
-            p.target.name
-        ));
-    }
+    let freestanding = p.target.os == Os::Freestanding;
     let mut cmd = p.target.clang()?;
     cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing"]);
     // `-pthread`: std.thread and std.sync call pthreads (wasi-libc has
@@ -783,14 +787,28 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
         // main thread's.
         cmd.arg("-Wl,-z,stack-size=8388608");
     }
+    // No libc and no entry point: the prelude has its own runtime, and the
+    // exported functions are the roots. An `extern fn` without a body (or a
+    // libc function the runtime lacks) becomes an import from `env`.
+    if freestanding {
+        cmd.args([
+            "-DAYE_FREESTANDING",
+            "-ffreestanding",
+            "-nostdlib",
+            "-Wl,--no-entry",
+            "-Wl,--allow-undefined",
+        ]);
+    }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
         .args(&p.cflags)
         .args(["-x", "c", "-", "-o"])
         .arg(out)
-        // std.math calls libm.
-        .arg("-lm")
         .stdin(Stdio::piped());
+    // std.math calls libm.
+    if !freestanding {
+        cmd.arg("-lm");
+    }
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).
     // `-lm` is always there.
