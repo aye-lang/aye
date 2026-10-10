@@ -36,6 +36,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O1.5a | 2026-10-10 | `std.path`: `join`, `dirname`, `basename`, `extension`, `normalize`, `isUnder` (lexical, takes an allocator); golden `tests/tests/std_path.aye` (21 `test` blocks) | 2a963ad |
 | O1.5 | 2026-10-10 | `std.fs`: `stat` (lstat: size, mtime, kind), `readDir`, `mkdir`, `remove`, `rename`, `PathError`; C prelude helpers (`aye_std_lstat`, `aye_std_pathop`, dirent wrappers; ENOTEMPTY unified); golden `std_fs_dir` in a temp directory; Linux arm64 golden 269/269; gap #50 hit again | 1303780 |
 | O1.6 | 2026-10-10 | `std.process`: `spawn(alloc, argv, stdin, stdout, stderr)` (Inherit/Pipe), `Child.wait` → `Status`, `Child.kill` (SIGTERM), `closeStdin`; pipes are `std.fs.File`; `std.os.getenv`; C prelude `aye_std_spawn`, `aye_std_getenv`; golden `std_process`; Linux golden 270/270 | 94b176e |
+| O3.1 | 2026-10-10 | `std.json`: RFC 8259 parser into an `Arena` (`Value` enum, accessors `get`/`at`/`as*`/`isNull`, `ParseError` tags, `parseDiag` with a `std.diag` diagnostic, `maxDepth` 512; numbers are `f64`); conformance area `json` 3/3 (33/33 total), golden `tests/tests/std_json.aye` | c967ebe |
 
 ## Browser lane
 
