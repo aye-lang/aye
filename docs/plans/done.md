@@ -32,6 +32,8 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.6 | 2026-10-08 | `docs/milestones.md` opens with a status table: 17 milestones, 16 done, M10 partial (TSan not run on this Mac) | 9478de6 |
 | O1.3a | 2026-10-08 | `extern("name") fn` takes a C link name; `std.net` calls libc `listen`/`connect` directly; E0115 for an empty name or a body; errno stays a tiny helper (its symbol differs per OS) | 7b893ee |
 | O1.12 | 2026-10-10 | E0022 for `@println(a, b)` and E0006 for `and`/`or`/`not` name the fix (one `@print` per value or `std.text.Builder`; `&&`, `\|\|`, `!`); explanations, two §18 pitfalls, goldens `println_two_args`, `keyword_and`, `keyword_not` | f997b88 |
+| O1.13 | 2026-10-10 | `aye spec` prints a ~38.8 KB core (§1, 4, 5, conversions, 6–9, 12, 15, 18) and lists the other sections; `aye spec <name>` (number, first title word, `std.<m>`), `aye spec all`; `SPEC_SPLITS` in `src/main.rs`; four tests in `tests/spec.rs`; §15 points HTTP servers at `std.http` with a hello server | cbd7baa |
+| O1.5a | 2026-10-10 | `std.path`: `join`, `dirname`, `basename`, `extension`, `normalize`, `isUnder` (lexical, takes an allocator); golden `tests/tests/std_path.aye` (21 `test` blocks) | 2a963ad |
 
 ## Browser lane
 
