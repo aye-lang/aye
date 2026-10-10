@@ -1,0 +1,51 @@
+import std.heap.General
+import std.mem.Allocator
+import std.path
+
+fn joined(alloc: Allocator, a: []u8, b: []u8) !void {
+    let p = try path.join(alloc, a, b)
+    defer alloc.free(p)
+    @print("join [")
+    @print(a)
+    @print("] [")
+    @print(b)
+    @print("] -> [")
+    @print(p)
+    @println("]")
+}
+
+fn parts(p: []u8) {
+    @print(p)
+    @print(" dir=")
+    @print(path.dirname(p))
+    @print(" base=")
+    @print(path.basename(p))
+    @print(" ext=")
+    @println(path.extension(p))
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    try joined(alloc, "a", "b")
+    try joined(alloc, "a/", "b")
+    try joined(alloc, "a", "/b")
+    try joined(alloc, "a//", "//b")
+    try joined(alloc, "/", "b")
+    try joined(alloc, "", "b")
+    try joined(alloc, "a", "")
+    try joined(alloc, "a/b", "../c")
+    parts("a/b/c.txt")
+    parts("/a/b")
+    parts("/a")
+    parts("/")
+    parts("a")
+    parts("a/b/")
+    parts("a//b")
+    parts("a/b.tar.gz")
+    parts("a/.bashrc")
+    parts("a/b.")
+    parts("a/..")
+    parts("..")
+}

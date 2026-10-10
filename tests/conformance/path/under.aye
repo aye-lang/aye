@@ -1,0 +1,39 @@
+import std.heap.General
+import std.mem.Allocator
+import std.path
+
+fn under(alloc: Allocator, root: []u8, p: []u8) !void {
+    let r = try path.isUnder(alloc, root, p)
+    @print(root)
+    @print(" , ")
+    @print(p)
+    @print(" -> ")
+    @println(r)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    try under(alloc, "/srv", "/srv/www/index.html")
+    try under(alloc, "/srv", "/srv")
+    try under(alloc, "/srv/", "/srv")
+    try under(alloc, "/srv", "/srv//www/./a")
+    try under(alloc, "/srv/www", "/srv/x/../www/a")
+    try under(alloc, "/", "/anything")
+    try under(alloc, "a/b", "a/b/c")
+    try under(alloc, ".", "a/b")
+    try under(alloc, "/srv", "/srv/../etc/passwd")
+    try under(alloc, "/srv", "/srv/www/../../etc")
+    try under(alloc, "/srv", "/srv/..")
+    try under(alloc, "a", "a/../b")
+    try under(alloc, "a", "../a")
+    try under(alloc, ".", "..")
+    try under(alloc, "/srv/www", "/srv")
+    try under(alloc, "/srv", "/srv2")
+    try under(alloc, "/srv/www", "/srv/www-old/a")
+    try under(alloc, "a", "ab")
+    try under(alloc, "/srv", "srv/a")
+    try under(alloc, "srv", "/srv/a")
+    try under(alloc, "/", "a")
+}

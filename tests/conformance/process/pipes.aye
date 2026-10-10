@@ -1,0 +1,46 @@
+import std.heap.General
+import std.process
+import std.process.Stdio
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    // A piped stdout, read to the end.
+    let echoArgv = [_][]u8{"/bin/echo", "hello", "from", "echo"}
+    var echo = try process.spawn(alloc, echoArgv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit)
+    let out = try echo.stdout.?.readAll(alloc)
+    defer alloc.free(out)
+    echo.stdout.?.close()
+    @print("echo said: ")
+    @print(out)
+    let echoStatus = try echo.wait()
+    @println(echoStatus.code)
+    @println(echoStatus.success())
+
+    // `cat` copies its stdin to its stdout; closing stdin ends it.
+    let catArgv = [_][]u8{"/bin/cat"}
+    var cat = try process.spawn(alloc, catArgv[..], Stdio.Pipe, Stdio.Pipe, Stdio.Inherit)
+    try cat.stdin.?.write("line one\n")
+    try cat.stdin.?.write("line two\n")
+    cat.closeStdin()
+    let back = try cat.stdout.?.readAll(alloc)
+    defer alloc.free(back)
+    cat.stdout.?.close()
+    @print("cat said: ")
+    @print(back)
+    @println(back.len)
+    let catStatus = try cat.wait()
+    @println(catStatus.code)
+
+    // The shell writes to stderr, which is piped.
+    let shArgv = [_][]u8{"/bin/sh", "-c", "echo to stderr >&2"}
+    var sh = try process.spawn(alloc, shArgv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Pipe)
+    let msg = try sh.stderr.?.readAll(alloc)
+    defer alloc.free(msg)
+    sh.stderr.?.close()
+    @print("stderr: ")
+    @print(msg)
+    _ = try sh.wait()
+}

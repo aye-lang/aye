@@ -1,0 +1,29 @@
+import std.heap.General
+import std.process
+import std.process.Stdio
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    let exit3 = [_][]u8{"/bin/sh", "-c", "exit 3"}
+    var a = try process.spawn(alloc, exit3[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    let failed = try a.wait()
+    @println(failed.code)
+    @println(failed.signal)
+    @println(failed.success())
+
+    let exit0 = [_][]u8{"/bin/sh", "-c", "exit 0"}
+    var b = try process.spawn(alloc, exit0[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    let ok = try b.wait()
+    @println(ok.code)
+    @println(ok.success())
+
+    // wait twice is an error.
+    let again = b.wait() catch |e| {
+        @println(@tagName(e))
+        return
+    }
+    @println(again.code)
+}
