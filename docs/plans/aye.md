@@ -65,7 +65,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, sort, sync, testing, text, thread, time. Missing for O6: json, process (O1.6), wall clock, crypto, base64/hex, fs directories and stat (O1.5).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
@@ -118,19 +118,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: `stat` must work on macOS and Linux (`st_mtimespec` vs `st_mtim`, the X1.1 problem); if X1.1 chose a helper, reuse it.
 
-#### O1.5a: std.path
-- lane: aye
-- goal: `join`, `dirname`, `basename`, `extension`, `normalize`, and a check that a path stays under a root.
-- serves: O6
-- files: `std/path/` (new), `docs/spec.md` §15 (index line)
-- verify: `cargo test --release --test golden` → exit 0, with `test` blocks covering `..`, `.`, trailing and doubled slashes
-- depends on: –
-- parallel with: all std steps (merge one after the other)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
 #### O1.6: std.process and the environment
 - lane: aye
 - goal: `spawn(argv)` with stdin/stdout/stderr piped or inherited, `wait` → exit status, `kill`; `std.os.getenv`.
@@ -156,19 +143,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - model: sonnet
 - time box: 45 min
 - notes: three runs each, report the median.
-
-#### O1.13: `aye spec` that fits one tool output
-- lane: aye
-- goal: `aye spec` prints a core of at most ~40 KB (syntax, types, errors, memory, modules, the §15 std index, pitfalls) plus a list of the other sections, and `aye spec <section>` prints one section; §15 lists `std.http`'s main calls (`listen`, `Server.run`, request and response) so agents use it instead of raw `std.net`.
-- serves: AI-writability; O4 (the spec within ~30k tokens), O13
-- files: `src/main.rs` (spec command), `docs/spec.md` (section split markers, §15), `tests/spec.rs`, `README.md` if it shows `aye spec`
-- verify: `cargo test --release` → exit 0, with tests that `aye spec | wc -c` ≤ 40000, that every section name in its list prints non-empty with `aye spec <name>`, and that the concatenation of all sections equals `docs/spec.md`
-- depends on: O1.12 merged (both edit `docs/spec.md`)
-- parallel with: F1.1
-- where: cloud
-- model: opus (what goes in the core is design judgment)
-- time box: 45 min
-- notes: eval evidence: 81.5 KB spec read back in chunks was most input tokens; http_hello used `std.net` because the spec only points at `aye doc`. The eval rerun (`scripts/eval.py --runs 3`) needs a `claude` login: main runs it locally after the merge.
 
 ## Cards: O3 std breadth (next)
 
@@ -282,6 +256,7 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O1.13a the spec core is ~1.2 KB under the 40000-byte cap (`aye_spec_core_is_small`); when it fills up, move §12 (1.9 KB) out of the core or shorten §7.
 - O1.12a E0006 hint follow-ups: goldens for `or` and for `a and b` outside `if` (other E0006 sites in `src/parser.rs` may skip `Parser::unexpected`); the `not` hint fires on any syntax error after an identifier named `not`, guard it (O1.12 report).
 - O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
