@@ -45,6 +45,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O6.4 | 2026-10-10 | `README.md` "Not yet supported" paragraph: `aye fmt`, `aye doc`, `Pool`, lists and string building are no longer listed as missing; names the 24 std modules and `aye doc --signatures` | (main) |
 | O3.4 | 2026-10-10 | `std.http` client: `request`/`requestWith`/`get`/`post`, `parseUrl`, `ClientOptions` (timeout per wait, body limit, redirects off by default), `ClientError`, `Response.header`; Content-Length, chunked and read-until-close bodies; `https://` is `HttpsUnsupported` until O3.5; golden `std_http_client` (O1.4a server + hand-written server), 7 unit tests | d649ec8 |
 | O1.12a | 2026-10-10 | E0006 hint goldens for `or` and `and` outside `if`; the `not` hint fires only when an operand follows `not` (`keyword_not_var` has none) | 8e5e383 |
+| O1.11 rerun | 2026-10-10 | `scripts/eval.py --runs 3` on c96dc27: 15/15 pass, median 12 turns and 1 check; `std.json` used 3/3, `std.http` 1/3; the 38.6 KB spec core exceeded Claude Code's inline output limit (→ O1.13a, O1.11a); findings in `docs/aye-eval.md` | (docs) |
 
 ## Browser lane
 

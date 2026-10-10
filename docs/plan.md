@@ -21,17 +21,18 @@ and `git worktree list` (expected: main only). Next, in order:
 2. **Language cards**, merged one by one on `main`: F1.1, O1.12,
    O1.13, O1.5a, O1.5, O1.6, O3.1, O3.1a, O3.2, O3.3, O3.3a, O3.4a and
    O3.4 and O1.12a are done (2026-10-10, `plans/done.md`); O3.5 (HTTPS)
-   and the O1.11 eval rerun (`scripts/eval.py --runs 3`) are in flight;
-   then the O6 check.
+   and O1.5b are in flight; then O1.13a (spec core ≤ 28 KB, from the eval
+   rerun), O1.11a, then the O6 check.
 3. **AI-writability eval** (north star): `scripts/eval.py`
-   (`docs/aye-eval.md`); rerun with `--runs 3` after O1.12/O1.13 and
-   before ranking O3.x.
+   (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
+   15/15 and showed the spec core is still too large for Claude Code's
+   inline output (O1.13a). Rerun after O1.13a.
 
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O3.5, eval rerun, then the O6 check | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O3.5, O1.5b, O1.13a, O1.11a, then the O6 check | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
