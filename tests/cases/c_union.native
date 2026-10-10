@@ -1,1 +1,0 @@
-c_long is LP64 here; wasm32's long has 32 bits

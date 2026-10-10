@@ -10,7 +10,8 @@
 //!   `PATH`) is skipped when one is missing.
 //!   With the WASI toolchain and `node` there, each case also runs built for
 //!   wasm32-wasip1 under `node:wasi` (`scripts/wasi-run.mjs`), `tests/tests`
-//!   too, against the same goldens; the line `golden (wasm32-wasip1): N
+//!   too, against the same goldens (`X.wasm32-wasip1.out` instead of
+//!   `X.out` if it exists); the line `golden (wasm32-wasip1): N
 //!   passed; M skipped` counts them. Skipped: a program that imports a std
 //!   module the target lacks (E0118), and one with `X.native` (an empty
 //!   marker file), `X.needs` or `X.tools`.
@@ -191,7 +192,9 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
 /// `run_case` for a program built for `target`.
 fn run_case_for(path: &Path, work: &Path, target: &'static Target) -> Result<(), String> {
     let src = read(path).unwrap();
-    let expected_out = read(&path.with_extension("out")).ok_or("missing .out file")?;
+    let expected_out = read(&path.with_extension(format!("{}.out", target.name)))
+        .or_else(|| read(&path.with_extension("out")))
+        .ok_or("missing .out file")?;
     let expected_panic = read(&path.with_extension("panic"));
     let expected_error = read(&path.with_extension("stderr"));
     let modes: &[Mode] = if expected_panic.is_some() {

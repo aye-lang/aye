@@ -1,5 +1,5 @@
 // M9.7: `extern union` (a C union) and the C integer type names
-// (`c_int`, `c_long`, ...: LP64 sizes).
+// (`c_int`, `c_long`, ...: the target's sizes; `long` is 32 bits on wasm32).
 extern struct KeyEvent {
     kind: u32
     code: c_int
@@ -53,7 +53,7 @@ pub fn main() {
     @println(b.f)
     @println(ONE.u)
     @println(ONE.b[7])
-    let big: c_long = -5000000000
+    let big: c_long = -2000000000
     @println(labs(big))
     @println(abs(-7))
     let small: c_short = 3

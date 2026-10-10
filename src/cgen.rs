@@ -27,7 +27,7 @@
 use crate::ast::BinOp;
 use crate::diag::Span;
 use crate::oir::*;
-use crate::sema::{ConstVal, FloatTy, IntTy, Intrinsic, Type};
+use crate::sema::{ConstVal, FloatTy, IntTy, Intrinsic, Layout, Type};
 use std::collections::HashSet;
 use std::fmt::Write;
 
@@ -1458,6 +1458,7 @@ pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: boo
         enum_names: Vec::new(),
         loops: Vec::new(),
         next_label: 0,
+        layout: p.layout,
     };
     g.program(p, checks, tests);
     g.out
@@ -1533,6 +1534,8 @@ struct Gen {
     /// Each enum's variant names, for `@tagName`.
     enum_names: Vec<(String, Vec<String>)>,
     next_label: usize,
+    /// The target's integer widths.
+    layout: Layout,
 }
 
 const C_KEYWORDS: &[&str] = &[
@@ -1688,17 +1691,17 @@ fn is_composite(t: &Type) -> bool {
 }
 
 /// The size in bytes of a lane of a `simd` (a number).
-fn lane_size(t: &Type) -> usize {
+fn lane_size(t: &Type, l: Layout) -> usize {
     match t {
-        Type::Int(it) => it.bits() as usize / 8,
+        Type::Int(it) => it.bits(l) as usize / 8,
         Type::Float(FloatTy::F32) => 4,
         _ => 8,
     }
 }
 
 /// The unsigned C type of the width of `it`.
-fn uint_c(it: IntTy) -> &'static str {
-    match it.bits() {
+fn uint_c(it: IntTy, l: Layout) -> &'static str {
+    match it.bits(l) {
         8 => "uint8_t",
         16 => "uint16_t",
         32 => "uint32_t",
@@ -2003,7 +2006,7 @@ impl Gen {
             let (lane, size) = if **e == Type::Bool {
                 ("int8_t".to_string(), n)
             } else {
-                (c_type(e), n * lane_size(e))
+                (c_type(e), n * lane_size(e, self.layout))
             };
             if vecs.insert(c_type(t)) {
                 let _ = writeln!(
@@ -2448,7 +2451,7 @@ impl Gen {
                 out.push(panic(format!("{b} == 0"), *span, "division by zero"));
                 if it.signed() {
                     out.push(panic(
-                        format!("{a} == {} && {b} == -1", c_int_of(it.min(), *it)),
+                        format!("{a} == {} && {b} == -1", c_int_of(it.min(self.layout), *it)),
                         *span,
                         "integer overflow",
                     ));
@@ -2461,8 +2464,13 @@ impl Gen {
                 span,
                 ..
             } => {
-                if !matches!(rhs, Operand::Int(v, _) if *v >= 0 && *v < it.bits() as i128) {
-                    let cond = format!("(uint64_t){} >= {}", self.operand(f, rhs), it.bits());
+                if !matches!(rhs, Operand::Int(v, _) if *v >= 0 && *v < it.bits(self.layout) as i128)
+                {
+                    let cond = format!(
+                        "(uint64_t){} >= {}",
+                        self.operand(f, rhs),
+                        it.bits(self.layout)
+                    );
                     out.push(panic(cond, *span, "shift amount out of range"));
                 }
             }
@@ -2472,7 +2480,11 @@ impl Gen {
                 span,
             } if it.signed() => {
                 out.push(panic(
-                    format!("{} == {}", self.operand(f, val), c_int_of(it.min(), *it)),
+                    format!(
+                        "{} == {}",
+                        self.operand(f, val),
+                        c_int_of(it.min(self.layout), *it)
+                    ),
                     *span,
                     "integer overflow",
                 ));
@@ -2487,12 +2499,13 @@ impl Gen {
                 match (from, to) {
                     (Type::Int(fi), Type::Int(ti)) => {
                         let mut conds = Vec::new();
-                        if fi.min() < ti.min() {
-                            conds.push(format!("(int64_t){v} < {}", c_int(ti.min())));
+                        let l = self.layout;
+                        if fi.min(l) < ti.min(l) {
+                            conds.push(format!("(int64_t){v} < {}", c_int(ti.min(l))));
                         }
-                        if fi.max() > ti.max() {
+                        if fi.max(l) > ti.max(l) {
                             let cast = if fi.signed() { "int64_t" } else { "uint64_t" };
-                            conds.push(format!("({cast}){v} > {}", c_int(ti.max())));
+                            conds.push(format!("({cast}){v} > {}", c_int(ti.max(l))));
                         }
                         if !conds.is_empty() {
                             out.push(panic(
@@ -2504,11 +2517,11 @@ impl Gen {
                     }
                     (Type::Float(_), Type::Int(ti)) => {
                         let lo = if ti.signed() {
-                            ti.min() as f64 - 1.0
+                            ti.min(self.layout) as f64 - 1.0
                         } else {
                             -1.0
                         };
-                        let hi = ti.max() as f64 + 1.0;
+                        let hi = ti.max(self.layout) as f64 + 1.0;
                         let cond = format!(
                             "!((double){v} > {} && (double){v} < {})",
                             c_float(lo),
@@ -2562,19 +2575,19 @@ impl Gen {
                     // The amount is masked: a left shift drops the bits
                     // shifted out, and `>>` of a signed value is arithmetic.
                     (BinOp::Shl, Type::Int(it)) => {
-                        let ut = uint_c(*it);
+                        let ut = uint_c(*it, self.layout);
                         format!(
                             "(({})(({ut}){a} << (({ut}){b} & {}u)))",
                             int_c(*it),
-                            it.bits() - 1
+                            it.bits(self.layout) - 1
                         )
                     }
                     (BinOp::Shr, Type::Int(it)) => {
                         format!(
                             "(({})({a} >> (({}){b} & {}u)))",
                             int_c(*it),
-                            uint_c(*it),
-                            it.bits() - 1
+                            uint_c(*it, self.layout),
+                            it.bits(self.layout) - 1
                         )
                     }
                     (BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor, _) => {
@@ -2611,7 +2624,11 @@ impl Gen {
                     .iter()
                     .map(|&(lo, hi)| {
                         let (l, h) = (c_int_of(lo, *ty), c_int_of(hi, *ty));
-                        match (lo == hi, lo == ty.min(), hi == ty.max()) {
+                        match (
+                            lo == hi,
+                            lo == ty.min(self.layout),
+                            hi == ty.max(self.layout),
+                        ) {
                             (true, ..) => format!("{v} == {l}"),
                             (_, true, true) => "1".to_string(),
                             (_, true, _) => format!("{v} <= {h}"),

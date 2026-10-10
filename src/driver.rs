@@ -162,6 +162,15 @@ impl Target {
         matches!(self.os, Os::Wasip1 | Os::Freestanding)
     }
 
+    /// The integer widths of this target.
+    pub fn layout(&self) -> sema::Layout {
+        if self.is_wasm() {
+            sema::Layout::WASM32
+        } else {
+            sema::Layout::LP64
+        }
+    }
+
     fn is_host(&self) -> bool {
         self.name == host_target().name
     }
@@ -360,7 +369,7 @@ pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
                 .iter()
                 .any(|i| matches!(i, ast::Item::Test(t) if t.module.is_empty()))
         });
-        sema::check(&ast, need_main, &names).map_err(diags)
+        sema::check(&ast, need_main, &names, root.target.layout()).map_err(diags)
     });
     Checked { files, result }
 }
