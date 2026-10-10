@@ -65,7 +65,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1). Missing for O6: wall clock (O3.2), crypto (O3.3), base64/hex (O3.3a), json writer (O3.1a).
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2). Missing for O6: crypto (O3.3), base64/hex (O3.3a), json writer (O3.1a).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
@@ -128,19 +128,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - verify: `cargo test --release --test conformance` → exit 0; round trip parse → write → parse equal on the json area
 - depends on: O3.1
 - parallel with: O3.2, O3.3
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
-#### O3.2: wall clock in std.time
-- lane: aye
-- goal: `now` (Unix ms), UTC calendar fields, RFC 3339 and IMF-fixdate (HTTP `Date`) format and parse.
-- serves: O6
-- files: `std/time/time.aye`, `tests/cases/` or `tests/conformance/time/`
-- verify: `cargo test --release --test conformance` → exit 0, area `time` with fixed timestamps (leap years, 1970, 2038+)
-- depends on: –
-- parallel with: O3.1, O3.3
 - where: cloud
 - model: sonnet
 - time box: 45 min
@@ -217,6 +204,7 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O3.2a `std.time.parseHttp` lenient forms (RFC 850, asctime) if the HTTP client needs them; a `Date` header helper in `std.http` from `now()` (O3.2 report).
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
 - O1.5b `std.fs.readDir`: `stat` fallback for `DT_UNKNOWN` entries; a follow-links `stat` beside the `lstat` one if a caller needs it (O1.5 report). Verify: `cargo test --release --test golden`.
