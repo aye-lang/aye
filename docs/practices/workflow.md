@@ -243,12 +243,19 @@ other agents' builds on the Mac.
 - `git merge main`, conflicts resolved and listed in the
   merge message.
 - `cargo build --release`
-- `target/release/aye check browser` (prints nothing on success)
-- `cargo test --release` (the full suite; `cargo test --release --test
-  browser` alone is not enough)
-- `browser/build.sh` (fast mode, to `target/anyknown` in this
-  worktree; `--mode safe|fast|debug` is optional; an output path, if
-  any, stays inside the worktree, see "Build into your own worktree")
+- `target/release/aye check browser` (prints nothing on success) when
+  the compiler or std changed
+- the test targets the card touches: `cargo test --release --test golden`,
+  `--test conformance`, `--test spec`, `--lib` as applicable. **Not the
+  full suite**: the full `cargo test --release` runs once on `main`
+  after the merge, by the integrator, and never in two worktrees at
+  once (2026-10-10: two agents' full suites beside main's pushed the
+  load average to 13 on 10 cores and one run took over 34 minutes;
+  alone, the suite takes about 10 minutes).
+- `browser/build.sh` when the compiler or std changed (fast mode, to
+  `target/anyknown` in this worktree; `--mode safe|fast|debug` is
+  optional; an output path, if any, stays inside the worktree, see
+  "Build into your own worktree")
 - New compiler gaps are in `browser/COMPILER_GAPS.md`; workarounds for
   fixed gaps are gone.
 - The report has a "Done so far" paragraph; shared docs
