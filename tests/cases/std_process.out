@@ -1,0 +1,17 @@
+inherit
+from echo
+0
+piped words
+0
+through cat
+twice
+0
+3
+false
+true
+15
+false
+oops
+true
+true
+NotFound

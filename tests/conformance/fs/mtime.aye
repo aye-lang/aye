@@ -1,0 +1,36 @@
+import std.fs
+import std.heap.General
+import std.text.Builder
+
+extern fn getpid() i32
+extern fn unlink(path: [*]u8) i32
+extern fn utime(path: [*]u8, times: *Utimbuf) i32
+
+// struct utimbuf: two time_t, the same on macOS and Linux.
+extern struct Utimbuf {
+    actime: c_long
+    modtime: c_long
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try b.append("/tmp/aye-conf-mtime-")
+    try b.appendInt(getpid() as i64)
+    try b.appendByte(0)
+    let cpath = b.bytes()
+    let path = cpath[..cpath.len - 1]
+    @println(fs.mtime(path) == null)
+    let f = try fs.create(path)
+    f.close()
+    // A new file is younger than 2023-11-14 (1.7e9 s).
+    @println(fs.mtime(path).? > 1700000000 * 1000000000)
+    let times = Utimbuf { actime: 1000000000, modtime: 1234567890 }
+    @println(utime(cpath.ptr, &times))
+    @println(fs.mtime(path).?)
+    let r = unlink(cpath.ptr)
+    @println(fs.mtime(path) == null)
+}

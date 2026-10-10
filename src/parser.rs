@@ -101,10 +101,23 @@ impl Parser {
     }
 
     fn unexpected(&self, expected: &str) -> Error {
+        // `and`, `or` and `not` are plain identifiers: `and` or `or` where
+        // an operator is expected, and any token after a `not`, are another
+        // language's operators.
+        let hint = match self.peek() {
+            Tok::Ident(n) if n == "and" => "; Aye has no `and`, write `&&`",
+            Tok::Ident(n) if n == "or" => "; Aye has no `or`, write `||`",
+            _ if self.pos > 0
+                && matches!(&self.toks[self.pos - 1].tok, Tok::Ident(n) if n == "not") =>
+            {
+                "; Aye has no `not`, write `!`"
+            }
+            _ => "",
+        };
         Error::new(
             E0006,
             self.span(),
-            format!("expected {expected}, found {}", self.peek()),
+            format!("expected {expected}, found {}{hint}", self.peek()),
         )
     }
 

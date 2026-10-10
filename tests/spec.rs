@@ -3,7 +3,9 @@
 //! ```aye-error block is one that it rejects, it indexes every std module
 //! and names every pub function of the modules it lists in full, std's pub
 //! functions have doc comments (what `aye doc --signatures std.m` prints for
-//! the others), and it stays within about 30k tokens.
+//! the others), and it stays within about 30k tokens. `aye spec` prints a
+//! core of at most 40000 bytes and lists the other sections; the sections
+//! together are the whole document.
 
 use std::process::Command;
 
@@ -148,12 +150,97 @@ fn spec_is_small() {
     assert!(tokens <= 30_000, "docs/spec.md is about {tokens} tokens");
 }
 
-#[test]
-fn aye_spec_prints_the_spec() {
+/// The stdout of a successful `aye spec <args>`.
+fn aye_spec(args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_aye"))
         .arg("spec")
+        .args(args)
         .output()
         .unwrap();
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), SPEC);
+    assert!(
+        out.status.success(),
+        "aye spec {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn aye_spec_all_prints_the_spec() {
+    assert_eq!(aye_spec(&["all"]), SPEC);
+}
+
+/// The core fits one tool output (Claude Code cuts a longer one).
+#[test]
+fn aye_spec_core_is_small() {
+    let core = aye_spec(&[]);
+    assert!(
+        core.len() <= 40_000,
+        "`aye spec` prints {} bytes",
+        core.len()
+    );
+    assert!(core.contains("\n## 15. std\n"), "the core has no std index");
+}
+
+/// The names `aye spec` gives: those of its core line ("This is the core of
+/// the reference: sections 1 4 ...") and those of each line of its list of
+/// other sections ("  2 programs: Programs and commands", "  std.fs").
+fn section_names() -> (Vec<String>, Vec<String>) {
+    let core = aye_spec(&[]);
+    let line = core
+        .lines()
+        .find_map(|l| l.strip_prefix("This is the core of the reference: sections "))
+        .expect("no core line");
+    let core_names = line
+        .trim_end_matches('.')
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    let list = &core[core
+        .find("\nOther sections")
+        .expect("no list of other sections")..];
+    let mut others = Vec::new();
+    for l in list.lines().skip(2).filter(|l| l.starts_with("  ")) {
+        let names = l.split(':').next().unwrap();
+        others.extend(names.split_whitespace().map(String::from));
+    }
+    (core_names, others)
+}
+
+/// Every section of the list prints non-empty, by number and by name, and
+/// the sections, in the order of the document, are the whole of it.
+#[test]
+fn aye_spec_sections_make_the_spec() {
+    let (core, others) = section_names();
+    assert!(core.len() >= 5 && others.len() >= 5, "{core:?} {others:?}");
+    for want in ["2", "programs", "std.fs", "c"] {
+        assert!(
+            others.iter().any(|n| n == want),
+            "`{want}` is not listed: {others:?}"
+        );
+    }
+    let mut parts: Vec<(usize, String)> = Vec::new();
+    for name in core.iter().chain(&others) {
+        let text = aye_spec(&[name]);
+        assert!(!text.trim().is_empty(), "`aye spec {name}` prints nothing");
+        let at = SPEC
+            .find(&text)
+            .unwrap_or_else(|| panic!("`aye spec {name}` is not a part of docs/spec.md"));
+        if !parts.iter().any(|(a, t)| *a == at && *t == text) {
+            parts.push((at, text));
+        }
+    }
+    parts.sort();
+    let whole: String = parts.into_iter().map(|(_, t)| t).collect();
+    assert!(whole == SPEC, "the sections do not add up to docs/spec.md");
+}
+
+#[test]
+fn aye_spec_unknown_section_fails() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .args(["spec", "nosuch"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nosuch"));
 }

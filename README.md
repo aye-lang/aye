@@ -21,7 +21,9 @@ SDL2 (`brew install sdl2`) and are skipped when `pkg-config` lacks them.
 `@cimport` reads C headers with libclang, which the compiler loads only
 when it needs it (it comes with the Command Line Tools on macOS; on Linux,
 the clang or `libclang` packages); the tests in `tests/cimport` are skipped
-without it.
+without it. On Ubuntu 24.04, `sh scripts/setup-ubuntu.sh` installs all of
+this; on a Mac, `scripts/linux.sh <command>` runs a command in an Ubuntu
+24.04 container (see `docs/practices/workflow.md`, "Test on Linux").
 
 ```sh
 cargo build --release
@@ -42,7 +44,7 @@ aye fmt [--check] <path>                              # format in place (a direc
 aye doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
 aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   # print the Aye declarations `@cimport` makes of a C header
 aye explain <code>                                    # explain an error code, with a wrong and a fixed example
-aye spec                                              # print the language reference (docs/spec.md)
+aye spec [<section> | all]                            # print the core of the language reference (docs/spec.md), one section, or all
 ```
 
 `build`, `run` and `test` take `--cflags "flags"` for more clang flags, such
@@ -60,10 +62,13 @@ signatures without bodies, fields and variants, pub methods, and each
 declaration's `///` doc comment, grouped by module. It is meant as context for
 an AI agent next to `aye spec`.
 
-`aye spec` prints [`docs/spec.md`](docs/spec.md), a self-contained
-language reference (about 10k tokens) meant to be given to an AI agent
-before it writes Aye. Every ` ```aye ` program in it is checked by
-`tests/spec.rs`.
+`aye spec` prints the core of [`docs/spec.md`](docs/spec.md), a
+self-contained language reference meant to be given to an AI agent before
+it writes Aye: syntax, types, errors, memory, modules, the std index and
+the pitfalls, at most 40000 bytes so it fits one tool output, then a list
+of the other sections. `aye spec <section>` prints one (`aye spec 11`,
+`aye spec generics`, `aye spec std.fs`), `aye spec all` the whole
+document. Every ` ```aye ` program in it is checked by `tests/spec.rs`.
 
 | Mode    | clang flags | Runtime checks (overflow, bounds, casts, div by zero) |
 |---------|-------------|--------------------------------------------------------|
@@ -262,7 +267,7 @@ imports one item. `std` is embedded in the compiler (sources in
 `std.testing`, `std.log` (`err`, `info`), `std.diag` (`Diagnostics`, the
 `*mut Diagnostics` convention for detailed errors) and `std.os` (`args`,
 `exit`).
-`aye spec` lists every function. Cyclic imports are an error, so no module
+`aye doc --signatures std` lists every function. Cyclic imports are an error, so no module
 imports the root module: code that both need goes into a module of its own.
 
 ```aye

@@ -37,8 +37,16 @@ pub fn run(
     };
     // A header of a library (found next to the source, or through `-I`)
     // brings the declarations of every header it includes, but not those of
-    // system headers. A system header (`zlib.h`, `math.h`) brings its own
-    // and those of the headers of its directory that it includes itself.
+    // system headers. A system header (`zlib.h`, `math.h`) brings its own and
+    // those of the headers it includes itself that are its parts (gap #54):
+    // - internal headers, named with a leading `_` (macOS: `time.h` declares
+    //   its functions in `_time.h`) or in a `bits/` directory (glibc:
+    //   `math.h` declares them in `bits/mathcalls.h`);
+    // - the headers of its directory, when that is not the include directory
+    //   it was found in (`SDL2/SDL.h`; macOS's `pthread.h` is a link to
+    //   `pthread/pthread.h`). The other headers of an include directory such
+    //   as `/usr/include` are headers of their own (`time.h` for glibc's
+    //   `pthread.h`).
     let system = {
         let name = CString::new(main_name.as_str()).unwrap_or_default();
         unsafe {
@@ -50,11 +58,23 @@ pub fn run(
     };
     let main = canon(&main_name);
     let dir = main.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    // The include directory: `main_name` as found, less the header's name.
+    let found_in = std::path::Path::new(&main_name)
+        .ancestors()
+        .nth(std::path::Path::new(header).components().count())
+        .and_then(|p| std::fs::canonicalize(p).ok());
+    let own_dir = found_in.as_ref() != Some(&dir);
     let mut scope: HashSet<PathBuf> = HashSet::new();
     scope.insert(main.clone());
     for (f, by) in &inclusions {
         let f = canon(f);
-        if by.as_deref().map(canon).as_ref() == Some(&main) && f.parent() == Some(dir.as_path()) {
+        let internal = f
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('_'))
+            || f.parent()
+                .is_some_and(|p| p.components().any(|c| c.as_os_str() == "bits"));
+        let sibling = own_dir && f.parent() == Some(dir.as_path());
+        if by.as_deref().map(canon).as_ref() == Some(&main) && (internal || sibling) {
             scope.insert(f);
         }
     }

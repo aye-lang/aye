@@ -5242,11 +5242,16 @@ impl<'a> Checker<'a> {
                     _ => return err(E0021, span, format!("unknown builtin `@{name}`")),
                 };
                 if args.len() > 1 || (!newline && args.is_empty()) {
+                    let hint = if args.len() > 1 {
+                        "; print each value with its own `@print`, or build the line with `std.text.Builder`"
+                    } else {
+                        ""
+                    };
                     return err(
                         E0022,
                         span,
                         format!(
-                            "`@{name}` takes {} argument",
+                            "`@{name}` takes {} argument{hint}",
                             if newline { "at most one" } else { "one" }
                         ),
                     );

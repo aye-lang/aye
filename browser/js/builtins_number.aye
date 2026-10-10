@@ -16,7 +16,6 @@ extern fn log2(x: f64) f64
 extern fn log10(x: f64) f64
 extern fn log1p(x: f64) f64
 extern fn expm1(x: f64) f64
-extern fn cbrt(x: f64) f64
 extern fn sinh(x: f64) f64
 extern fn cosh(x: f64) f64
 extern fn tanh(x: f64) f64
