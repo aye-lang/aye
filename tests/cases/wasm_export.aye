@@ -1,0 +1,9 @@
+// `pub extern fn` with a body is an export on wasm32-freestanding: JS calls
+// `add` (`wasm_export.freestanding`).
+pub extern fn add(a: i32, b: i32) i32 {
+    return a + b
+}
+
+pub fn main() {
+    @println(add(40, 2))
+}

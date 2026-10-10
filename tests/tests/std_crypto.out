@@ -1,11 +1,11 @@
-test "sha256 at the padding boundaries" ... ok
-test "sha1 at the padding boundaries" ... ok
-test "streaming in two pieces equals one shot, at every split" ... ok
-test "websocket handshake accept key" ... ok
-test "hmac keys of 0, 64 and 65 bytes" ... ok
-test "hmac streaming equals one shot" ... ok
-test "randomBytes fills a long buffer and writes only the slice" ... ok
-test "randomBytes of nothing" ... ok
-test "constantTimeEqual compares length and every byte" ... ok
+test "sha256 at the padding boundaries" ... ok (N ms)
+test "sha1 at the padding boundaries" ... ok (N ms)
+test "streaming in two pieces equals one shot, at every split" ... ok (N ms)
+test "websocket handshake accept key" ... ok (N ms)
+test "hmac keys of 0, 64 and 65 bytes" ... ok (N ms)
+test "hmac streaming equals one shot" ... ok (N ms)
+test "randomBytes fills a long buffer and writes only the slice" ... ok (N ms)
+test "randomBytes of nothing" ... ok (N ms)
+test "constantTimeEqual compares length and every byte" ... ok (N ms)
 
-9 passed; 0 failed
+9 passed; 0 failed; 1 modules; N ms

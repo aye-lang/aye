@@ -1,13 +1,13 @@
-test "freed memory reads as 0xDD" ... ok
-test "a write after free is found at deinit" ... FAILED
+test "freed memory reads as 0xDD" ... ok (N ms)
+test "a write after free is found at deinit" ... FAILED (N ms)
     tests/tests/use_after_free.aye:18:11: panic: use after free: memory allocated at tests/tests/use_after_free.aye:17:23 and freed here was written after it was freed
-test "a double free is found after many other frees" ... FAILED
+test "a double free is found after many other frees" ... FAILED (N ms)
     tests/tests/use_after_free.aye:30:11: panic: double free of memory allocated at tests/tests/use_after_free.aye:24:23 and already freed at tests/tests/use_after_free.aye:25:11
-test "a write after free is found when the block leaves the quarantine" ... FAILED
+test "a write after free is found when the block leaves the quarantine" ... FAILED (N ms)
     tests/tests/use_after_free.aye:36:11: panic: use after free: memory allocated at tests/tests/use_after_free.aye:35:23 and freed here was written after it was freed
-test "freeing a sub-slice panics" ... FAILED
+test "freeing a sub-slice panics" ... FAILED (N ms)
     tests/tests/use_after_free.aye:47:11: panic: free of memory that this allocator did not allocate
-test "memory of another allocator" ... FAILED
+test "memory of another allocator" ... FAILED (N ms)
     tests/tests/use_after_free.aye:53:22: panic: free of memory that this allocator did not allocate
 
-1 passed; 5 failed
+1 passed; 5 failed; 1 modules; N ms

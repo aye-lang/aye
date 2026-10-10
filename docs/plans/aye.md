@@ -63,7 +63,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 ## Current state (2026-10-10)
 
-- Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); `--target` (O2.2, O2.3): the host, the other native triples, wasm32-wasip1 (std prelude branch, `node:wasi` runner, golden and conformance coverage), wasm32-freestanding (O2.4).
+- Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); `--target` (O2.2, O2.3): the host, the other native triples, wasm32-wasip1 (std prelude branch, `node:wasi` runner, golden and conformance coverage), wasm32-freestanding (O2.4: JS imports/exports, `tests/wasm/loader.mjs`).
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
 - std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). **O6 holds** (checked 2026-10-10 on bf4c5d8, `done.md`).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
@@ -104,20 +104,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
-## Cards: O2 targets (current)
-
-#### O2.4: wasm32-freestanding
-- lane: aye
-- goal: output and abort as JS imports, an allocator on `memory.grow`, `pub extern fn` exported to JS; a JS loader runs hello and calls an exported `add`.
-- serves: O8
-- files: `src/cgen.rs`, `src/driver.rs`, `tests/cases/`, a loader under `tests/wasm/` (new)
-- verify: `cargo test --release --test golden` → exit 0: hello prints its golden through the JS loader under Node 22; JS calls `add(2, 3)` and gets 5
-- depends on: O2.3
-- parallel with: O5.x
-- where: local
-- model: sonnet
-- time box: 60 min
-- notes: the link today misses `printf`, `puts`, `write`, `fflush`, `malloc`, `abort` and the signal calls (O2.1).
+## Cards: O2 targets (O2.1–O2.4 done; leftovers in the backlog)
 
 ## Cards: O3 std breadth (done; leftovers in the backlog)
 
@@ -136,6 +123,8 @@ brackets.
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O2.5 C types follow the target: `c_long` is 32-bit on wasm32 (and `usize`-sized C types), so `c_union` and `extern_struct` can drop their `X.native` markers (O2.3 report). Verify: those goldens `ok` on wasm.
+- O2.7 freestanding runtime gaps (O2.4 sweep): libm and `strtod` in the prelude or as `env` imports, an `env.aye_clock` import for `std.time`, a `snprintf` for `std.json`, single-thread `std.sync` stubs; then more cases get `X.freestanding`. Verify: `std_json` and `math` cases `ok` on wasm32-freestanding.
+- O2.8 Linux triples from a non-matching host: the link needs a sysroot (O2.2 report), so `aye build --target x86_64-linux` on a Mac fails at `ld`; add a compile-only path (clang `-c`, or `--emit obj`) or a documented sysroot env var. Verify: a golden that compiles hello for both Linux triples on macOS.
 - O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
 - O1.17 suite speed: `tests/browser.rs` takes 283 s of the ~10-minute suite and golden/browser each spawn `available_parallelism()` workers; measure what dominates, add an `AYE_TEST_JOBS` cap honoured by golden, conformance and browser, and report the time per test binary. Verify: `cargo test --release` wall time on a quiet machine, before and after.
@@ -146,7 +135,8 @@ brackets.
 - O4.1 manifest and `aye.lock` design; `docs/framework.md` already fixed "declarative file, not a `build.aye` run" (old O4 table).
 - O4.2 local path dependencies: a root imports a module from another root (old O4 table; also the browser split, P8.1).
 - O4.3 URL dependencies: fetch, hash check against `aye.lock`, offline build from the cache (old O4 table).
-- O5.1 `aye test <dir>` over every module, time per test, summary line; retires `browser/unit_tests.aye` (old O5 table).
+- O5.1a `aye test <dir>`: a subdirectory that is not imported and does not compile on its own fails the whole run (O5.1 report); decide: skip with a note, or a `--strict`. Verify: a golden with a broken lonely module.
+- O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
 - O5.2 per-test CPU-time limit and `-j` (old O5 table; `practices/workflow.md` "A speed test limits CPU time").
 - O6.1 `aye lsp` diagnostics and formatting over JSON-RPC (old O6 table).
 - O6.2 `aye lsp` hover with `///` and go to definition (old O6 table).

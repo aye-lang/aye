@@ -23,8 +23,11 @@ and `git worktree list` (expected: main only). Next, in order:
    O3.4, O3.5, O1.12a, O1.13a, O1.5b, O3.8 and O1.11a are done
    (2026-10-10, `plans/done.md`). **O6 holds** (checked on bf4c5d8).
    Phase O2.x (targets, O8): O2.1 done (`docs/decisions.md` "Targets
-   (O2)"); P2.9, P2.9a, O2.2 and O2.3 done; O2.4 (wasm32-freestanding) is in
-   flight; then the O8 check, O2.5, O1.17.
+   (O2)"); P2.9, P2.9a, O2.2, O2.3 and O2.4 done. **O8 holds** (checked on
+   ec88c60: all four wasm/macOS targets run, E0118 names the target;
+   the Linux triples compile on Linux, cross-linking from a Mac needs a
+   sysroot, O2.8). O5.1 done (`aye test <dir>`). Next: O1.17 (suite speed, in flight),
+   O5.2 (time limit, `-j`), O2.5, O2.7.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
    15/15 and showed the spec core is still too large for Claude Code's
@@ -34,7 +37,7 @@ and `git worktree list` (expected: main only). Next, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O2 targets (O6 holds; P2.9 open) | O2.4, then the O8 check | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O1.17 and O5.2 | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 

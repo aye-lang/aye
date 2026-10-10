@@ -1,4 +1,4 @@
-test "parse reads the name and the port" ... ok
-test "a port of 0 is invalid" ... ok
+test "parse reads the name and the port" ... ok (N ms)
+test "a port of 0 is invalid" ... ok (N ms)
 
-2 passed; 0 failed
+2 passed; 0 failed; 1 modules; N ms

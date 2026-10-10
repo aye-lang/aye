@@ -294,36 +294,26 @@ fn layout_system_font() {
 
 #[test]
 fn aye_unit_tests() {
-    // The modules are independent; `aye test` writes to its own temp file.
-    // The last two import other browser modules, so they are tested from
-    // the root.
-    let runs: [&[&str]; 8] = [
-        &["test", "browser"],
-        &["test", "browser/url"],
-        &["test", "browser/dom"],
-        &["test", "browser/encoding"],
-        &["test", "browser/font"],
-        &["test", "browser/image"],
-        &["test", "browser", "--module", "svg"],
-        &["test", "browser", "--module", "js"],
-    ];
-    let failures: Vec<String> = common::run_queue(&runs, |args| {
-        let out = aye().args(*args).output().unwrap();
-        let stdout = text(&out.stdout);
-        if out.status.success() && stdout.contains(" passed; 0 failed") {
-            None
-        } else {
-            Some(format!(
-                "`aye {}` failed:\n{stdout}{}",
-                args.join(" "),
-                text(&out.stderr)
-            ))
-        }
-    })
-    .into_iter()
-    .flatten()
-    .collect();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The tests of every module under `browser` (15 modules have tests:
+    // the root and 14 submodules), in one run.
+    let out = aye().args(["test", "browser"]).output().unwrap();
+    let stdout = text(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains(" passed; 0 failed"),
+        "`aye test browser` failed:\n{stdout}{}",
+        text(&out.stderr)
+    );
+    let summary = stdout
+        .lines()
+        .rev()
+        .find(|l| l.contains(" passed; "))
+        .unwrap();
+    let modules: usize = summary
+        .split("; ")
+        .find_map(|p| p.strip_suffix(" modules"))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no module count in `{summary}`"));
+    assert!(modules >= 15, "only {modules} modules ran tests: {summary}");
 }
 
 /// `anyknown args...` must exit with `status` and print exactly `stdout`

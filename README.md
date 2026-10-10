@@ -150,7 +150,9 @@ leave them out; `aye test` runs each one of every module of the program
 (std aside; only those whose name contains the `--filter` text, and with
 `--module html` only those of module `html`) in its own process, so a panic
 ends only that test. A test of another module than the root shows as
-`test "html: name"`. A test
+`test "html: name"`. With a
+directory, `aye test dir` also runs the modules under it that nothing
+imports, each module once. A test
 fails when it panics, fails an assertion, returns an error, or leaks memory
 from `@testAllocator()`:
 
@@ -166,11 +168,14 @@ test "leaks a node" {
 
 ```
 $ aye test list.aye
-test "leaks a node" ... FAILED
+test "leaks a node" ... FAILED (3 ms)
     list.aye:5:23: leak: 16 bytes allocated here were never freed
 
-0 passed; 1 failed
+0 passed; 1 failed; 1 modules; 212 ms
 ```
+
+Each test line ends with the wall time of its process; the last line counts the
+modules that ran a test and the time of the whole run.
 
 A ```` ```aye ```` block in a `///` doc comment is a test body too (`test
 "doc: square (line 4)"`), so the examples in the documentation keep working.
@@ -185,7 +190,7 @@ status is 1 if a test failed or the file does not compile, and 0 otherwise.
 
 ```
 {"file":"list.aye","diagnostics":[],
- "tests":[{"name":"leaks a node","status":"fail",
+ "tests":[{"name":"leaks a node","status":"fail","ms":3,
            "failures":[{"kind":"leak","line":5,"col":23,"message":"16 bytes allocated here were never freed"}],
            "stdout":"","stderr":"list.aye:5:23: leak: 16 bytes allocated here were never freed\n"}],
  "passed":0,"failed":1}

@@ -14,6 +14,13 @@
 //!   passed; M skipped` counts them. Skipped: a program that imports a std
 //!   module the target lacks (E0118), and one with `X.native` (an empty
 //!   marker file), `X.needs` or `X.tools`.
+//!   A case with `X.freestanding` (a marker whose first line is the
+//!   arguments for the loader, if any) also runs built for
+//!   wasm32-freestanding under `tests/wasm/loader.mjs`, in every mode: with
+//!   no arguments `main` runs and the goldens are `X.out` and `X.panic` (a
+//!   panic exits with status 134); with arguments the loader calls that
+//!   export, and stdout is `X.freestanding.out`. The line `golden
+//!   (wasm32-freestanding): N passed` counts them.
 //! - `tests/ffi/X.aye`: like `tests/cases`, for programs that link C
 //!   libraries with `@link`; skipped when `pkg-config` does not know a
 //!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
@@ -32,7 +39,9 @@
 //!   stderr and exit with status 1.
 //! - `tests/tests/X.aye`: `aye test X.aye` (debug mode) must print exactly
 //!   `X.out`, and `aye test --json X.aye` exactly `X.json` if it exists. The
-//!   exit status must be 0 when no test failed, and 1 otherwise.
+//!   exit status must be 0 when no test failed, and 1 otherwise. Wall times
+//!   (`(12 ms)`, `"ms":12`) are replaced by `N` before the comparison, here
+//!   and for `aye test` in the other cases.
 //! - `tests/fix/X.aye`: `aye fix X.aye` on a copy must leave exactly
 //!   `X.fixed` and print exactly `X.out`. If `X.stderr` exists, errors
 //!   remain: stderr must equal it and the exit status must be 1; otherwise
@@ -101,6 +110,13 @@ fn wasm_skip_reason(path: &Path) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// The wasm32-freestanding target, if programs can be built and run for it
+/// here (clang with the wasm32 backend, and `node`).
+fn freestanding_target() -> Option<&'static Target> {
+    let t = driver::find_target("wasm32-freestanding").unwrap();
+    (t.toolchain_available() && driver::node_available()).then_some(t)
 }
 
 /// `f` for a program, unless it does not run on wasm32-wasip1.
@@ -398,6 +414,33 @@ fn error_case(path: &Path) -> Result<(), String> {
     }
 }
 
+/// `aye test` prints wall times: `(12 ms)` after a test, `; 34 ms` after the
+/// summary, `"ms":12` in JSON. Every such number becomes `N`.
+fn scrub_ms(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(|c: char| c.is_ascii_digit()) {
+        let (head, tail) = rest.split_at(i);
+        let n = tail
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(tail.len());
+        let (digits, after) = tail.split_at(n);
+        out.push_str(head);
+        if head.ends_with("\"ms\":")
+            || after == " ms"
+            || after.starts_with(" ms)")
+            || after.starts_with(" ms\n")
+        {
+            out.push('N');
+        } else {
+            out.push_str(digits);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `aye test` on a file of `tests/tests`, run from the crate root so that
 /// positions in the output start with `tests/tests/`.
 fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
@@ -415,7 +458,7 @@ fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
         ));
     }
     Ok((
-        String::from_utf8_lossy(&out.stdout).into_owned(),
+        scrub_ms(&String::from_utf8_lossy(&out.stdout)),
         out.status.code(),
     ))
 }
@@ -428,7 +471,7 @@ fn test_case(path: &Path) -> Result<(), String> {
 fn test_case_for(path: &Path, extra: &[&str]) -> Result<(), String> {
     let rel = format!("tests/tests/{}", name(path));
     let expected = read(&path.with_extension("out")).ok_or("missing .out file")?;
-    let status = if expected.ends_with("; 0 failed\n") {
+    let status = if expected.contains("; 0 failed; ") {
         0
     } else {
         1
@@ -581,6 +624,11 @@ fn module_case(path: &Path) -> Result<(), String> {
     let args = with("args").unwrap_or_else(|| format!("run {x}"));
     let args: Vec<&str> = args.split_whitespace().collect();
     let (out, err, code) = aye_stdin(dir, &args, &with("stdin").unwrap_or_default())?;
+    let out = if args[0] == "test" {
+        scrub_ms(&out)
+    } else {
+        out
+    };
     let want_out = with("out").ok_or("missing .out file")?;
     let want_err = with("stderr").unwrap_or_default();
     let want_code: i32 = with("status").map_or(0, |s| s.trim().parse().unwrap());
@@ -611,6 +659,7 @@ fn example1() -> Result<(), String> {
     }
     let want = read(&root.join("app.test.out")).ok_or("missing app.test.out")?;
     let (out, err, code) = aye(&root, &["test", "app"])?;
+    let out = scrub_ms(&out);
     if out != want || !err.is_empty() || code != Some(0) {
         return Err(format!(
             "`aye test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"
@@ -623,8 +672,8 @@ fn example1() -> Result<(), String> {
 fn cli_test_filter() -> Result<(), String> {
     let f = "tests/tests/outcomes.aye";
     let want = format!(
-        "test \"expect fails\" ... FAILED\n    before\n    {f}:28:5: assertion failed: condition is false\n\
-         test \"expectEqual fails\" ... FAILED\n    {f}:33:5: assertion failed: expected 4, found 5\n\n0 passed; 2 failed\n"
+        "test \"expect fails\" ... FAILED (N ms)\n    before\n    {f}:28:5: assertion failed: condition is false\n\
+         test \"expectEqual fails\" ... FAILED (N ms)\n    {f}:33:5: assertion failed: expected 4, found 5\n\n0 passed; 2 failed; 1 modules; N ms\n"
     );
     let (got, code) = aye_test(&[f, "--filter", "expect"])?;
     if got != want || code != Some(1) {
@@ -633,7 +682,7 @@ fn cli_test_filter() -> Result<(), String> {
         ));
     }
     let (got, code) = aye_test(&[f, "--filter", "no such test"])?;
-    if got != "\n0 passed; 0 failed\n" || code != Some(0) {
+    if got != "\n0 passed; 0 failed; 0 modules; N ms\n" || code != Some(0) {
         return Err(format!(
             "`aye test --filter` with no match: {code:?}\n{got}"
         ));
@@ -648,7 +697,7 @@ fn cli_test_module() -> Result<(), String> {
     let runs: &[(&[&str], &str, &str, i32)] = &[
         (
             &["test", "modtests", "--module", "dom"],
-            "test \"dom: basic\" ... ok\n\n1 passed; 0 failed\n",
+            "test \"dom: basic\" ... ok (N ms)\n\n1 passed; 0 failed; 1 modules; N ms\n",
             "",
             0,
         ),
@@ -668,6 +717,7 @@ fn cli_test_module() -> Result<(), String> {
     ];
     for (args, want_out, want_err, want_code) in runs {
         let (out, err, code) = aye(&dir, args)?;
+        let out = scrub_ms(&out);
         if out != *want_out || err != *want_err || code != Some(*want_code) {
             return Err(format!(
                 "`aye {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}",
@@ -834,6 +884,136 @@ fn cli_target_wasm(work: &Path) -> Result<(), String> {
     if code != Some(0) || out != want {
         return Err(format!(
             "`aye run --target wasm32-wasip1`: {code:?}\n{out}{err}"
+        ));
+    }
+    Ok(())
+}
+
+/// A `tests/cases` program with `X.freestanding`, built for
+/// wasm32-freestanding and run by `tests/wasm/loader.mjs` (see the top of
+/// this file for the goldens).
+fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Result<(), String> {
+    let src = read(path).unwrap();
+    let marker = read(&path.with_extension("freestanding")).unwrap_or_default();
+    let args: Vec<&str> = marker
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    let golden = if args.is_empty() {
+        "out"
+    } else {
+        "freestanding.out"
+    };
+    let expected_out = read(&path.with_extension(golden)).ok_or("missing golden")?;
+    let expected_panic = read(&path.with_extension("panic")).filter(|_| args.is_empty());
+    let modes: &[Mode] = if expected_panic.is_some() {
+        &[Mode::Debug, Mode::Safe]
+    } else {
+        &[Mode::Debug, Mode::Safe, Mode::Fast]
+    };
+    for &mode in modes {
+        let mut root = Root::single(&name(path), &src);
+        root.target = target;
+        let c = driver::compile_root(root, mode).map_err(|d| join(&d))?;
+        let exe = work.join(format!(
+            "{}-{mode:?}-{}",
+            path.file_stem().unwrap().to_string_lossy(),
+            target.name
+        ));
+        driver::cc(&c, &exe, mode)?;
+        let out = target
+            .run_command(&exe)
+            .args(&args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stdout != expected_out {
+            return Err(format!(
+                "[{mode:?}] stdout mismatch\n--- expected\n{expected_out}--- got\n{stdout}"
+            ));
+        }
+        match &expected_panic {
+            Some(p) => {
+                if out.status.code() != Some(134) || stderr != *p {
+                    return Err(format!(
+                        "[{mode:?}] expected exit status 134 and stderr\n{p}--- got {}\n{stderr}",
+                        out.status
+                    ));
+                }
+            }
+            None => {
+                if !out.status.success() || !stderr.is_empty() {
+                    return Err(format!(
+                        "[{mode:?}] program failed ({}):\n{stderr}",
+                        out.status
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `aye build --target wasm32-freestanding` links a program with no `main`,
+/// only `pub extern fn add`, into a module with no WASI imports; the loader
+/// calls `add 2 3` and prints 5. Skipped without clang's wasm32 backend or
+/// `node`.
+fn cli_target_freestanding(work: &Path) -> Result<(), String> {
+    if freestanding_target().is_none() {
+        println!("skipped cli/aye build --target wasm32-freestanding: no wasm32 clang or no node");
+        return Ok(());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = work.join("export_only.aye");
+    std::fs::write(
+        &src,
+        "pub extern fn add(a: i32, b: i32) i32 {\n    return a + b\n}\n",
+    )
+    .map_err(|e| e.to_string())?;
+    let wasm = work.join("export_only.wasm");
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            "wasm32-freestanding",
+            src.to_str().unwrap(),
+            "-o",
+            wasm.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!(
+            "`aye build --target wasm32-freestanding`: {code:?}\n{err}"
+        ));
+    }
+    let bytes = std::fs::read(&wasm).map_err(|e| e.to_string())?;
+    if bytes[..4] != *b"\0asm" {
+        return Err(format!("not a wasm file: {:02x?}", &bytes[..4]));
+    }
+    if bytes.windows(13).any(|w| w == b"wasi_snapshot") {
+        return Err("the module imports WASI".to_string());
+    }
+    let out = Command::new("node")
+        .args([
+            "tests/wasm/loader.mjs",
+            wasm.to_str().unwrap(),
+            "add",
+            "2",
+            "3",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() || stdout != "5\n" {
+        return Err(format!(
+            "loader.mjs add 2 3: {}\n{stdout}{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
         ));
     }
     Ok(())
@@ -1284,6 +1464,7 @@ fn main() {
     let asan_cases = cases("asan");
     let mod_cases = module_dirs();
     let wasm = wasm_target();
+    let freestanding = freestanding_target();
     type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
     fn add<'a>(
         jobs: &mut Vec<(String, Job<'a>)>,
@@ -1350,6 +1531,21 @@ fn main() {
         } else {
             println!("skipped wasm32-wasip1 goldens: no WASI toolchain or no node");
         }
+        if let Some(t) = freestanding {
+            for p in run_cases
+                .iter()
+                .filter(|p| p.with_extension("freestanding").exists())
+            {
+                let w = &work;
+                add(
+                    &mut jobs,
+                    format!("freestanding/cases/{}", name(p)),
+                    move || freestanding_case(p, w, t),
+                );
+            }
+        } else {
+            println!("skipped wasm32-freestanding goldens: no wasm32 clang or no node");
+        }
         add(&mut jobs, "example1".to_string(), example1);
         let w = &work;
         add(&mut jobs, "cli/aye run".to_string(), move || cli_run(w));
@@ -1365,6 +1561,11 @@ fn main() {
             &mut jobs,
             "cli/aye build --target wasm32-wasip1".to_string(),
             move || cli_target_wasm(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target wasm32-freestanding".to_string(),
+            move || cli_target_freestanding(w),
         );
         add(&mut jobs, "cli/aye check".to_string(), cli_check);
         add(
@@ -1448,6 +1649,20 @@ fn main() {
         println!(
             "golden (wasm32-wasip1): {} passed; {skipped} skipped; {bad} failed",
             total - bad - skipped
+        );
+    }
+    if freestanding.is_some() {
+        let total = results
+            .iter()
+            .filter(|(n, _)| n.starts_with("freestanding/"))
+            .count();
+        let bad = results
+            .iter()
+            .filter(|(n, r)| n.starts_with("freestanding/") && r.is_err())
+            .count();
+        println!(
+            "golden (wasm32-freestanding): {} passed; {bad} failed",
+            total - bad
         );
     }
     if failed > 0 {

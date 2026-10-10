@@ -1,9 +1,9 @@
-test "host, port and path" ... ok
-test "default port and no path" ... ok
-test "a fragment is dropped" ... ok
-test "IPv6 hosts" ... ok
-test "https parses with port 443" ... ok
-test "bad URLs" ... ok
-test "header lookup ignores case and takes the first" ... ok
+test "host, port and path" ... ok (N ms)
+test "default port and no path" ... ok (N ms)
+test "a fragment is dropped" ... ok (N ms)
+test "IPv6 hosts" ... ok (N ms)
+test "https parses with port 443" ... ok (N ms)
+test "bad URLs" ... ok (N ms)
+test "header lookup ignores case and takes the first" ... ok (N ms)
 
-7 passed; 0 failed
+7 passed; 0 failed; 1 modules; N ms
