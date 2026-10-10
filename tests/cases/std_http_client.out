@@ -30,7 +30,6 @@ garbage: error BadResponse
 bad chunk: error BadResponse
 interim: 200 [ok] 2
 silence: error TimedOut
-https: error HttpsUnsupported
 ftp: error UnsupportedScheme
 no scheme: error InvalidUrl
 empty host: error InvalidUrl

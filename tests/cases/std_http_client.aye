@@ -3,7 +3,7 @@
 // close, Content-Length, a HEAD) and against a hand-written server that
 // speaks what `Server` never does (chunked bodies, a body until close, a
 // short body, a garbage status line, silence). Also URL errors, an unknown
-// host and a refused connection.
+// host and a refused connection (https is in std_http_client_tls).
 
 import std.heap.Arena
 import std.heap.General
@@ -292,7 +292,6 @@ pub fn main() !void {
     attempt(a, "silence", ClientOptions { timeoutMs: 100 }, "GET", url(a, rport, "/slow"), []Header{}, "")
 
     // URL and connection errors.
-    attempt(a, "https", plain, "GET", "https://127.0.0.1/", []Header{}, "")
     attempt(a, "ftp", plain, "GET", "ftp://127.0.0.1/", []Header{}, "")
     attempt(a, "no scheme", plain, "GET", "127.0.0.1/", []Header{}, "")
     attempt(a, "empty host", plain, "GET", "http:///x", []Header{}, "")

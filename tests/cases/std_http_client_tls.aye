@@ -1,0 +1,155 @@
+// O3.5: https:// through the std.http client (libcurl in connect-only
+// mode). It generates a self-signed certificate for localhost, starts
+// `openssl s_server` as a local TLS server, fetches a page with the
+// certificate as `caFile`, and shows that a fetch without it, or with a
+// missing CA file, fails with TlsFailed. The harness skips this case when
+// `openssl` or libcurl is missing (`std_http_client_tls.needs` and
+// `.tools`).
+
+import std
+import std.heap.Arena
+import std.heap.General
+import std.http
+import std.http.ClientOptions
+import std.http.Header
+import std.http.Response
+import std.mem.Allocator
+import std.net
+import std.process
+import std.process.Child
+import std.process.Stdio
+import std.text
+import std.text.Builder
+import std.time
+
+// Runs `script` with `sh -c`; did it exit with 0?
+fn sh(alloc: Allocator, script: []u8) bool {
+    let argv = [_][]u8{"/bin/sh", "-c", script}
+    var c = process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit) catch return false
+    let st = c.wait() catch return false
+    return st.success()
+}
+
+fn cleanup(alloc: Allocator, dir: []u8) {
+    _ = sh(alloc, join3(alloc, "rm -rf '", dir, "'"))
+}
+
+// A fresh directory under the system's temp directory ("" on failure).
+fn makeTemp(alloc: Allocator) []u8 {
+    let argv = [_][]u8{"/usr/bin/mktemp", "-d"}
+    var c = process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch return ""
+    let out = c.stdout.?.readAll(alloc) catch return ""
+    c.stdout.?.close()
+    let st = c.wait() catch return ""
+    if !st.success() {
+        return ""
+    }
+    return text.trim(out)
+}
+
+fn join3(alloc: Allocator, a: []u8, b: []u8, c: []u8) []u8 {
+    var out = Builder.init(alloc)
+    out.append(a) catch return ""
+    out.append(b) catch return ""
+    out.append(c) catch return ""
+    return out.bytes()
+}
+
+fn portText(alloc: Allocator, port: u16) []u8 {
+    var b = Builder.init(alloc)
+    b.appendUint(port as u64) catch return ""
+    return b.bytes()
+}
+
+fn url(alloc: Allocator, host: []u8, port: u16) []u8 {
+    var b = Builder.init(alloc)
+    b.append("https://") catch return ""
+    b.append(host) catch return ""
+    b.append(":") catch return ""
+    b.appendUint(port as u64) catch return ""
+    b.append("/index.html") catch return ""
+    return b.bytes()
+}
+
+// Waits until something accepts connections on `port`.
+fn waitUp(port: u16) bool {
+    var i: u32 = 0
+    while i < 100 {
+        if net.connect("127.0.0.1", port) |c| {
+            c.close()
+            return true
+        } else |e| {
+            time.sleep(50)
+        }
+        i += 1
+    }
+    return false
+}
+
+fn fetch(alloc: Allocator, label: []u8, opts: ClientOptions, u: []u8) {
+    @print(label)
+    if http.requestWith(alloc, opts, "GET", u, []Header{}, "") |r| {
+        @print(": ")
+        @print(r.status)
+        @print(" body has marker=")
+        @println(text.indexOf(r.body, "tls-fetch-ok") != null)
+    } else |e| {
+        @print(": error ")
+        @println(@tagName(e))
+    }
+}
+
+fn run(alloc: Allocator, dir: []u8, port: u16) {
+    let ca = join3(alloc, dir, "/c.pem", "")
+    let with = ClientOptions { caFile: ca, timeoutMs: 5000 }
+    let without = ClientOptions { timeoutMs: 5000 }
+    let missing = ClientOptions { caFile: join3(alloc, dir, "/nothing.pem", ""), timeoutMs: 5000 }
+    fetch(alloc, "localhost with caFile", with, url(alloc, "localhost", port))
+    fetch(alloc, "127.0.0.1 with caFile", with, url(alloc, "127.0.0.1", port))
+    fetch(alloc, "without caFile", without, url(alloc, "localhost", port))
+    fetch(alloc, "missing caFile", missing, url(alloc, "localhost", port))
+    if http.post(alloc, url(alloc, "localhost", port), "text/plain", "x") |r| {
+        @println("post: unexpected success")
+    } else |e| {
+        @print("post without caFile: error ")
+        @println(@tagName(e))
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+
+    let dir = makeTemp(a)
+    if dir.len == 0 {
+        @println("no temp dir")
+        return
+    }
+    defer cleanup(a, dir)
+
+    let gen = join3(a, "cd '", dir, "' && openssl req -x509 -newkey rsa:2048 -nodes -keyout k.pem -out c.pem -days 2 -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1 >/dev/null 2>&1 && echo tls-fetch-ok > index.html")
+    if !sh(a, gen) {
+        @println("certificate generation failed")
+        return
+    }
+    @println("certificate ready")
+
+    let probe = try net.listen("127.0.0.1", 0)
+    let port = probe.port()
+    probe.close()
+    let serve = join3(a, join3(a, "cd '", dir, "' && exec openssl s_server -accept "), portText(a, port), " -WWW -cert c.pem -key k.pem </dev/null >/dev/null 2>&1")
+    let argv = [_][]u8{"/bin/sh", "-c", serve}
+    var server = try process.spawn(a, argv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    if waitUp(port) {
+        @println("server up")
+        run(a, dir, port)
+    } else {
+        @println("server did not start")
+    }
+    try server.kill()
+    _ = try server.wait()
+    @println("done")
+}
