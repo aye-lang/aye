@@ -1,0 +1,36 @@
+// std.sync on one thread: a Mutex, a Channel that is never waited on, and an
+// Atomic. Runs on wasm32-freestanding too (X.freestanding), where the
+// pthread calls are single-threaded stubs.
+
+import std.heap.General
+import std.sync.Atomic
+import std.sync.Channel
+import std.sync.Mutex
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+
+    var m = Mutex.init()
+    defer m.deinit()
+    m.lock()
+    m.unlock()
+
+    var ch = try Channel(i64).init(gpa.allocator(), 4)
+    defer ch.deinit()
+    try ch.send(1)
+    try ch.send(2)
+    try ch.send(3)
+    ch.close()
+    while ch.recv() |v| {
+        @println(v)
+    }
+    ch.send(4) catch |e| {
+        @println("closed")
+    }
+
+    var n = Atomic(i64).init(10)
+    @println(n.add(5))
+    @println(n.compareSwap(15, 40))
+    @println(n.load())
+}

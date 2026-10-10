@@ -29,7 +29,8 @@ pub fn now() i64 {
     return ts[0] * 1000 + ts[1] / 1000000
 }
 
-/// Waits at least `ms` milliseconds.
+/// Waits at least `ms` milliseconds. On wasm32-freestanding it is a busy
+/// wait on the host's monotonic clock.
 pub fn sleep(ms: u64) {
     // A C `struct timespec`: seconds and nanoseconds. When a signal ends
     // the sleep early, `nanosleep` stores the time left in it.

@@ -311,6 +311,53 @@ int aye_fs_puts(const char *s) {
     aye_js_write(1, "\n", 1);
     return 1;
 }
+/* libm: what wasm has an instruction for is defined here; `sin`, `cos`,
+   `tan`, `exp`, `log`, `log2`, `log10`, `pow`, `fmod`, `atan2`, `asin`,
+   `acos`, `atan`, `hypot` and `strtod` stay `env` imports, which the
+   loader fills from `Math` (see tests/wasm/loader.mjs). */
+#define AYE_FS_MATH1(n, e) double aye_fs_##n(double x) __asm__(#n); double aye_fs_##n(double x) { return e; }
+AYE_FS_MATH1(sqrt, __builtin_sqrt(x))
+AYE_FS_MATH1(floor, __builtin_floor(x))
+AYE_FS_MATH1(ceil, __builtin_ceil(x))
+AYE_FS_MATH1(trunc, __builtin_trunc(x))
+AYE_FS_MATH1(fabs, __builtin_fabs(x))
+double aye_fs_copysign(double, double) __asm__("copysign");
+double aye_fs_copysign(double x, double y) { return __builtin_copysign(x, y); }
+/* halfway cases away from zero; wasm only has round-to-even */
+double aye_fs_round(double) __asm__("round");
+double aye_fs_round(double x) {
+    double t = __builtin_trunc(x);
+    if (__builtin_fabs(x - t) >= 0.5) t += __builtin_copysign(1.0, x);
+    return __builtin_copysign(t, x);
+}
+/* `env.aye_clock(id)`: milliseconds as an f64, id 0 the time of day
+   (`Date.now()`), 1 a clock that never goes back (`performance.now()`) */
+__attribute__((import_module("env"), import_name("aye_clock"))) extern double aye_js_clock(int);
+/* `env.aye_fmt_double(ptr, cap, x, n)`: writes `x.toExponential(n - 1)`
+   (`d.ddde+X`) and a NUL to `ptr`, and returns its length */
+__attribute__((import_module("env"), import_name("aye_fmt_double"))) extern int aye_js_fmt_double(char *, size_t, double, int);
+/* std.time.sleep: a busy wait on the monotonic clock */
+int aye_fs_nanosleep(const int64_t *, int64_t *) __asm__("nanosleep");
+int aye_fs_nanosleep(const int64_t *req, int64_t *rem) {
+    double end = aye_js_clock(1) + (double)req[0] * 1e3 + (double)req[1] / 1e6;
+    while (aye_js_clock(1) < end) {}
+    return 0;
+}
+/* std.sync on one thread: nothing contends for a mutex, nothing wakes a
+   waiter (std.thread is not on this target) */
+int aye_fs_pthread_mutex_init(void *m, const void *a) { return 0; }
+int aye_fs_pthread_mutex_lock(void *m) { return 0; }
+int aye_fs_pthread_mutex_unlock(void *m) { return 0; }
+int aye_fs_pthread_mutex_destroy(void *m) { return 0; }
+int aye_fs_pthread_cond_init(void *c, const void *a) { return 0; }
+int aye_fs_pthread_cond_signal(void *c) { return 0; }
+int aye_fs_pthread_cond_broadcast(void *c) { return 0; }
+int aye_fs_pthread_cond_destroy(void *c) { return 0; }
+int aye_fs_pthread_cond_wait(void *c, void *m) {
+    static const char msg[] = "panic: waiting on a condition variable that no other thread can signal\n";
+    aye_js_write(2, msg, sizeof msg - 1);
+    aye_js_abort();
+}
 #else
 #define AYE_SYM(n) AYE_STR(__USER_LABEL_PREFIX__) n
 #define AYE_EXPORT(n)
@@ -962,12 +1009,19 @@ AYE_RT double aye_std_nan(void) { return __builtin_nan(""); }
 /* std.json: `ecvt` of `x` >= 0: its first `n` (1 to 17) decimal digits,
    correctly rounded, in a buffer that the next call overwrites, with the
    decimal point's position in `*pt` and 0 in `*sg`. wasi-libc's `ecvt`
-   stops at 15 digits, so there it comes from `snprintf`. */
+   stops at 15 digits, so there it comes from `snprintf` (freestanding:
+   from JS's `toExponential`). */
 #ifdef __wasm32__
+#ifndef AYE_FREESTANDING
 extern int aye_rt_snprintf(char *, size_t, const char *, ...) __asm__(AYE_SYM("snprintf"));
+#endif
 AYE_RT uint8_t *aye_std_ecvt(double x, int32_t n, int32_t *pt, int32_t *sg) {
     static char buf[48];
+#ifdef AYE_FREESTANDING
+    aye_js_fmt_double(buf, sizeof buf, x, n); /* d.ddde+X, from JS */
+#else
     aye_rt_snprintf(buf, sizeof buf, "%.*e", n - 1, x); /* d.ddde+XX */
+#endif
     int k = 0, i = 0;
     for (; buf[i] && buf[i] != 'e'; i++) {
         if (buf[i] >= '0' && buf[i] <= '9') buf[k++] = buf[i];
@@ -985,6 +1039,24 @@ AYE_RT uint8_t *aye_std_ecvt(double x, int32_t n, int32_t *pt, int32_t *sg) {
     return (uint8_t *)aye_rt_ecvt(x, n, pt, sg);
 }
 #endif
+#ifdef AYE_FREESTANDING
+/* std.text: `ecvt` of any `x` (`aye_std_ecvt` takes `x` >= 0) */
+uint8_t *aye_fs_ecvt(double, int32_t, int32_t *, int32_t *) __asm__("ecvt");
+uint8_t *aye_fs_ecvt(double x, int32_t n, int32_t *pt, int32_t *sg) {
+    uint8_t *d = aye_std_ecvt(x < 0 ? -x : x, n, pt, sg);
+    *sg = x < 0;
+    return d;
+}
+/* the clocks of the host: `env.aye_clock` (milliseconds) */
+AYE_RT uint64_t aye_std_monotonic_ns(void) { return (uint64_t)(aye_js_clock(1) * 1e6); }
+AYE_RT int32_t aye_std_realtime(int64_t *ts) {
+    double ms = aye_js_clock(0);
+    int64_t s = (int64_t)(ms / 1000);
+    ts[0] = s;
+    ts[1] = (int64_t)((ms - (double)s * 1000) * 1e6);
+    return 0;
+}
+#else
 AYE_RT uint64_t aye_std_monotonic_ns(void) {
     int64_t ts[2] = {0, 0};
     aye_rt_clock_gettime(AYE_CLOCK_MONOTONIC, ts);
@@ -1000,6 +1072,7 @@ AYE_RT int32_t aye_std_realtime(int64_t *ts) {
     return aye_rt_clock_gettime(0, ts);
 #endif
 }
+#endif
 
 /* Stack overflow (debug and safe mode): a SIGSEGV/SIGBUS handler, running
    on an alternate signal stack, reports a fault within 1 MiB of the end of
