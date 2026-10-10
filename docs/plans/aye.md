@@ -119,18 +119,44 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O2 targets (current)
 
-#### O2.1: diagnose wasm32
+#### O2.2: `--target` on build, run, test, emit-c, check
 - lane: aye
-- goal: a written diagnosis of what `aye build --target wasm32-wasip1` needs: which C prelude parts (pthreads, `mmap` for coroutine stacks and the guard region, signals, `getentropy`, sockets, `posix_spawn`, `dlopen` for cimport, 32-bit `usize`) compile under wasi-libc as is, which need `#ifdef __wasm32__` stubs, and which std modules the target must lack (E-code naming the target); a target matrix in `docs/decisions.md`; the `cargo`-side plan for O2.2–O2.4 as proposed cards with verifies.
+- goal: a target table in the driver (`aarch64-macos`, `x86_64-macos`, `aarch64-linux`, `x86_64-linux`, `wasm32-wasip1`, `wasm32-freestanding`; host default) with clang triple, flags (wasm: sysroot, resource dir, no `-pthread`, `-lm`; env overrides), output extension and the std modules the target lacks; E0117 unknown target, E0118 std module not on this target.
 - serves: O8
-- files: `docs/decisions.md` (new entry "Targets (O2)"), `docs/plans/aye.md` is left to main
-- verify: `grep -n 'Targets (O2)' docs/decisions.md` → the entry; the report lists, per prelude feature, "as is / stub / unsupported", from an actual `clang --target=wasm32-wasip1` compile of the emitted C of `tests/cases/hello.aye` (or the smallest case) and of a `std.coro` case, with the error lines quoted
-- depends on: –
-- parallel with: all (no std or compiler change)
-- where: local (Homebrew LLVM 23 at `$(brew --prefix llvm)/bin/clang`, wasi-libc at `$(brew --prefix wasi-libc)/share/wasi-sysroot`, `-resource-dir=$(brew --prefix wasi-runtimes)/share/wasi-runtimes`; see `done.md` O0.1; no wasm runtime installed: Node 22 `node --experimental-wasi-unstable-preview1` or `node:wasi` runs wasip1 modules)
-- model: opus
-- time box: 45 min
-- notes: `aye emit-c` gives the C; the prelude lives in `src/cgen.rs`. Keep the diagnosis to what the compile errors show; do not fix.
+- files: `src/driver.rs`, `src/main.rs`, `src/codes.rs`, `src/module.rs` (per-target std check), `src/cgen.rs` (only `#ifndef __wasm32__` around the three signal calls), `tests/golden.rs` (`X.args`), `tests/cases/`, `tests/errors/`, `docs/spec.md` (one line), `README.md`
+- verify: `cargo test --release` → exit 0 with an x86_64-macos build golden (`file` says x86_64; skipped without Rosetta), a wasm32-wasip1 hello link golden (`\0asm`; skipped without the toolchain), E0117 and E0118 goldens
+- depends on: O2.1
+- parallel with: P2.9 (both touch `src/cgen.rs`, different regions)
+- where: local
+- model: sonnet
+- time box: 60 min
+- notes: details in `docs/decisions.md` "Targets (O2)". `aye run`/`aye test` on a wasm target print "needs a wasm runtime (O2.3)" unless running through `node:wasi` is trivial.
+
+#### O2.3: wasm32-wasip1 prelude and runner
+- lane: aye
+- goal: a wasip1 branch in the C prelude (stubs for threads/signals, wasi `O_*` flags, errno numbers, `stat`/`dirent` offsets, `clockid_t`), `std.coro` panics "not supported on this target", `aye run`/`aye test --target wasm32-wasip1` through a `node:wasi` runner; goldens and the conformance table get a `wasm32-wasip1` column (O11).
+- serves: O8, O11
+- files: `src/cgen.rs`, `src/driver.rs`, `tests/golden.rs`, `tests/conformance.rs`, a runner script under `scripts/`
+- verify: `cargo test --release --test golden` and `--test conformance` → exit 0 with the wasm column (impossible entries listed as such); `std_fs` matches its golden on wasm
+- depends on: O2.2
+- parallel with: O5.x
+- where: local (Homebrew LLVM, wasi-libc, Node 22)
+- model: sonnet
+- time box: 60 min
+- notes: findings in `docs/decisions.md` "Targets (O2)": wasi `st_mode` byte 24, `d_type` byte 8, `clockid_t` is a pointer, a panic traps with `RuntimeError: unreachable` (exit 1, not 134).
+
+#### O2.4: wasm32-freestanding
+- lane: aye
+- goal: output and abort as JS imports, an allocator on `memory.grow`, `pub extern fn` exported to JS; a JS loader runs hello and calls an exported `add`.
+- serves: O8
+- files: `src/cgen.rs`, `src/driver.rs`, `tests/cases/`, a loader under `tests/wasm/` (new)
+- verify: `cargo test --release --test golden` → exit 0: hello prints its golden through the JS loader under Node 22; JS calls `add(2, 3)` and gets 5
+- depends on: O2.3
+- parallel with: O5.x
+- where: local
+- model: sonnet
+- time box: 60 min
+- notes: the link today misses `printf`, `puts`, `write`, `fflush`, `malloc`, `abort` and the signal calls (O2.1).
 
 ## Cards: O3 std breadth (done; leftovers in the backlog)
 
@@ -150,10 +176,6 @@ brackets.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O1.15 `aye check` on an unknown `std.<x>` lists the std modules (eval 2026-10-10: `std.io` guessed in 3 runs, `std.str`, `std.fmt`, `std.string`). Verify: an error golden.
 - O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
-- O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
-- O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
-- O2.3 wasm32-wasi prelude without threads, coroutines or `mmap`; goldens and conformance under Node 22 `node:wasi` (old O2 table).
-- O2.4 wasm32-freestanding: JS exports and imports, page allocator on `memory.grow` (old O2 table).
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O4.1 manifest and `aye.lock` design; `docs/framework.md` already fixed "declarative file, not a `build.aye` run" (old O4 table).
