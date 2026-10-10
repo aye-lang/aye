@@ -63,7 +63,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 ## Current state (2026-10-10)
 
-- Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); `--target` (O2.2): the host, the other native triples, wasm32-wasip1 (links and runs hello under `node:wasi`; std prelude branch is O2.3), wasm32-freestanding (O2.4).
+- Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); `--target` (O2.2, O2.3): the host, the other native triples, wasm32-wasip1 (std prelude branch, `node:wasi` runner, golden and conformance coverage), wasm32-freestanding (O2.4).
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
 - std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). **O6 holds** (checked 2026-10-10 on bf4c5d8, `done.md`).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
@@ -106,19 +106,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O2 targets (current)
 
-#### O2.3: wasm32-wasip1 prelude and runner
-- lane: aye
-- goal: a wasip1 branch in the C prelude (stubs for threads/signals, wasi `O_*` flags, errno numbers, `stat`/`dirent` offsets, `clockid_t`), `std.coro` panics "not supported on this target", `aye run`/`aye test --target wasm32-wasip1` through a `node:wasi` runner; goldens and the conformance table get a `wasm32-wasip1` column (O11).
-- serves: O8, O11
-- files: `src/cgen.rs`, `src/driver.rs`, `tests/golden.rs`, `tests/conformance.rs`, a runner script under `scripts/`
-- verify: `cargo test --release --test golden` and `--test conformance` → exit 0 with the wasm column (impossible entries listed as such); `std_fs` matches its golden on wasm
-- depends on: O2.2
-- parallel with: O5.x
-- where: local (Homebrew LLVM, wasi-libc, Node 22)
-- model: sonnet
-- time box: 60 min
-- notes: findings in `docs/decisions.md` "Targets (O2)": wasi `st_mode` byte 24, `d_type` byte 8, `clockid_t` is a pointer, a panic traps with `RuntimeError: unreachable` (exit 1, not 134).
-
 #### O2.4: wasm32-freestanding
 - lane: aye
 - goal: output and abort as JS imports, an allocator on `memory.grow`, `pub extern fn` exported to JS; a JS loader runs hello and calls an exported `add`.
@@ -148,6 +135,9 @@ brackets.
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
+- O2.5 C types follow the target: `c_long` is 32-bit on wasm32 (and `usize`-sized C types), so `c_union` and `extern_struct` can drop their `X.native` markers (O2.3 report). Verify: those goldens `ok` on wasm.
+- O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
+- Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
 - O1.17 suite speed: `tests/browser.rs` takes 283 s of the ~10-minute suite and golden/browser each spawn `available_parallelism()` workers; measure what dominates, add an `AYE_TEST_JOBS` cap honoured by golden, conformance and browser, and report the time per test binary. Verify: `cargo test --release` wall time on a quiet machine, before and after.
 - O1.15a `aye doc std.<x>` for an unknown module prints the same module list and suggestion as E0081 (`src/doc.rs`; O1.15 report). Verify: a CLI golden.
 - O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
