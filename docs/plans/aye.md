@@ -104,6 +104,32 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O1 server basics
 
+#### O1.13a: the spec core fits Claude Code's inline tool output
+- lane: aye
+- goal: `aye spec` prints at most 28000 bytes, so a headless agent sees it inline; §15 (std index) and §18 (pitfalls) move to the front of the core, right after §1, so a truncated read still shows them.
+- serves: AI-writability; O4, O13
+- files: `src/main.rs` (`SPEC_SPLITS`, the core list and order), `tests/spec.rs` (cap 40000 → 28000), `docs/spec.md` only if a section must shrink
+- verify: `cargo test --release --test spec` → exit 0 with `aye_spec_core_is_small` at 28000; `target/release/aye spec | wc -c` ≤ 28000; then `python3 scripts/eval.py --runs 1 --tasks http_hello` → 0 refused calls and no `aye spec all` in the transcript
+- depends on: –
+- parallel with: all std steps
+- where: local
+- model: opus (what leaves the core is design judgment: candidates §12 modules 1.9 KB, §9 memory details, the §4 statement forms that §1 already shows)
+- time box: 45 min
+- notes: eval 2026-10-10 (`docs/aye-eval.md`): the 38.6 KB core was saved to a file by Claude Code's Bash tool ("Output too large"), its `Read` refused by `--restricted`; every run lost 1-3 turns and 2 of 3 http_hello runs never saw `std.http`. `aye spec <name>` keeps printing whole sections.
+
+#### O1.11a: eval harness fixes
+- lane: aye
+- goal: `scripts/eval.py` runs each agent in a short working directory (`/tmp/aye-eval/<stamp>/<task>-<n>`) and records in `docs/aye-eval.md` which std modules each `main.aye` imports.
+- serves: AI-writability
+- files: `scripts/eval.py`, `docs/aye-eval.md` (table column)
+- verify: `python3 scripts/eval.py --self-test` → exit 0; `python3 scripts/eval.py --runs 1 --tasks word_freq` → refused calls 0
+- depends on: –
+- parallel with: all
+- where: local (needs `claude` login)
+- model: sonnet
+- time box: 30 min
+- notes: 11 of 15 refused calls on 2026-10-10 were writes to a mistyped copy of the long macOS temp path.
+
 #### O1.7: first HTTP benchmark
 - lane: aye
 - goal: hello world on `std.http` in `fast` mode against Go `net/http` and Node 22 `http`, `ab -k -c 50 -n 100000`; if Aye is below Node, propose a diagnose step.
@@ -146,8 +172,8 @@ brackets.
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
 - O1.5b `std.fs.readDir`: `stat` fallback for `DT_UNKNOWN` entries; a follow-links `stat` beside the `lstat` one if a caller needs it (O1.5 report). Verify: `cargo test --release --test golden`.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
-- O1.13a the spec core is ~1.2 KB under the 40000-byte cap (`aye_spec_core_is_small`); when it fills up, move §12 (1.9 KB) out of the core or shorten §7.
-- O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
+- O1.15 `aye check` on an unknown `std.<x>` lists the std modules (eval 2026-10-10: `std.io` guessed in 3 runs, `std.str`, `std.fmt`, `std.string`). Verify: an error golden.
+- O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
 - O2.3 wasm32-wasi prelude without threads, coroutines or `mmap`; goldens and conformance under Node 22 `node:wasi` (old O2 table).
