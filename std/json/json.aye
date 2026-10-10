@@ -849,7 +849,7 @@ fn shortest(a: f64, out: []mut u8) Digits {
     var p: usize = 1
     var point: i32 = 0
     while true {
-        let raw = ecvt(a, p as i32, pt[..].ptr, sg[..].ptr)
+        let raw = aye_std_ecvt(a, p as i32, pt[..].ptr, sg[..].ptr)
         point = pt[0]
         cand[0] = '0'
         cand[1] = '.'
@@ -893,6 +893,6 @@ fn putInt(buf: []mut u8, at: usize, v: i32) usize {
 
 // `end` is a `char **` in C; std passes null.
 extern fn strtod(s: [*]u8, end: [*]u8) f64
-extern fn ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
+extern fn aye_std_ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
 extern fn copysign(x: f64, y: f64) f64
 extern fn fabs(x: f64) f64

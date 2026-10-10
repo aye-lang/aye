@@ -68,7 +68,13 @@ extern void aye_rt_free(void *) __asm__(AYE_SYM("free"));
 extern int aye_rt_memcmp(const void *, const void *, size_t) __asm__(AYE_SYM("memcmp"));
 extern int aye_rt_open(const char *, int, ...) __asm__(AYE_SYM("open"));
 extern int aye_rt_access(const char *, int) __asm__(AYE_SYM("access"));
+#ifdef __wasm32__
+/* wasi-libc: `clockid_t` is a pointer to one of these constants */
+extern const char _CLOCK_MONOTONIC, _CLOCK_REALTIME;
+extern int aye_rt_clock_gettime(const void *, int64_t *) __asm__(AYE_SYM("clock_gettime"));
+#else
 extern int aye_rt_clock_gettime(int, int64_t *) __asm__(AYE_SYM("clock_gettime"));
+#endif
 #if defined(__APPLE__) && defined(__x86_64__)
 extern int aye_rt_stat(const char *, void *) __asm__(AYE_SYM("stat$INODE64"));
 #else
@@ -396,19 +402,25 @@ AYE_RT void aye_log_e(uint16_t e) { aye_rt_dprintf(2, "%s", aye_error_names[e]);
 /* Hooks that std calls through `extern fn`: the program's arguments;
    `open` for reading or `create` (write, create, truncate) with a path that
    is not NUL-terminated (the fd, or -errno); `exists`; `mtime`; and the
-   monotonic clock in nanoseconds. Flag and clock values, and where
-   `struct stat` keeps the modification time, differ between macOS and
-   Linux. */
+   monotonic clock in nanoseconds. Flag and clock values, errno numbers, and
+   where `struct stat` keeps the modification time, differ between macOS,
+   Linux and wasi-libc (wasm32-wasip1). */
 static int aye_argc;
 static char **aye_argv;
 AYE_RT int32_t aye_std_argc(void) { return aye_argc; }
 AYE_RT uint8_t *aye_std_argv(int32_t i) { return (uint8_t *)aye_argv[i]; }
+#ifdef __wasm32__
+/* WASI has no processes and wasi-libc no `getpid`; programs use it for
+   unique file names. */
+__attribute__((weak)) int getpid(void) { return 1; }
+#endif
 #ifdef __APPLE__
 extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__error"));
 #else
 extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #endif
 #ifdef __APPLE__
+#define AYE_O_RDONLY 0
 #define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
 #define AYE_CLOCK_MONOTONIC 6
 #define AYE_ST_MTIME 6 /* st_mtimespec, in int64_t: byte 48 */
@@ -416,7 +428,19 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #define AYE_ST_MODE 4 /* st_mode, 16 bits: byte 4 */
 #define AYE_ENOTEMPTY 66
 #define AYE_D_TYPE 20 /* dirent: d_type, then d_name */
+#define AYE_NSEC(v) (v)
+#elif defined(__wasm32__)
+#define AYE_O_RDONLY 0x04000000
+#define AYE_O_CREATE 0x10009000 /* O_WRONLY | O_CREAT | O_TRUNC */
+#define AYE_CLOCK_MONOTONIC (&_CLOCK_MONOTONIC)
+#define AYE_ST_MTIME 11 /* st_mtim: byte 88 */
+#define AYE_ST_SIZE 6 /* st_size: byte 48 */
+#define AYE_ST_MODE 24 /* st_mode, 32 bits: byte 24 */
+#define AYE_ENOTEMPTY 55
+#define AYE_D_TYPE 8 /* dirent: d_ino, d_type, then d_name */
+#define AYE_NSEC(v) ((int64_t)(uint32_t)(v)) /* tv_nsec is a 32-bit long; the padding is not zeroed */
 #else
+#define AYE_O_RDONLY 0
 #define AYE_O_CREATE 01101
 #define AYE_CLOCK_MONOTONIC 1
 #define AYE_ST_MTIME 11 /* st_mtim, byte 88 on x86_64 and aarch64 */
@@ -428,7 +452,52 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #endif
 #define AYE_ENOTEMPTY 39
 #define AYE_D_TYPE 18
+#define AYE_NSEC(v) (v)
 #endif
+/* `errno` in the Linux numbers that std compares (ENOENT 2, EACCES 13,
+   EEXIST 17, ENOTEMPTY 39, ...). macOS keeps the rest as they are; wasi's
+   numbers are all different. */
+static __attribute__((unused)) int aye_errno(void) {
+    int e = *aye_rt_errno_loc();
+#ifdef __wasm32__
+    switch (e) {
+    case 63: return 1;   /* EPERM */
+    case 44: return 2;   /* ENOENT */
+    case 71: return 3;   /* ESRCH */
+    case 27: return 4;   /* EINTR */
+    case 29: return 5;   /* EIO */
+    case 60: return 6;   /* ENXIO */
+    case 1: return 7;    /* E2BIG */
+    case 8: return 9;    /* EBADF */
+    case 6: return 11;   /* EAGAIN */
+    case 48: return 12;  /* ENOMEM */
+    case 2: return 13;   /* EACCES */
+    case 21: return 14;  /* EFAULT */
+    case 10: return 16;  /* EBUSY */
+    case 20: return 17;  /* EEXIST */
+    case 75: return 18;  /* EXDEV */
+    case 43: return 19;  /* ENODEV */
+    case 54: return 20;  /* ENOTDIR */
+    case 31: return 21;  /* EISDIR */
+    case 28: return 22;  /* EINVAL */
+    case 41: return 23;  /* ENFILE */
+    case 33: return 24;  /* EMFILE */
+    case 59: return 25;  /* ENOTTY */
+    case 74: return 26;  /* ETXTBSY */
+    case 22: return 27;  /* EFBIG */
+    case 51: return 28;  /* ENOSPC */
+    case 70: return 29;  /* ESPIPE */
+    case 69: return 30;  /* EROFS */
+    case 34: return 31;  /* EMLINK */
+    case 64: return 32;  /* EPIPE */
+    case 37: return 36;  /* ENAMETOOLONG */
+    case 52: return 38;  /* ENOSYS */
+    case 55: return 39;  /* ENOTEMPTY */
+    case 32: return 40;  /* ELOOP */
+    }
+#endif
+    return e;
+}
 static __attribute__((unused)) char *aye_c_path(uint8_t *path, size_t len) {
     char *p = aye_rt_malloc(len + 1);
     if (!p) return 0;
@@ -440,11 +509,11 @@ static __attribute__((unused)) int32_t aye_std_open_flags(uint8_t *path, size_t 
     char *p = aye_c_path(path, len);
     if (!p) return -12;
     int fd = aye_rt_open(p, flags, 0644);
-    int err = fd < 0 ? *aye_rt_errno_loc() : 0;
+    int err = fd < 0 ? aye_errno() : 0;
     aye_rt_free(p);
     return fd < 0 ? -err : fd;
 }
-AYE_RT int32_t aye_std_open(uint8_t *path, size_t len) { return aye_std_open_flags(path, len, 0); }
+AYE_RT int32_t aye_std_open(uint8_t *path, size_t len) { return aye_std_open_flags(path, len, AYE_O_RDONLY); }
 AYE_RT int32_t aye_std_create(uint8_t *path, size_t len) { return aye_std_open_flags(path, len, AYE_O_CREATE); }
 AYE_RT bool aye_std_exists(uint8_t *path, size_t len) {
     char *p = aye_c_path(path, len);
@@ -465,14 +534,14 @@ AYE_RT bool aye_std_mtime(uint8_t *path, size_t len, int64_t *ns) {
     int r = aye_rt_stat(p, st);
     aye_rt_free(p);
     if (r != 0) return false;
-    *ns = st[AYE_ST_MTIME] * 1000000000 + st[AYE_ST_MTIME + 1];
+    *ns = st[AYE_ST_MTIME] * 1000000000 + AYE_NSEC(st[AYE_ST_MTIME + 1]);
     return true;
 }
 /* std.fs: stat, readDir, mkdir, remove and rename. `-errno` as a result
    keeps the numbers that are the same on both OSes; ENOTEMPTY (66 on macOS,
    39 on Linux) is -39 on both. */
 static __attribute__((unused)) int32_t aye_std_fail(void) {
-    int e = *aye_rt_errno_loc();
+    int e = aye_errno();
     return e == AYE_ENOTEMPTY ? -39 : -e;
 }
 /* `lstat` of the path (`stat` if `follow`) into `out`: the size, the
@@ -487,7 +556,7 @@ AYE_RT int32_t aye_std_lstat(uint8_t *path, size_t len, bool follow, int64_t *ou
     aye_rt_free(p);
     if (r != 0) return err;
     out[0] = st[AYE_ST_SIZE];
-    out[1] = st[AYE_ST_MTIME] * 1000000000 + st[AYE_ST_MTIME + 1];
+    out[1] = st[AYE_ST_MTIME] * 1000000000 + AYE_NSEC(st[AYE_ST_MTIME + 1]);
     out[2] = *(uint16_t *)((char *)st + AYE_ST_MODE) & 0170000;
     return 0;
 }
@@ -523,6 +592,10 @@ AYE_RT uint8_t *aye_std_readdir(uint8_t *dir, int32_t *kind) {
     uint8_t *e = aye_rt_readdir(dir);
     if (!e) return 0;
     *kind = e[AYE_D_TYPE];
+#ifdef __wasm32__ /* WASI file types to the DT_* values of Linux */
+    static const uint8_t dt[8] = {0, 6, 2, 4, 8, 12, 12, 10};
+    *kind = *kind < 8 ? dt[*kind] : 0;
+#endif
     return e + AYE_D_TYPE + 1;
 }
 /* `closedir` and `rewinddir` under our own names: a program that
@@ -531,7 +604,7 @@ AYE_RT void aye_std_closedir(uint8_t *dir) { aye_rt_closedir(dir); }
 AYE_RT void aye_std_rewinddir(uint8_t *dir) { aye_rt_rewinddir(dir); }
 /* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
    and Aye has no per-OS declarations, so this helper stays. */
-AYE_RT int32_t aye_std_errno(void) { return *aye_rt_errno_loc(); }
+AYE_RT int32_t aye_std_errno(void) { return aye_errno(); }
 /* std.os.getenv: the value (not a copy), or null. `name` is not
    NUL-terminated. */
 extern char *aye_rt_getenv(const char *) __asm__(AYE_SYM("getenv"));
@@ -629,10 +702,46 @@ fail:
 }
 AYE_RT double aye_std_inf(void) { return __builtin_inf(); }
 AYE_RT double aye_std_nan(void) { return __builtin_nan(""); }
+/* std.json: `ecvt` of `x` >= 0: its first `n` (1 to 17) decimal digits,
+   correctly rounded, in a buffer that the next call overwrites, with the
+   decimal point's position in `*pt` and 0 in `*sg`. wasi-libc's `ecvt`
+   stops at 15 digits, so there it comes from `snprintf`. */
+#ifdef __wasm32__
+extern int aye_rt_snprintf(char *, size_t, const char *, ...) __asm__(AYE_SYM("snprintf"));
+AYE_RT uint8_t *aye_std_ecvt(double x, int32_t n, int32_t *pt, int32_t *sg) {
+    static char buf[48];
+    aye_rt_snprintf(buf, sizeof buf, "%.*e", n - 1, x); /* d.ddde+XX */
+    int k = 0, i = 0;
+    for (; buf[i] && buf[i] != 'e'; i++) {
+        if (buf[i] >= '0' && buf[i] <= '9') buf[k++] = buf[i];
+    }
+    int e = 0, neg = buf[i + 1] == '-';
+    for (i += 2; buf[i]; i++) e = e * 10 + (buf[i] - '0');
+    buf[k] = 0;
+    *pt = x == 0 ? 0 : (neg ? -e : e) + 1;
+    *sg = 0;
+    return (uint8_t *)buf;
+}
+#else
+extern char *aye_rt_ecvt(double, int, int *, int *) __asm__(AYE_SYM("ecvt"));
+AYE_RT uint8_t *aye_std_ecvt(double x, int32_t n, int32_t *pt, int32_t *sg) {
+    return (uint8_t *)aye_rt_ecvt(x, n, pt, sg);
+}
+#endif
 AYE_RT uint64_t aye_std_monotonic_ns(void) {
     int64_t ts[2] = {0, 0};
     aye_rt_clock_gettime(AYE_CLOCK_MONOTONIC, ts);
-    return (uint64_t)ts[0] * 1000000000u + (uint64_t)ts[1];
+    return (uint64_t)ts[0] * 1000000000u + (uint64_t)AYE_NSEC(ts[1]);
+}
+/* std.time.now: the real-time clock into a `struct timespec` of `[2]i64`
+   (0, or -1). `clock_gettime`'s clock id is 0 on Linux and macOS, a
+   pointer on wasi. */
+AYE_RT int32_t aye_std_realtime(int64_t *ts) {
+#ifdef __wasm32__
+    return aye_rt_clock_gettime(&_CLOCK_REALTIME, ts);
+#else
+    return aye_rt_clock_gettime(0, ts);
+#endif
 }
 
 /* Stack overflow (debug and safe mode): a SIGSEGV/SIGBUS handler, running
