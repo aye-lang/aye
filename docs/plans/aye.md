@@ -124,12 +124,11 @@ brackets.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O2.5a std casts on wasm32: audit the remaining `as usize` casts of 64-bit values in std (O2.5 found 23, all small values today) and `aye cimport` output (`size_t`→`usize`, `long`→`c_long`) under `--target wasm32-wasip1`. Verify: a `cimport` golden built for wasm.
 - O2.5b Linux container gets the WASI toolchain (`scripts/setup-ubuntu.sh`), so the wasip1 goldens run there too. Verify: `scripts/linux.sh` golden prints the wasm32-wasip1 summary.
-- O2.7 freestanding runtime gaps (O2.4 sweep): libm and `strtod` in the prelude or as `env` imports, an `env.aye_clock` import for `std.time`, a `snprintf` for `std.json`, single-thread `std.sync` stubs; then more cases get `X.freestanding`. Verify: `std_json` and `math` cases `ok` on wasm32-freestanding.
+- O2.7 freestanding runtime gaps: **committed on `worktree-agent-a164625c58d6885e7` (eb4efa4), not merged**; see plan.md "Resume here" for what is left. Follow-ups after the merge: freestanding golden support for expected exit 1 (5 cases), stubs for `abs`/`labs`/`div`/`strchr`/`qsort`/`malloc` (6 cases).
 - O2.8 Linux triples from a non-matching host: the link needs a sysroot (O2.2 report), so `aye build --target x86_64-linux` on a Mac fails at `ld`; add a compile-only path (clang `-c`, or `--emit obj`) or a documented sysroot env var. Verify: a golden that compiles hello for both Linux triples on macOS.
 - O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
-- O1.17a golden default workers: golden is latency-bound (O1.17), so default `jobs()` for golden to 2x `available_parallelism()` (keep `AYE_TEST_JOBS` as the override), and set `RUST_TEST_THREADS`-style sharing or a single pool in browser so three tests do not each spawn `jobs()` workers. Verify: `cargo test --release --test golden` wall time under 200 s on a quiet machine, and `--test browser` not slower.
-- O1.17b why does the first run of a new executable stall ~0.4 s on macOS (Gatekeeper/XProtect scan?); if it is signing, try `codesign --sign -` or linking with `-Wl,-no_adhoc_codesign`, measured on `bitwise`. Verify: the per-case wall time in golden drops.
+- O1.17b first-exec stall, round 2 (cause known, `decisions.md` "First-exec stall"): try `-Wl,-no_adhoc_codesign` and `-mmacosx-version-min`; count the executables golden links; if nothing hides the stall, run a case's debug/safe/fast binaries in parallel in `tests/golden.rs`. Verify: golden wall time under 250 s on a quiet machine.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
 - O1.15a `aye doc std.<x>` for an unknown module prints the same module list and suggestion as E0081 (`src/doc.rs`; O1.15 report). Verify: a CLI golden.
 - O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
@@ -140,7 +139,8 @@ brackets.
 - O4.3 URL dependencies: fetch, hash check against `aye.lock`, offline build from the cache (old O4 table).
 - O5.1a `aye test <dir>`: a subdirectory that is not imported and does not compile on its own fails the whole run (O5.1 report); decide: skip with a note, or a `--strict`. Verify: a golden with a broken lonely module.
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
-- O5.2 per-test CPU-time limit and `-j` (old O5 table; `practices/workflow.md` "A speed test limits CPU time").
+- O5.2a `aye test`: compile the next module root while the current root's tests run (compile dominates `aye test browser`, 8.9 s; O5.2 report). Verify: `aye test browser` wall time drops.
+- O5.2b per-test `ms` is inflated under `-j` by the first-exec cost of a fresh binary (~0.5 s on macOS, same cause as O1.17b and O5.1b); warm the binary once before fanning out. Verify: `treetests` times under 50 ms after the first.
 - O6.1 `aye lsp` diagnostics and formatting over JSON-RPC (old O6 table).
 - O6.2 `aye lsp` hover with `///` and go to definition (old O6 table).
 - O6.3 `aye doc --html <path>` (old O6 table; the website X3 uses it).

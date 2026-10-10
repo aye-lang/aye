@@ -1639,10 +1639,10 @@ fn main() {
             "cli/aye test --module".to_string(),
             cli_test_module,
         );
-        // At most `common::jobs()` cases run at once.
+        // At most `common::jobs_for(2)` cases run at once.
         let queue = std::sync::Mutex::new(jobs.into_iter().enumerate());
         let done = std::sync::Mutex::new(Vec::new());
-        let workers = common::jobs();
+        let workers = common::jobs_for(2);
         std::thread::scope(|s| {
             for _ in 0..workers {
                 s.spawn(|| {

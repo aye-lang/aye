@@ -510,3 +510,28 @@ O2.7 (std on wasm32-freestanding; the prelude's `#ifdef AYE_FREESTANDING` block 
 - **`std.time`:** `env.aye_clock(id)` returns milliseconds as an f64: id 0 is `Date.now()` (`std.time.now`), id 1 `performance.now()` (`monotonicMs`). `sleep` is a busy wait on id 1 (`nanosleep` in the prelude).
 - **`std.sync`:** stays available. `pthread_mutex_*` and `pthread_cond_init/signal/broadcast/destroy` return 0; `pthread_cond_wait` prints `panic: waiting on a condition variable that no other thread can signal` and aborts (no other thread could wake it). `pthread_create` is not provided: `std.thread` is still E0118, so the code that calls it is not linked. Atomics are plain loads and stores (no threads).
 - **Goldens:** `X.freestanding` on `json_roundtrip` and `sync_single` (new), `std_math`, `std_math_more`, `math_special`, `std_text`, `std_time` and `link_optional`: `golden (wasm32-freestanding)` goes from 3 to 11 passed. A sweep of `tests/cases` under the loader (build, run, compare `X.out` and the exit status): 73 of 116 passed before, 78 after; 26 are E0118 or `X.native`, 6 call C functions the runtime lacks (`malloc`, `qsort`, `strchr`, `abs`, `labs`, `div` in the `c_*` and `extern_*` cases), 5 expect exit status 1 (the freestanding golden only knows 0 and 134) and `target_widths` has its own wasm32 golden.
+
+## First-exec stall (O1.17b)
+
+Every freshly linked executable takes about 0.37 s wall (about 0 CPU) the first time it runs on macOS (Apple Silicon, Darwin 25.5), and 0.01 s after that. Measured on `tests/cases/bitwise.aye`, with the system load at 12-14, so the numbers are a little noisy but stable (4 runs each).
+
+**Cause (from the unified log, not a guess):** the kernel exec of a new, ad hoc signed file makes `syspolicyd` assess it. In the 0.35 s window of one run the log shows `syspolicyd` doing a CFNetwork request (`transaction_duration_ms=249`, status 200), `Error checking with notarization daemon`, `GatekeeperPolicyScanError -67018 "Code did not match any currently allowed policy"`, then `XprotectService` loading `XProtect.yara` and scanning the file. The cost belongs to the new file, not to the build: even `int main(void){return 0;}` stalls 0.36 s, and a copy of the Apple-signed `/bin/echo` does not (0.00 s).
+
+| Variant (first run / second run) | First | Second |
+| --- | --- | --- |
+| `aye build` output, plain | 0.36-0.38 | 0.01 |
+| same file copied with `cp`, run first time | 0.16-0.25 | 0.01 |
+| `codesign --force --sign -` after the link (costs 0.03-0.06 s) | 0.36-0.39 | 0.00 |
+| `xattr -c` after the link | 0.36-0.38 | 0.01 |
+| `clang` empty `main`, `-O0` / `-g` / `-g -lm -pthread` | 0.36-0.41 (one 0.62) | 0.00-0.01 |
+| copy of `/bin/echo` | 0.00 | 0.00 |
+
+- The stall is per new inode: a copy of a file that has already been assessed still pays about 0.17 s (a cached verdict by cdhash saves the network part, not the XProtect scan).
+- Ad hoc re-signing does nothing: the linker already signs (`flags=0x20002(adhoc,linker-signed)`).
+- `xattr -c` does not remove `com.apple.provenance` (the attribute is still there after it and after the run); the file is tagged because the tool that wrote it runs with provenance tracking. Whether the tag is what triggers the assessment was not tested.
+- The binary lives under `/private/tmp` in these runs; a run with the output under the repo's `target/` was not timed.
+- `Developer mode is currently enabled` (`DevToolsSecurity -status`), so that setting does not hide it. The `spctl developer-mode` command does not exist on this system.
+
+**Not tried (stopped on request):** `-Wl,-no_adhoc_codesign` (an unsigned arm64 binary is usually killed), `-mmacosx-version-min`, a `posix_spawn` of an already open file, and the Developer Tools exemption for the terminal app (System Settings, Privacy and Security, Developer Tools; it needs the user and a restart of the terminal, and covers only processes started from that app).
+
+**Nothing changed in `src/driver.rs`.** No flag or step tried so far hides the stall. The remaining lever is to link fewer new executables (each golden case links up to three: debug, safe, fast), and the Developer Tools exemption.

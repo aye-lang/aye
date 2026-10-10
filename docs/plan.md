@@ -8,11 +8,29 @@ language's biggest integration test. The framework does one slice (F1)
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-08)
+## Resume here (handoff 2026-10-10 night)
 
-A new session starts in `~/Documents/ayelang/aye` (moved by X5.2; full suite green there on 2026-10-08).
-The state is this file's lane table, [`plans/done.md`](plans/done.md)
-and `git worktree list` (expected: main only). Next, in order:
+A new session starts in `~/Documents/ayelang/aye`; the full suite was
+green on main at fefa325 (28 cards merged on 2026-10-10; O6, O8 and O9
+hold). The state is this file's lane table, [`plans/done.md`](plans/done.md)
+and `git worktree list`. Two branches are committed but **not merged**:
+
+- **O2.7** (freestanding runtime gaps), worktree
+  `.claude/worktrees/agent-a164625c58d6885e7`, commit eb4efa4: libm via
+  `__builtin_*` and `env.Math` imports, `env.strtod`, `env.aye_clock`,
+  `env.aye_fmt_double`, pthread stubs; freestanding golden 3 → 11, sweep
+  73 → 78 of 116. Left: `aye check browser`, `browser/build.sh`,
+  `scripts/linux.sh` golden, `git merge main`, rerun golden, then merge.
+- **O1.17b** (first-exec stall): merged as a docs-only decisions entry.
+  Cause: macOS `syspolicyd`/Gatekeeper/XProtect assess every new
+  executable on first exec (~0.37 s, includes a network notarization
+  check); `codesign`/`xattr` do not help. Untried: `-Wl,-no_adhoc_codesign`,
+  `-mmacosx-version-min`, and the **Developer Tools exemption for the
+  terminal app** (System Settings → Privacy & Security → Developer Tools;
+  only the user can do it). Fallback lever: run a case's three mode
+  binaries in parallel so the stalls overlap (they use no CPU).
+
+Then, in order:
 
 1. **Linux development (X1): done 2026-10-08.** The full suite passes
    on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
@@ -26,8 +44,10 @@ and `git worktree list` (expected: main only). Next, in order:
    (O2)"); P2.9, P2.9a, O2.2, O2.3 and O2.4 done. **O8 holds** (checked on
    ec88c60: all four wasm/macOS targets run, E0118 names the target;
    the Linux triples compile on Linux, cross-linking from a Mac needs a
-   sysroot, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 done (widths follow the target). In flight: O1.17a (golden
-   workers), O5.2 (test time limit, `-j`). Next: O2.7, O5.1a.
+   sysroot, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 and O5.2 done. **O9 holds** (checked on 91fb479: `aye test
+   <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
+   `--json`, leak-is-failure, all golden-covered). O1.17a done. In flight: O2.7 (freestanding runtime), O1.17b
+   (first-exec stall). Next: O5.1a, O2.8.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
    15/15 and showed the spec core is still too large for Claude Code's
@@ -37,7 +57,7 @@ and `git worktree list` (expected: main only). Next, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O1.17a, O5.2, then O2.7 | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O2.7, O1.17b, then O5.1a | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
