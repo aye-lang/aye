@@ -1,0 +1,60 @@
+import std.crypto.constantTimeEqual
+import std.crypto.randomBytes
+import std.mem
+
+// Does `b` have any byte other than 0?
+fn anyNonZero(b: []u8) bool {
+    for x in b {
+        if x != 0 {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn main() !void {
+    // Lengths below, at and above the 256 bytes of one getentropy call.
+    var buf = [1000]u8{0, ..}
+    try randomBytes(buf[..0])
+    try randomBytes(buf[..1])
+    try randomBytes(buf[..256])
+    try randomBytes(buf[..257])
+    try randomBytes(buf[..])
+    @println(anyNonZero(buf[..]))
+    @println(anyNonZero(buf[500..]))
+    // Only the slice is written.
+    var guarded = [40]u8{0, ..}
+    try randomBytes(guarded[8..32])
+    @println(anyNonZero(guarded[..8]))
+    @println(anyNonZero(guarded[8..32]))
+    @println(anyNonZero(guarded[32..]))
+    // Two calls differ.
+    var a = [32]u8{0, ..}
+    var b = [32]u8{0, ..}
+    try randomBytes(a[..])
+    try randomBytes(b[..])
+    @println(mem.eql(a[..], b[..]))
+    // The same for a size above one call.
+    var c = [600]u8{0, ..}
+    var d = [600]u8{0, ..}
+    try randomBytes(c[..])
+    try randomBytes(d[..])
+    @println(mem.eql(c[..], d[..]))
+    // The first 256 and the next 256 bytes of one call are not repeated.
+    @println(mem.eql(c[..256], c[256..512]))
+
+    // constantTimeEqual.
+    let x = "correct horse battery staple"
+    @println(constantTimeEqual(x, "correct horse battery staple"))
+    @println(constantTimeEqual(x, "Correct horse battery staple"))
+    @println(constantTimeEqual(x, "correct horse battery stapl3"))
+    @println(constantTimeEqual(x, "correct horse battery"))
+    @println(constantTimeEqual("correct horse", x))
+    @println(constantTimeEqual("", ""))
+    @println(constantTimeEqual("", "a"))
+    @println(constantTimeEqual("a", ""))
+    let z1 = [3]u8{0, 0, 0}
+    let z2 = [3]u8{0, 0, 1}
+    @println(constantTimeEqual(z1[..], z1[..]))
+    @println(constantTimeEqual(z1[..], z2[..]))
+}
