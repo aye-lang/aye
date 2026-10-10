@@ -189,7 +189,11 @@ fn tool_case(path: &Path, work: &Path) -> Result<(), String> {
     let mut missing = missing_packages(path);
     missing.extend(missing_tools(path));
     if !missing.is_empty() {
-        println!("skipped cases/{}: missing {}", name(path), missing.join(", "));
+        println!(
+            "skipped cases/{}: missing {}",
+            name(path),
+            missing.join(", ")
+        );
         return Ok(());
     }
     run_case(path, work)
