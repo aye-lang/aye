@@ -19,8 +19,8 @@ and `git worktree list` (expected: main only). Next, in order:
    `container`). Steps touching the C prelude, `@cimport` or platform
    calls run it before merging.
 2. **Language cards**, merged one by one on `main`: F1.1, O1.12,
-   O1.13 and O1.5a are done (2026-10-10, `plans/done.md`); O1.5 (fs)
-   and O1.6 (process) are in flight; then O3.x (O3.1 json first).
+   O1.13, O1.5a and O1.5 are done (2026-10-10, `plans/done.md`);
+   O1.6 (process) and O3.1 (json) are in flight; then O3.1a, O3.2, O3.3.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); rerun with `--runs 3` after O1.12/O1.13 and
    before ranking O3.x.
@@ -29,7 +29,7 @@ and `git worktree list` (expected: main only). Next, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.5, O1.6, then O3.1 | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.6, O3.1, then O3.1a/O3.2/O3.3 | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 

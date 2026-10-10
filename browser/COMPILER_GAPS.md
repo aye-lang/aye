@@ -110,7 +110,11 @@ removed in cff3f60.
   `browser/net/archive.aye` calls it; it takes `d_name`'s length with
   `strlen`, not macOS's `d_namlen` (X1.1).
 - **Hit by:** O1.3b (`std.net`: errno, `struct addrinfo`); X1.1
-  (`browser/net/archive.aye`: `st_mtimespec`, `d_namlen`); O1.6
+  (`browser/net/archive.aye`: `st_mtimespec`, `d_namlen`); O1.5
+  (`std.fs.stat`, `readDir`, `mkdir`, `remove`, `rename`: the layouts of
+  `struct stat` and `struct dirent` and ENOTEMPTY's value differ, so
+  `aye_std_lstat`, `aye_std_readdir` and `aye_std_pathop` are in the C
+  prelude); O1.6
   (`std.process` reads errno through `aye_std_errno`; `spawn` forks in
   the C prelude because `fcntl` is variadic).
 - **Status:** open. X1.1 chose the std helper over a language feature:
