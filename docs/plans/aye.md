@@ -148,6 +148,7 @@ brackets.
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
+- O1.17 suite speed: `tests/browser.rs` takes 283 s of the ~10-minute suite and golden/browser each spawn `available_parallelism()` workers; measure what dominates, add an `AYE_TEST_JOBS` cap honoured by golden, conformance and browser, and report the time per test binary. Verify: `cargo test --release` wall time on a quiet machine, before and after.
 - O1.15 `aye check` on an unknown `std.<x>` lists the std modules (eval 2026-10-10: `std.io` guessed in 3 runs, `std.str`, `std.fmt`, `std.string`). Verify: an error golden.
 - O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).

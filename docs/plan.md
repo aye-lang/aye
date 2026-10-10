@@ -80,8 +80,11 @@ its area. Nothing else of the plan.
    ok. 257 passed`), not "tests pass".
 5. **Before finishing a branch** run the checklist in
    [`practices/workflow.md`](practices/workflow.md), "Checklist before
-   finishing a branch" (merge `main` in, `cargo build --release`,
-   `aye check browser`, full `cargo test --release`, `browser/build.sh`).
+   finishing a branch" (merge `main` in, `cargo build --release`, the
+   test targets the card touches, `aye check browser` and
+   `browser/build.sh` when the compiler or std changed). **Not the full
+   suite**: main runs `cargo test --release` once after each merge, one
+   run at a time (2026-10-10: parallel full suites took 34+ minutes).
    Docs-only cards skip the build and tests.
 6. **Do not edit** `docs/plan.md`, `docs/plans/*`, `docs/browser.md`,
    `docs/browser-sites.md`, or `docs/milestones.md` unless the card names
