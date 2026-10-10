@@ -68,14 +68,14 @@ built-in database and cloud clients (`@cimport` covers them).
 - std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). **O6 holds** (checked 2026-10-10 on bf4c5d8, `done.md`).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport; `X.needs`/`X.tools` skip files), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`, `tests/framework.rs`. `tests/conformance.rs` (18 areas, 51 programs, native).
-- Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
+- Open gaps: #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 
 ## Phases
 
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
-| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: P2.9 |
+| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: O3 (gaps #50, #52, #53), P2.9a |
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | done 2026-10-10 |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | done 2026-10-10 (O6 holds) |
 | O2.x | Targets incl. wasm32 (O8) | the O8 check | current |
@@ -89,18 +89,18 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: P2 leftovers
 
-#### P2.9: AddressSanitizer golden for gap #3
+#### P2.9a: the TSan golden tries Homebrew clang
 - lane: aye
-- goal: under ASan the runtime poisons the freed blocks debug mode and `aye test` hold back, so a read through a stale `List`/`Pool` pointer reports `heap-use-after-free`; a golden checks it in debug and safe mode.
-- serves: O3 (gap #3)
-- files: `src/cgen.rs` (the debug free queue, `src/cgen.rs:147-240`), `tests/golden.rs`, a case under `tests/`, `browser/COMPILER_GAPS.md` #3
-- verify: `cargo test --release --test golden` → exit 0, the new ASan case ok (skipped with a message when no ASan clang is found)
-- depends on: –
-- parallel with: not with other `src/cgen.rs` steps
-- where: local now (Apple clang's ASan hangs here; Homebrew LLVM 23 works: `$(brew --prefix llvm)/bin/clang -fsanitize=address`); cloud after X1.2 (Linux clang has ASan)
+- goal: `tsan_works` in `tests/golden.rs` tries `clang` on PATH and then `$(brew --prefix llvm)/bin/clang`, as `asan_clang` does, so the ThreadSanitizer golden runs on this Mac; M10's last item becomes done (`docs/milestones.md` row, left to main).
+- serves: O1 (M10 complete)
+- files: `tests/golden.rs`
+- verify: `cargo test --release --test golden` → exit 0 with the TSan case `ok` (not skipped) on this Mac
+- depends on: P2.9
+- parallel with: all
+- where: local
 - model: sonnet
-- time box: 45 min
-- notes: model the golden on the ThreadSanitizer one in `tests/golden.rs`. Keep the debug free queue (it catches double free and write-after-free); poison only under ASan. Also try the TSan golden with Homebrew clang (`-fsanitize=thread`): if it runs, M10's last item (milestones.md table) becomes done.
+- time box: 20 min
+- notes: P2.9 found the fan-out program passes under Homebrew clang's `-fsanitize=thread`; generalise `asan_clang` into a `sanitizer_clang(kind)`.
 
 ## Cards: O1 server basics
 
