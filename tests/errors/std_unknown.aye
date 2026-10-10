@@ -1,0 +1,9 @@
+// An unknown std module, imported or used by its path, names the std
+// modules.
+
+import std
+import std.io
+
+pub fn main() {
+    let n = std.string.len("x")
+}

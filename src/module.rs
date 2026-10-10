@@ -328,6 +328,22 @@ fn join(segs: &[(String, Span)]) -> String {
         .join(".")
 }
 
+/// The Levenshtein distance of two names.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let up = row[j + 1];
+            row[j + 1] = (diag + usize::from(ca != *cb)).min(up + 1).min(row[j] + 1);
+            diag = up;
+        }
+    }
+    row[b.len()]
+}
+
 /// `segs[..n]` as an identifier with field accesses after it.
 fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
     let mut e = ast::Expr {
@@ -921,7 +937,7 @@ impl Loader<'_> {
             match self.module(&sub, *sp) {
                 Some(s) => q = s,
                 None => {
-                    let msg = format!("module `{}` has no `{seg}`", self.modules[q].path);
+                    let msg = self.no_submodule(q, seg);
                     self.report(Error::new(E0081, *sp, msg));
                     return Binding::Bad;
                 }
@@ -1083,11 +1099,7 @@ impl Loader<'_> {
             match self.module(&sub, *sp) {
                 Some(s) => q = s,
                 None => {
-                    return Err(Error::new(
-                        E0081,
-                        *sp,
-                        format!("module `{}` has no `{seg}`", self.modules[q].path),
-                    ));
+                    return Err(Error::new(E0081, *sp, self.no_submodule(q, seg)));
                 }
             }
             i += 1;
@@ -1131,6 +1143,32 @@ impl Loader<'_> {
     fn place(&self, at: Span, here: Span) -> String {
         let names: Vec<String> = self.files.iter().map(|f| f.name.clone()).collect();
         crate::sema::place(&names, at, here)
+    }
+
+    /// Why the module `q` has no `seg`. For `std`, the message names the
+    /// std modules and the close one, if any.
+    fn no_submodule(&self, q: usize, seg: &str) -> String {
+        let path = &self.modules[q].path;
+        if path != "std" {
+            return format!("module `{path}` has no `{seg}`");
+        }
+        let mut names: Vec<&str> = STD_FILES
+            .iter()
+            .filter_map(|(m, ..)| m.strip_prefix("std.").filter(|n| !n.contains('.')))
+            .collect();
+        names.sort();
+        names.dedup();
+        let mut msg = format!(
+            "unknown std module `std.{seg}`; std has: {}",
+            names.join(", ")
+        );
+        if let Some(near) = names.iter().find(|n| {
+            n.as_bytes()[..2] == *seg.as_bytes().get(..2).unwrap_or(&[])
+                && edit_distance(n, seg) <= 2
+        }) {
+            msg.push_str(&format!("\ndid you mean `std.{near}`?"));
+        }
+        msg
     }
 
     fn not_imported(&self, name: &str, span: Span) -> Error {
