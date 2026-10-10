@@ -1520,7 +1520,7 @@ std.text      bytes as text: compare, search, split, parse, UTF-8, Builder   bel
 std.math      f64 functions (libm), generic minOf, maxOf, absOf, clampOf     below
 std.sort      sort(T, items, less), in place                                 below
 std.pool      Pool(T): values in reusable slots, generational Handle(T)      aye doc --signatures std.pool
-std.time      monotonicMs, sleep                                             aye doc --signatures std.time
+std.time      clocks, sleep, UTC DateTime, RFC 3339 and HTTP dates           aye doc --signatures std.time
 std.thread    OS threads: spawn, spawnWithStack (deep recursion), join       aye doc --signatures std.thread
 std.sync      Mutex, Channel(T), Atomic(T)                                   below
 std.coro      coroutines: create, resume, yield                              below

@@ -1,0 +1,6 @@
+test "now is a plausible Unix time in milliseconds" ... ok
+test "calendar fields" ... ok
+test "RFC 3339 format and parse" ... ok
+test "HTTP date format and parse" ... ok
+
+4 passed; 0 failed

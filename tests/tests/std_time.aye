@@ -1,0 +1,79 @@
+// O3.2: std.time wall clock, UTC calendar fields, RFC 3339 and HTTP dates.
+
+import std.testing
+import std.time
+
+fn rfcFails(s: []u8) bool {
+    if time.parseRfc3339(s) |d| {
+        return false
+    } else |e| {
+        return true
+    }
+}
+
+fn httpFails(s: []u8) bool {
+    if time.parseHttp(s) |d| {
+        return false
+    } else |e| {
+        return true
+    }
+}
+
+test "now is a plausible Unix time in milliseconds" {
+    let a = time.now()
+    @expect(a > 1700000000000)
+    time.sleep(5)
+    @expect(time.now() > a)
+}
+
+test "calendar fields" {
+    let epoch = time.fromUnixMs(0)
+    @expectEqual(1970, epoch.year)
+    @expectEqual(1, epoch.month)
+    @expectEqual(1, epoch.day)
+    @expectEqual(4, epoch.weekday)
+
+    let leap = time.fromUnixMs(951782400000)
+    @expectEqual(2000, leap.year)
+    @expectEqual(2, leap.month)
+    @expectEqual(29, leap.day)
+
+    let before = time.fromUnixMs(-1)
+    @expectEqual(1969, before.year)
+    @expectEqual(12, before.month)
+    @expectEqual(31, before.day)
+    @expectEqual(23, before.hour)
+    @expectEqual(59, before.minute)
+    @expectEqual(59, before.second)
+    @expectEqual(999, before.millis)
+
+    let late = time.fromUnixMs(2147483648000)
+    @expectEqual(2038, late.year)
+    @expectEqual(19, late.day)
+    @expectEqual(8, late.second)
+    @expectEqual(2147483648000, late.toUnixMs())
+}
+
+test "RFC 3339 format and parse" {
+    let alloc = testing.allocator()
+    let d = time.fromUnixMs(1760080800123)
+    let s = try d.formatRfc3339(alloc)
+    defer alloc.free(s)
+    @expectEqual("2025-10-10T07:20:00.123Z", s)
+    let back = try time.parseRfc3339(s)
+    @expectEqual(1760080800123, back.toUnixMs())
+    let shifted = try time.parseRfc3339("2026-10-10T12:50:00+05:30")
+    @expectEqual(1791616800000, shifted.toUnixMs())
+    @expect(rfcFails("2026-02-29T00:00:00Z"))
+}
+
+test "HTTP date format and parse" {
+    let alloc = testing.allocator()
+    let d = time.fromUnixMs(1791616800000)
+    let s = try d.formatHttp(alloc)
+    defer alloc.free(s)
+    @expectEqual("Sat, 10 Oct 2026 07:20:00 GMT", s)
+    let back = try time.parseHttp(s)
+    @expectEqual(1791616800000, back.toUnixMs())
+    @expect(httpFails("Fri, 10 Oct 2026 07:20:00 GMT"))
+}
