@@ -1624,6 +1624,7 @@ std.fs.exists(path: []u8) bool              is there a file or directory at path
 std.fs.mtime(path: []u8) ?i64               its modification time in ns since 1970; null if stat fails
 std.fs.readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8   the whole file; free with alloc.free
 std.fs.stat(path: []u8) PathError!Stat                  size, mtime (ns since 1970) and kind; a symlink is not followed
+std.fs.statFollow(path: []u8) PathError!Stat            like stat, but follows symlinks
 std.fs.readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries   the entries, no "." or ".."; unordered; free with deinit
 std.fs.mkdir(path: []u8) PathError!void                  create a directory (the parent must exist)
 std.fs.remove(path: []u8) PathError!void                 delete a file, symlink or empty directory

@@ -132,6 +132,25 @@ pub fn main() !void {
     @println(kindName(dl.kind))
     let dg = try std.fs.stat(at(&mut p, dir, "dangling"))
     @println(kindName(dg.kind))
+
+    // statFollow: the file and directory links lead to a file and a
+    // directory; the dangling one leads nowhere.
+    let fl = try std.fs.statFollow(at(&mut p, dir, "link"))
+    @print(fl.size)
+    @print(" ")
+    @println(kindName(fl.kind))
+    let fd = try std.fs.statFollow(at(&mut p, dir, "dlink"))
+    @println(kindName(fd.kind))
+    let ff = try std.fs.statFollow(at(&mut p, dir, "b.txt"))
+    @println(kindName(ff.kind))
+    if std.fs.statFollow(at(&mut p, dir, "dangling")) |_| {
+        @println("statFollow: found")
+    } else |err| {
+        @println(match err {
+            .NotFound => "statFollow: not found"
+            _ => "statFollow: other error"
+        })
+    }
     if std.fs.stat(at(&mut p, dir, "missing")) |_| {
         @println("stat: found")
     } else |err| {

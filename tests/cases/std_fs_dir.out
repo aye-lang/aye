@@ -13,6 +13,10 @@ dir
 symlink
 symlink
 symlink
+6 file
+dir
+file
+statFollow: not found
 stat: not found
 a.txt file
 b.txt file

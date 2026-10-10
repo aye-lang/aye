@@ -451,14 +451,14 @@ static __attribute__((unused)) int32_t aye_std_fail(void) {
     int e = *aye_rt_errno_loc();
     return e == AYE_ENOTEMPTY ? -39 : -e;
 }
-/* `lstat` of the path into `out`: the size, the modification time in
-   nanoseconds since 1970 and the S_IFMT bits of the mode (the same values
-   on both OSes); 0, or -errno. */
-AYE_RT int32_t aye_std_lstat(uint8_t *path, size_t len, int64_t *out) {
+/* `lstat` of the path (`stat` if `follow`) into `out`: the size, the
+   modification time in nanoseconds since 1970 and the S_IFMT bits of the
+   mode (the same values on both OSes); 0, or -errno. */
+AYE_RT int32_t aye_std_lstat(uint8_t *path, size_t len, bool follow, int64_t *out) {
     char *p = aye_c_path(path, len);
     if (!p) return -12;
     int64_t st[32];
-    int r = aye_rt_lstat(p, st);
+    int r = follow ? aye_rt_stat(p, st) : aye_rt_lstat(p, st);
     int32_t err = r != 0 ? aye_std_fail() : 0;
     aye_rt_free(p);
     if (r != 0) return err;
