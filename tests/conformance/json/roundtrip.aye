@@ -1,0 +1,135 @@
+// O3.1a: std.json writes what it parses. Every valid text is parsed,
+// written, parsed again and compared with `json.equals`; the compact
+// output is printed so the number and string forms are fixed.
+
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.json.Value
+import std.text
+import std.text.Builder
+
+let CASES =
+    \\null
+    \\true
+    \\false
+    \\0
+    \\-0
+    \\-1
+    \\123
+    \\1.5
+    \\-0.5
+    \\1e2
+    \\1E+2
+    \\2.5e-3
+    \\0e0
+    \\0.0
+    \\1e308
+    \\1e-400
+    \\12345678901234567890
+    \\0.1000000000000000055511151231257827021181583404541015625
+    \\""
+    \\"abc"
+    \\"\"\\\/\b\f\n\r\t"
+    \\"\u0041\u00e9\u20AC"
+    \\"\uD83D\uDE00"
+    \\"\u0000\u001f"
+    \\"é€😀"
+    \\[]
+    \\[ ]
+    \\{}
+    \\{ }
+    \\[1,2,3]
+    \\[[],[[]],{}]
+    \\{"a":1,"b":[true,null]}
+    \\{"":0}
+    \\{"a":1,"a":2}
+    \\{"k" : { "n" : [ ] } }
+    \\["\u00e9","\ud834\udd1e"]
+    \\0.1
+    \\0.30000000000000004
+    \\4.35
+    \\123456.789
+    \\9007199254740991
+    \\9007199254740993
+    \\123456789012345678
+    \\1e20
+    \\1e21
+    \\1.5e300
+    \\1.7976931348623157e308
+    \\5e-324
+    \\1e-7
+    \\0.000001
+    \\-1.5e-10
+    \\{"s":"line\nbreak \"q\" \\ \/ \u0001 é","n":[1,2.5,-3],"o":{"t":true,"f":false,"z":null}}
+
+fn show(gpa: *mut General, input: []u8) !void {
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    var out = Builder.init(gpa.allocator())
+    defer out.deinit()
+    try out.append(input)
+    try out.append(" => ")
+    var v = json.parse(&mut arena, input) catch |e| {
+        try out.append(@tagName(e))
+        @println(out.bytes())
+        return
+    }
+    var w = Builder.init(gpa.allocator())
+    defer w.deinit()
+    try json.write(&mut w, &v)
+    try out.append(w.bytes())
+    var again = json.parse(&mut arena, w.bytes()) catch |e| {
+        try out.append(" -> reparse ")
+        try out.append(@tagName(e))
+        @println(out.bytes())
+        return
+    }
+    if !json.equals(&v, &again) {
+        try out.append(" -> DIFFERENT")
+    }
+    // The pretty form must parse to the same tree.
+    var p = Builder.init(gpa.allocator())
+    defer p.deinit()
+    try json.writePretty(&mut p, &v, 0)
+    var third = json.parse(&mut arena, p.bytes()) catch |e| {
+        try out.append(" -> pretty reparse ")
+        try out.append(@tagName(e))
+        @println(out.bytes())
+        return
+    }
+    if !json.equals(&v, &third) {
+        try out.append(" -> PRETTY DIFFERENT")
+    }
+    @println(out.bytes())
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var it = text.split(CASES, "\n")
+    while it.next() |line| {
+        if line.len > 0 {
+            try show(&mut gpa, line)
+        }
+    }
+    // The compact and the pretty form of a fixed document.
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    var doc = try json.parse(&mut arena, "{\"a\":[1,{\"b\":[]},{}],\"c\":\"x\",\"d\":{\"e\":null}}")
+    let compact = try json.stringify(gpa.allocator(), &doc)
+    defer gpa.allocator().free(compact)
+    @println(compact)
+    var b = Builder.init(gpa.allocator())
+    defer b.deinit()
+    try json.writePretty(&mut b, &doc, 0)
+    @println(b.bytes())
+    // Member order and value kinds count for equality.
+    var x = try json.parse(&mut arena, "{\"a\":1,\"b\":2}")
+    var y = try json.parse(&mut arena, "{\"b\":2,\"a\":1}")
+    var z = try json.parse(&mut arena, "[1,\"1\"]")
+    var z2 = try json.parse(&mut arena, "[1,1]")
+    @println(json.equals(&x, &y))
+    @println(json.equals(&z, &z2))
+    @println(json.equals(&x, &x))
+}

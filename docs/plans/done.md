@@ -39,6 +39,8 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O3.1 | 2026-10-10 | `std.json`: RFC 8259 parser into an `Arena` (`Value` enum, accessors `get`/`at`/`as*`/`isNull`, `ParseError` tags, `parseDiag` with a `std.diag` diagnostic, `maxDepth` 512; numbers are `f64`); conformance area `json` 3/3 (33/33 total), golden `tests/tests/std_json.aye` | c967ebe |
 | O3.2 | 2026-10-10 | `std.time`: `now()` (Unix ms), `DateTime` (UTC, weekday 0 = Sunday), `fromUnixMs`/`toUnixMs`, RFC 3339 format/parse (offsets normalized, fractional seconds), IMF-fixdate format/parse; conformance area `time` 5/5 (36/36 total), golden `tests/tests/std_time.aye` | 516b6bd |
 | O3.3 | 2026-10-10 | `std.crypto`: streaming `Sha256`/`Sha1`/`HmacSha256` and one-shot `sha256`/`sha1`/`hmacSha256`, pure Aye, fixed-size array results; conformance area `crypto` 3/3 (FIPS 180-4, RFC 4231; 39/39 total), golden `tests/tests/std_crypto.aye`; 1M "a" in 0.01 s fast | 461f44a |
+| O3.4a | 2026-10-10 | HTTPS for the client decided in `docs/decisions.md`: libcurl in connect-only mode under `@linkOptional("libcurl")` with hand-written externs, O3.4's HTTP/1.1 on top; system TLS and pure-Aye TLS rejected; O3.5 scope written | c104e09 |
+| O3.1a | 2026-10-10 | `std.json` writer: `write`, `writePretty`, `stringify`, `equals`, `writeNumber` (shortest round-trip digits, `JSON.stringify` layout, NaN/inf as null); conformance `json/roundtrip` (40/40 total), 6 more test blocks | 4a4ad33 |
 
 ## Browser lane
 
