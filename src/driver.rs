@@ -199,6 +199,28 @@ impl Target {
         Ok(cmd)
     }
 
+    /// The command that runs the program `exe` built for this target:
+    /// the program itself, or for WASI Node's `node:wasi` with
+    /// `scripts/wasi-run.mjs` (stdio inherited, arguments and environment
+    /// passed, the current directory and /tmp preopened).
+    pub fn run_command(&self, exe: &Path) -> Command {
+        if !self.is_wasm() {
+            return Command::new(exe);
+        }
+        let mut cmd = Command::new("node");
+        // `--single-threaded-gc`: Node 22 segfaults in a GC thread once a
+        // wasm heap passes 32 MiB.
+        cmd.args([
+            "--no-warnings",
+            "--single-threaded-gc",
+            "--input-type=module",
+            "-e",
+            WASI_RUNNER,
+        ])
+        .arg(exe);
+        cmd
+    }
+
     /// Can programs be built for this target here: a native one always
     /// (clang may still lack its sysroot), WASI when the sysroot is there
     /// and clang has the wasm32 backend.
@@ -210,6 +232,17 @@ impl Target {
                 .output()
                 .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32"))
     }
+}
+
+/// The Node script that runs a WASI program (`Target::run_command`).
+const WASI_RUNNER: &str = include_str!("../scripts/wasi-run.mjs");
+
+/// Is `node` there to run wasm programs?
+pub fn node_available() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 /// The root module of a program: its files, and the directory that
@@ -544,11 +577,6 @@ pub fn run_tests(
 ) -> Result<Vec<TestResult>, TestError> {
     let (mut c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
     c.cflags = cflags.to_vec();
-    if c.target.is_wasm() {
-        return Err(TestError::Run(
-            "test needs a wasm runtime (O2.3)".to_string(),
-        ));
-    }
     if let Some(m) = module
         && !tests.iter().any(|t| t.module == m)
     {
@@ -576,7 +604,7 @@ pub fn run_tests(
         if !name.contains(filter) || module.is_some_and(|m| m != test.module) {
             continue;
         }
-        let out = match Command::new(&exe).arg(i.to_string()).output() {
+        let out = match c.target.run_command(&exe).arg(i.to_string()).output() {
             Ok(o) => o,
             Err(e) => {
                 let _ = std::fs::remove_file(&exe);
@@ -750,6 +778,10 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     // none, and `-pthread` breaks its link).
     if !p.target.is_wasm() {
         cmd.arg("-pthread");
+    } else {
+        // wasm-ld's stack is 64 KiB, with no guard: 8 MiB, like a native
+        // main thread's.
+        cmd.arg("-Wl,-z,stack-size=8388608");
     }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
