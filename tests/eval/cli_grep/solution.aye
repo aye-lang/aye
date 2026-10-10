@@ -1,0 +1,41 @@
+import std
+import std.mem.Allocator
+
+fn run(alloc: Allocator) !i32 {
+    let args = try std.os.args(alloc)
+    defer alloc.free(args)
+    if args.len != 2 {
+        std.log.err("usage: grepn <word>")
+        return 2
+    }
+    let word = args[1]
+    var r = std.fs.stdin().reader(alloc)
+    defer r.deinit()
+    var n: usize = 0
+    var found = false
+    while try r.readLine() |line| {
+        n += 1
+        if std.text.indexOf(line, word) |i| {
+            found = true
+            @print(n)
+            @print(":")
+            @println(line)
+        }
+    }
+    if found {
+        return 0
+    }
+    return 1
+}
+
+pub fn main() {
+    var gpa = std.heap.General.init()
+    let status = run(gpa.allocator()) catch |e| {
+        std.log.err("grepn: {}", e)
+        gpa.deinit()
+        std.os.exit(1)
+        return
+    }
+    gpa.deinit()
+    std.os.exit(status)
+}

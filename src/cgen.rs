@@ -50,6 +50,11 @@ extern int aye_rt_memcmp(const void *, const void *, size_t) __asm__(AYE_SYM("me
 extern int aye_rt_open(const char *, int, ...) __asm__(AYE_SYM("open"));
 extern int aye_rt_access(const char *, int) __asm__(AYE_SYM("access"));
 extern int aye_rt_clock_gettime(int, int64_t *) __asm__(AYE_SYM("clock_gettime"));
+#if defined(__APPLE__) && defined(__x86_64__)
+extern int aye_rt_stat(const char *, void *) __asm__(AYE_SYM("stat$INODE64"));
+#else
+extern int aye_rt_stat(const char *, void *) __asm__(AYE_SYM("stat"));
+#endif
 #define AYE_FILE(l) aye_files[(l) >> 20]
 #define AYE_LINE(l) ((l) & 0xfffff)
 
@@ -353,8 +358,9 @@ AYE_RT void aye_log_e(uint16_t e) { aye_rt_dprintf(2, "%s", aye_error_names[e]);
 
 /* Hooks that std calls through `extern fn`: the program's arguments;
    `open` for reading or `create` (write, create, truncate) with a path that
-   is not NUL-terminated (the fd, or -errno); `exists`; and the monotonic
-   clock in nanoseconds. Flag and clock values differ between macOS and
+   is not NUL-terminated (the fd, or -errno); `exists`; `mtime`; and the
+   monotonic clock in nanoseconds. Flag and clock values, and where
+   `struct stat` keeps the modification time, differ between macOS and
    Linux. */
 static int aye_argc;
 static char **aye_argv;
@@ -368,9 +374,11 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #ifdef __APPLE__
 #define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
 #define AYE_CLOCK_MONOTONIC 6
+#define AYE_ST_MTIME 6 /* st_mtimespec, in int64_t: byte 48 */
 #else
 #define AYE_O_CREATE 01101
 #define AYE_CLOCK_MONOTONIC 1
+#define AYE_ST_MTIME 11 /* st_mtim, byte 88 on x86_64 and aarch64 */
 #endif
 static __attribute__((unused)) char *aye_c_path(uint8_t *path, size_t len) {
     char *p = aye_rt_malloc(len + 1);
@@ -395,6 +403,21 @@ AYE_RT bool aye_std_exists(uint8_t *path, size_t len) {
     int r = aye_rt_access(p, 0);
     aye_rt_free(p);
     return r == 0;
+}
+/* std.fs.mtime: the modification time in nanoseconds since 1970, in
+   `*ns`; false if `stat` fails. Gap #50 (no per-OS declarations): the
+   field is `st_mtimespec` on macOS and `st_mtim` on Linux, so Aye code
+   cannot name it. `st` is larger than both OSes' `struct stat` (144
+   bytes). */
+AYE_RT bool aye_std_mtime(uint8_t *path, size_t len, int64_t *ns) {
+    char *p = aye_c_path(path, len);
+    if (!p) return false;
+    int64_t st[32];
+    int r = aye_rt_stat(p, st);
+    aye_rt_free(p);
+    if (r != 0) return false;
+    *ns = st[AYE_ST_MTIME] * 1000000000 + st[AYE_ST_MTIME + 1];
+    return true;
 }
 /* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
    and Aye has no per-OS declarations, so this helper stays. */

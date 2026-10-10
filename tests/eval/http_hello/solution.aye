@@ -1,0 +1,67 @@
+import std
+import std.heap.General
+import std.http
+import std.http.Header
+import std.http.Request
+import std.http.Response
+import std.mem.Allocator
+import std.text.Builder
+
+struct App {
+    unused: u8
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    let hs = alloc.alloc(Header { name: "Content-Type", value: "text/plain" }, 1) catch |e| {
+        res.status = 500
+        return
+    }
+    res.headers = hs
+    var name: []u8 = "world"
+    var path = req.target
+    if std.mem.indexOf(req.target, '?') |q| {
+        path = req.target[..q]
+        let query = req.target[q + 1..]
+        if std.text.startsWith(query, "name=") {
+            name = query[5..]
+        }
+    }
+    if !std.text.eql(path, "/hello") {
+        res.status = 404
+        res.body = "not found\n"
+        return
+    }
+    var b = Builder.init(alloc)
+    b.append("hello, ") catch |e| {
+        res.status = 500
+        return
+    }
+    b.append(name) catch |e| {
+        res.status = 500
+        return
+    }
+    b.append("\n") catch |e| {
+        res.status = 500
+        return
+    }
+    res.body = b.bytes()
+}
+
+fn serve(alloc: Allocator) !void {
+    let args = try std.os.args(alloc)
+    defer alloc.free(args)
+    if args.len != 2 {
+        std.log.err("usage: hello <port>")
+        return
+    }
+    let port = try std.text.parseInt(args[1])
+    var app = App { unused: 0 }
+    var s = try http.listen(App, "127.0.0.1", port as u16, &mut app, handle)
+    try s.run(alloc)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    try serve(gpa.allocator())
+}

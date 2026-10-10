@@ -4,37 +4,20 @@ Cards for the Project section of [`docs/plan.md`](../plan.md): work not
 tied to one lane. Ids use the prefix `X`. Rules and the card template
 are in `docs/plan.md`.
 
-## X1: cloud enablement
+## X1: Linux development
 
-Done when: `cargo test --release` passes on the Claude Code cloud VM
-(Ubuntu 24.04, 4 vCPU) after running the repo's setup script (criterion O1 in
-[`aye.md`](aye.md)).
+Done when (goal set 2026-10-08): on Ubuntu 24.04 (an Apple `container`
+on this Mac, arm64 native; amd64 under Rosetta as the last check),
+`scripts/setup-ubuntu.sh` then `cargo build --release`,
+`target/release/aye check browser`, `cargo test --release` and
+`browser/build.sh` all exit 0, run by `scripts/linux.sh` from any
+worktree (criterion O1 in [`aye.md`](aye.md)). The cloud environment is
+set up by the user elsewhere and is not part of this goal.
 
-#### X1.1: archive.aye builds on Linux
-- lane: project
-- goal: `browser/net/archive.aye` stops using macOS-only struct fields, so `aye check browser` can pass on Linux.
-- serves: criterion O1 (the full suite on Ubuntu 24.04)
-- files: `browser/net/archive.aye`; maybe `std/` or `src/cgen.rs` (see notes)
-- verify: `target/release/aye check browser && cargo test --release --test browser` → exit 0 (macOS must stay green; Linux is checked in X1.2)
-- depends on: –
-- parallel with: all except steps in `browser/net/`
-- where: local (no Linux machine until X1.2)
-- model: opus (design choice: Aye has no compile-time OS switch)
-- time box: 45 min
-- notes: two fields: `entry.d_namlen` (line 114; Linux `dirent` has none, use the NUL in `d_name`) and `info.st_mtimespec` (lines 131-132; Linux: `st_mtim`). `@cimport` drops static inline functions and field macros (`docs/spec.md` §`@cimport`); `browser/ui/socket.aye:48` decides macOS at run time with `uname`, which cannot choose a field name. Candidates: a std-side helper as `src/cgen.rs` does for `aye_std_listen`, or an mtime function in `std.fs` (part of O1.5).
-
-#### X1.2: Ubuntu 24.04 setup script and the first cloud run
-- lane: project
-- goal: a setup script installs everything the full suite needs on a fresh Ubuntu 24.04 VM; the first `cargo test --release` there is recorded.
-- serves: criterion O1
-- files: `scripts/setup-ubuntu.sh` (new); `README.md` "Build and run" gets one line pointing to it
-- verify: `sh scripts/setup-ubuntu.sh > target/setup.log 2>&1; echo $?` → 0, then `cargo test --release > target/test.log 2>&1; echo $?` → the exit code and every failing test are quoted in the report (failures become new X1.x steps, not fixed here)
-- depends on: X1.1 merged and pushed to origin; cloud enabled by the user
-- parallel with: all
-- where: cloud (the step is the cloud setup)
-- model: sonnet
-- time box: 45 min
-- notes: packages the tree needs: clang, lld, libclang-dev (`@cimport`), pkg-config, libcurl4-openssl-dev, libfreetype-dev, libsdl2-dev, fonts-dejavu-core (`browser/font/freetype.aye:170`), python3, Node 22 (apt's nodejs is older), Go and apache2-utils (`ab`) for O1.7. Rust from rustup.
+Done 2026-10-08 (X1.1–X1.7, `done.md`): the check above holds on
+main b2c723d for arm64 and amd64. Linux load-timing flakes go to the
+browser backlog (P7). Keep it green: a step that touches the C prelude,
+`@cimport` or platform calls runs `scripts/linux.sh` before merging.
 
 ## X2: rename Ore → Aye
 
