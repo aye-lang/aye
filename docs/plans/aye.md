@@ -147,7 +147,6 @@ brackets.
 - O1.5b `std.fs.readDir`: `stat` fallback for `DT_UNKNOWN` entries; a follow-links `stat` beside the `lstat` one if a caller needs it (O1.5 report). Verify: `cargo test --release --test golden`.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O1.13a the spec core is ~1.2 KB under the 40000-byte cap (`aye_spec_core_is_small`); when it fills up, move §12 (1.9 KB) out of the core or shorten §7.
-- O1.12a E0006 hint follow-ups: goldens for `or` and for `a and b` outside `if` (other E0006 sites in `src/parser.rs` may skip `Parser::unexpected`); the `not` hint fires on any syntax error after an identifier named `not`, guard it (O1.12 report).
 - O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
