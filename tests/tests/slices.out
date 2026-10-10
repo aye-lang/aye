@@ -1,5 +1,5 @@
-test "alloc and free a slice" ... ok
-test "a slice that is never freed" ... FAILED
+test "alloc and free a slice" ... ok (N ms)
+test "a slice that is never freed" ... FAILED (N ms)
     tests/tests/slices.aye:15:24: leak: 16 bytes allocated here were never freed
 
-1 passed; 1 failed
+1 passed; 1 failed; 1 modules; N ms

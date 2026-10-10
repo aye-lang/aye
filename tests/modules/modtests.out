@@ -1,6 +1,6 @@
-test "root" ... ok
-test "html: basic" ... ok
-test "html: private helper and a sibling module" ... ok
-test "dom: basic" ... ok
+test "root" ... ok (N ms)
+test "html: basic" ... ok (N ms)
+test "html: private helper and a sibling module" ... ok (N ms)
+test "dom: basic" ... ok (N ms)
 
-4 passed; 0 failed
+4 passed; 0 failed; 3 modules; N ms

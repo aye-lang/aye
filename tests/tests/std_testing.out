@@ -1,7 +1,7 @@
-test "list" ... ok
-test "map and builder" ... ok
-test "same allocator as @testAllocator" ... ok
-test "a list that is not freed leaks" ... FAILED
+test "list" ... ok (N ms)
+test "map and builder" ... ok (N ms)
+test "same allocator as @testAllocator" ... ok (N ms)
+test "a list that is not freed leaks" ... FAILED (N ms)
     std/list/list.aye:102:39: leak: 8 bytes allocated here were never freed
 
-3 passed; 1 failed
+3 passed; 1 failed; 1 modules; N ms

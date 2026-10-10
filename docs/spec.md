@@ -63,7 +63,7 @@ aye build <path> [-o out] [--mode m]                  build an executable (defau
     [--target t]                                      (build, run, test, emit-c, check) t: aarch64-macos x86_64-macos aarch64-linux x86_64-linux wasm32-wasip1 wasm32-freestanding; unknown E0117, std module the target lacks E0118; wasm32-wasip1 programs run under Node's `node:wasi`; wasm32-freestanding has no libc and no `main` is needed: `pub extern fn` is exported to JS, `main` is exported as `aye_main`, output and abort are the imports `env.aye_write(fd, ptr, len)` and `env.aye_abort()`
 aye check <path> [--json]                             report all compile errors; no C, no clang
 aye fix <path>                                        apply the fix-its of `aye check` in place, repeat (at most 10 rounds)
-aye test <path> [--filter text] [--json] [--mode m]   run the root module's `test` blocks, each in its own process
+aye test <path> [--filter text] [--json] [--mode m]   run the `test` blocks of the root module (a directory: every module under it), each in its own process
 aye emit-c <path> [--mode m]                          print the generated C
 aye fmt [--check] <path>                              format in place (a directory: every .aye file under it); --check lists files that would change, exit 1
 aye doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
@@ -1455,9 +1455,11 @@ test "allocations are checked" {
   `aye test dir` runs each test of every module of the program in its own
   process (a module's test shows as `test "html: name"`); `--module html`
   runs only the tests of module `html`. Give the program's directory, not
-  the module's: imports start there. `aye build`/`aye run` leave tests
-  out. A root module with tests needs no `main` for `aye check` and `aye
-  test`.
+  the module's: imports start there. Every directory under `dir` with
+  `.aye` files is also a root, so a module that nothing imports is tested
+  too, once (shown as `test "sub.mod: name"`, the path from `dir`). `aye
+  build`/`aye run` leave tests out. A root module with tests needs no
+  `main` for `aye check` and `aye test`.
 - A ```` ```aye ```` block in a `///` doc comment (outside std) is a test
   too, for `aye test` only: its lines are the body of a test of that file,
   named `doc: square (line 4)` after the declaration below the comment and
@@ -1470,11 +1472,13 @@ test "allocations are checked" {
   leak-checked `Allocator`, usable only in a test block. A leak, panic,
   failed assertion or returned error fails the test.
 
-Output: `test "name" ... ok` or `... FAILED` followed by the test's indented
-stdout and stderr, then `N passed; M failed`. `--filter text` runs tests
+Output: `test "name" ... ok (12 ms)` or `... FAILED (12 ms)`, the wall time
+of the test's process, followed by the test's indented stdout and stderr,
+then `N passed; M failed; K modules; T ms` (K modules ran a test; T is the
+whole run, compiling included). `--filter text` runs tests
 whose name contains `text`. `--json` prints one line:
 `{"file":F,"diagnostics":[...],"tests":[{"name":N,"status":"pass"|"fail",
-"failures":[...],"stdout":S,"stderr":S}],"passed":P,"failed":Q}`, where a
+"ms":T,"failures":[...],"stdout":S,"stderr":S}],"passed":P,"failed":Q}`, where a
 failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 `{"kind":"error","error":"Name","trace":[{"line":L,"col":C}]}` or
 `{"kind":"crash","message":M}`.
