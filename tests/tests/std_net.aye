@@ -1,0 +1,36 @@
+// O3.8: std.net: a loopback round trip on a port the system picks, and an
+// unknown host (a name under the reserved .invalid TLD, so no network is
+// needed).
+
+import std.net
+import std.net.ConnectError
+import std.testing
+import std.text
+
+test "listen on port 0, connect, write, read back, close" {
+    let l = try net.listen("127.0.0.1", 0)
+    defer l.close()
+    @expect(l.port() != 0)
+    let c = try net.connect("127.0.0.1", l.port())
+    let s = try l.accept()
+    try c.write("ping")
+    var buf = @zeroed([16]u8)
+    let n = try s.readTimeout(buf[..], 5000)
+    @expectEqual(4, n)
+    @expect(text.eql("ping", buf[0..n]))
+    try s.write("pong!")
+    let m = try c.readTimeout(buf[..], 5000)
+    @expect(text.eql("pong!", buf[0..m]))
+    c.close()
+    @expectEqual(0, try s.read(buf[..]))
+    s.close()
+}
+
+test "an unknown host" {
+    let c = net.connect("nonexistent.invalid", 80) catch |e| {
+        @expect(e == ConnectError.UnknownHost)
+        return
+    }
+    c.close()
+    @expect(false)
+}

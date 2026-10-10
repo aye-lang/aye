@@ -1,0 +1,46 @@
+import std.heap.General
+import std.mem.Allocator
+import std.path
+
+fn norm(alloc: Allocator, p: []u8) !void {
+    let n = try path.normalize(alloc, p)
+    defer alloc.free(n)
+    @print("[")
+    @print(p)
+    @print("] -> [")
+    @print(n)
+    @println("]")
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    try norm(alloc, "a/./b")
+    try norm(alloc, "./a")
+    try norm(alloc, "a//b///c")
+    try norm(alloc, "/a/./b/.")
+    try norm(alloc, "//a")
+    try norm(alloc, "a/b/")
+    try norm(alloc, "a/b//")
+    try norm(alloc, "/")
+    try norm(alloc, "///")
+    try norm(alloc, "a/b/../c")
+    try norm(alloc, "a/b/..")
+    try norm(alloc, "a/b/../..")
+    try norm(alloc, "a/../..")
+    try norm(alloc, "/a/b/../../c")
+    try norm(alloc, "/a/../b/../c/")
+    try norm(alloc, "/..")
+    try norm(alloc, "/../a")
+    try norm(alloc, "/a/../..")
+    try norm(alloc, "..")
+    try norm(alloc, "../a/../..")
+    try norm(alloc, "a/../../b")
+    try norm(alloc, "")
+    try norm(alloc, ".")
+    try norm(alloc, "./")
+    try norm(alloc, "...")
+    try norm(alloc, "a/..b/.c")
+    try norm(alloc, ".a/b./..")
+}

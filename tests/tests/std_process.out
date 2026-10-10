@@ -1,0 +1,5 @@
+test "spawn /bin/echo, wait, status" ... ok
+test "a non-zero exit status is not success" ... ok
+test "kill a sleeping child, then wait gives the signal" ... ok
+
+3 passed; 0 failed

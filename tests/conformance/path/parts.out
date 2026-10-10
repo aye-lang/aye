@@ -1,0 +1,20 @@
+join [a] [b] -> [a/b]
+join [a/] [b] -> [a/b]
+join [a] [/b] -> [a/b]
+join [a//] [//b] -> [a/b]
+join [/] [b] -> [/b]
+join [] [b] -> [b]
+join [a] [] -> [a]
+join [a/b] [../c] -> [a/b/../c]
+a/b/c.txt dir=a/b base=c.txt ext=.txt
+/a/b dir=/a base=b ext=
+/a dir=/ base=a ext=
+/ dir=/ base= ext=
+a dir=. base=a ext=
+a/b/ dir=a base=b ext=
+a//b dir=a base=b ext=
+a/b.tar.gz dir=a base=b.tar.gz ext=.gz
+a/.bashrc dir=a base=.bashrc ext=
+a/b. dir=a base=b. ext=.
+a/.. dir=a base=.. ext=
+.. dir=. base=.. ext=
