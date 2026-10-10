@@ -39,7 +39,9 @@
 //!   stderr and exit with status 1.
 //! - `tests/tests/X.aye`: `aye test X.aye` (debug mode) must print exactly
 //!   `X.out`, and `aye test --json X.aye` exactly `X.json` if it exists. The
-//!   exit status must be 0 when no test failed, and 1 otherwise.
+//!   exit status must be 0 when no test failed, and 1 otherwise. Wall times
+//!   (`(12 ms)`, `"ms":12`) are replaced by `N` before the comparison, here
+//!   and for `aye test` in the other cases.
 //! - `tests/fix/X.aye`: `aye fix X.aye` on a copy must leave exactly
 //!   `X.fixed` and print exactly `X.out`. If `X.stderr` exists, errors
 //!   remain: stderr must equal it and the exit status must be 1; otherwise
@@ -410,6 +412,33 @@ fn error_case(path: &Path) -> Result<(), String> {
     }
 }
 
+/// `aye test` prints wall times: `(12 ms)` after a test, `; 34 ms` after the
+/// summary, `"ms":12` in JSON. Every such number becomes `N`.
+fn scrub_ms(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(|c: char| c.is_ascii_digit()) {
+        let (head, tail) = rest.split_at(i);
+        let n = tail
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(tail.len());
+        let (digits, after) = tail.split_at(n);
+        out.push_str(head);
+        if head.ends_with("\"ms\":")
+            || after == " ms"
+            || after.starts_with(" ms)")
+            || after.starts_with(" ms\n")
+        {
+            out.push('N');
+        } else {
+            out.push_str(digits);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `aye test` on a file of `tests/tests`, run from the crate root so that
 /// positions in the output start with `tests/tests/`.
 fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
@@ -427,7 +456,7 @@ fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
         ));
     }
     Ok((
-        String::from_utf8_lossy(&out.stdout).into_owned(),
+        scrub_ms(&String::from_utf8_lossy(&out.stdout)),
         out.status.code(),
     ))
 }
@@ -440,7 +469,7 @@ fn test_case(path: &Path) -> Result<(), String> {
 fn test_case_for(path: &Path, extra: &[&str]) -> Result<(), String> {
     let rel = format!("tests/tests/{}", name(path));
     let expected = read(&path.with_extension("out")).ok_or("missing .out file")?;
-    let status = if expected.ends_with("; 0 failed\n") {
+    let status = if expected.contains("; 0 failed; ") {
         0
     } else {
         1
@@ -593,6 +622,11 @@ fn module_case(path: &Path) -> Result<(), String> {
     let args = with("args").unwrap_or_else(|| format!("run {x}"));
     let args: Vec<&str> = args.split_whitespace().collect();
     let (out, err, code) = aye_stdin(dir, &args, &with("stdin").unwrap_or_default())?;
+    let out = if args[0] == "test" {
+        scrub_ms(&out)
+    } else {
+        out
+    };
     let want_out = with("out").ok_or("missing .out file")?;
     let want_err = with("stderr").unwrap_or_default();
     let want_code: i32 = with("status").map_or(0, |s| s.trim().parse().unwrap());
@@ -623,6 +657,7 @@ fn example1() -> Result<(), String> {
     }
     let want = read(&root.join("app.test.out")).ok_or("missing app.test.out")?;
     let (out, err, code) = aye(&root, &["test", "app"])?;
+    let out = scrub_ms(&out);
     if out != want || !err.is_empty() || code != Some(0) {
         return Err(format!(
             "`aye test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"
@@ -635,8 +670,8 @@ fn example1() -> Result<(), String> {
 fn cli_test_filter() -> Result<(), String> {
     let f = "tests/tests/outcomes.aye";
     let want = format!(
-        "test \"expect fails\" ... FAILED\n    before\n    {f}:28:5: assertion failed: condition is false\n\
-         test \"expectEqual fails\" ... FAILED\n    {f}:33:5: assertion failed: expected 4, found 5\n\n0 passed; 2 failed\n"
+        "test \"expect fails\" ... FAILED (N ms)\n    before\n    {f}:28:5: assertion failed: condition is false\n\
+         test \"expectEqual fails\" ... FAILED (N ms)\n    {f}:33:5: assertion failed: expected 4, found 5\n\n0 passed; 2 failed; 1 modules; N ms\n"
     );
     let (got, code) = aye_test(&[f, "--filter", "expect"])?;
     if got != want || code != Some(1) {
@@ -645,7 +680,7 @@ fn cli_test_filter() -> Result<(), String> {
         ));
     }
     let (got, code) = aye_test(&[f, "--filter", "no such test"])?;
-    if got != "\n0 passed; 0 failed\n" || code != Some(0) {
+    if got != "\n0 passed; 0 failed; 0 modules; N ms\n" || code != Some(0) {
         return Err(format!(
             "`aye test --filter` with no match: {code:?}\n{got}"
         ));
@@ -660,7 +695,7 @@ fn cli_test_module() -> Result<(), String> {
     let runs: &[(&[&str], &str, &str, i32)] = &[
         (
             &["test", "modtests", "--module", "dom"],
-            "test \"dom: basic\" ... ok\n\n1 passed; 0 failed\n",
+            "test \"dom: basic\" ... ok (N ms)\n\n1 passed; 0 failed; 1 modules; N ms\n",
             "",
             0,
         ),
@@ -680,6 +715,7 @@ fn cli_test_module() -> Result<(), String> {
     ];
     for (args, want_out, want_err, want_code) in runs {
         let (out, err, code) = aye(&dir, args)?;
+        let out = scrub_ms(&out);
         if out != *want_out || err != *want_err || code != Some(*want_code) {
             return Err(format!(
                 "`aye {}`: {code:?}\n--- stdout\n{out}--- stderr\n{err}",

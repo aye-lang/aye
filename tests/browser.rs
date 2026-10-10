@@ -292,35 +292,26 @@ fn layout_system_font() {
 
 #[test]
 fn aye_unit_tests() {
-    for module in [
-        "browser",
-        "browser/url",
-        "browser/dom",
-        "browser/encoding",
-        "browser/font",
-        "browser/image",
-    ] {
-        let out = aye().arg("test").arg(module).output().unwrap();
-        let stdout = text(&out.stdout);
-        assert!(
-            out.status.success() && stdout.contains(" passed; 0 failed"),
-            "`aye test {module}` failed:\n{stdout}{}",
-            text(&out.stderr)
-        );
-    }
-    // Modules that import other browser modules, tested from the root.
-    for module in ["svg", "js"] {
-        let out = aye()
-            .args(["test", "browser", "--module", module])
-            .output()
-            .unwrap();
-        let stdout = text(&out.stdout);
-        assert!(
-            out.status.success() && stdout.contains(" passed; 0 failed"),
-            "`aye test browser --module {module}` failed:\n{stdout}{}",
-            text(&out.stderr)
-        );
-    }
+    // The tests of every module under `browser` (15 modules have tests:
+    // the root and 14 submodules), in one run.
+    let out = aye().args(["test", "browser"]).output().unwrap();
+    let stdout = text(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains(" passed; 0 failed"),
+        "`aye test browser` failed:\n{stdout}{}",
+        text(&out.stderr)
+    );
+    let summary = stdout
+        .lines()
+        .rev()
+        .find(|l| l.contains(" passed; "))
+        .unwrap();
+    let modules: usize = summary
+        .split("; ")
+        .find_map(|p| p.strip_suffix(" modules"))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no module count in `{summary}`"));
+    assert!(modules >= 15, "only {modules} modules ran tests: {summary}");
 }
 
 /// `anyknown args...` must exit with `status` and print exactly `stdout`

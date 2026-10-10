@@ -1,19 +1,19 @@
-test "passes" ... ok
-test "expect fails" ... FAILED
+test "passes" ... ok (N ms)
+test "expect fails" ... FAILED (N ms)
     before
     tests/tests/outcomes.aye:28:5: assertion failed: condition is false
-test "expectEqual fails" ... FAILED
+test "expectEqual fails" ... FAILED (N ms)
     tests/tests/outcomes.aye:33:5: assertion failed: expected 4, found 5
-test "strings differ" ... FAILED
+test "strings differ" ... FAILED (N ms)
     tests/tests/outcomes.aye:37:5: assertion failed: expected "abc", found "abd"
-test "panics" ... FAILED
+test "panics" ... FAILED (N ms)
     tests/tests/outcomes.aye:42:7: panic: integer overflow
-test "returns an error" ... FAILED
+test "returns an error" ... FAILED (N ms)
     error: Empty
     error return trace:
     tests/tests/outcomes.aye:9:9
     tests/tests/outcomes.aye:46:13
-test "double free" ... FAILED
+test "double free" ... FAILED (N ms)
     tests/tests/outcomes.aye:54:11: panic: double free of memory allocated at tests/tests/outcomes.aye:52:23 and already freed at tests/tests/outcomes.aye:53:11
 
-1 passed; 6 failed
+1 passed; 6 failed; 1 modules; N ms

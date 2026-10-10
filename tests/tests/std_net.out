@@ -1,4 +1,4 @@
-test "listen on port 0, connect, write, read back, close" ... ok
-test "an unknown host" ... ok
+test "listen on port 0, connect, write, read back, close" ... ok (N ms)
+test "an unknown host" ... ok (N ms)
 
-2 passed; 0 failed
+2 passed; 0 failed; 1 modules; N ms

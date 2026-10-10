@@ -3,9 +3,11 @@
 use crate::diag::{Diag, Error, Fix, Span, json_str, offset};
 use crate::module::{self, SourceFile};
 use crate::{ast, cgen, oir, sema};
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -509,11 +511,12 @@ fn file_names(files: &[SourceFile]) -> Vec<String> {
 }
 
 /// Like `compile_root`, for a test executable: its argument is the index
-/// of the test to run. Also returns the tests and the file names.
+/// of the test to run. Also returns the tests, the file names and the
+/// directories of the program's modules (std's aside).
 pub fn compile_tests_to_c(
     root: Root,
     mode: Mode,
-) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>), Vec<Diag>> {
+) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>, Vec<PathBuf>), Vec<Diag>> {
     let target = root.target;
     let checked = front_end(
         Root {
@@ -526,6 +529,17 @@ pub fn compile_tests_to_c(
     let links = linked(&typed, target);
     let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for f in checked.files.iter().filter(|f| !f.std) {
+        let dir = Path::new(&f.name)
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let dir = std::fs::canonicalize(dir).unwrap_or(dir.to_path_buf());
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
     let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
     Ok((
         CProgram {
@@ -536,6 +550,7 @@ pub fn compile_tests_to_c(
         },
         typed.tests,
         files,
+        dirs,
     ))
 }
 
@@ -547,6 +562,17 @@ pub struct TestResult {
     pub stderr: String,
     /// Why the test failed, read from its stderr.
     pub failures: Vec<Failure>,
+    /// The wall time of the test's process.
+    pub ms: u64,
+}
+
+/// What `aye test` ran.
+pub struct TestRun {
+    pub results: Vec<TestResult>,
+    /// How many modules had a test that ran.
+    pub modules: usize,
+    /// The wall time of the whole run, compiling included.
+    pub ms: u64,
 }
 
 pub enum Failure {
@@ -572,77 +598,165 @@ pub enum TestError {
     Run(String),
 }
 
+/// The directories under `dir` (`dir` first) that have `.aye` files: the
+/// roots of `aye test DIR`. Directories whose name starts with `.` are left
+/// out.
+fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    if entries
+        .iter()
+        .any(|f| f.is_file() && f.extension().is_some_and(|e| e == "aye"))
+    {
+        out.push(dir.to_path_buf());
+    }
+    for d in entries.iter().filter(|d| {
+        d.is_dir()
+            && !d
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+    }) {
+        module_roots(d, out)?;
+    }
+    Ok(())
+}
+
 /// `aye test`: compile the tests of every module of the program (std's
 /// aside) and run each one in its own process, so that a panic ends only
-/// that test. Only tests whose shown name (`name`, `module: name`)
-/// contains `filter` run, and with `module`, only those of that module.
-/// `cflags` are more flags for clang.
+/// that test. `path` is a file, or a directory: then every directory under
+/// it with `.aye` files is a root, and a module that several roots reach is
+/// tested once. Only tests whose shown name (`name`, `module: name`, the
+/// module relative to `path`) contains `filter` run, and with `module`,
+/// only those of that module. `cflags` are more flags for clang.
 pub fn run_tests(
-    root: Root,
+    path: &str,
+    target: &'static Target,
     mode: Mode,
     filter: &str,
     module: Option<&str>,
     cflags: &[String],
-) -> Result<Vec<TestResult>, TestError> {
-    let (mut c, tests, files) = compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
-    c.cflags = cflags.to_vec();
-    if let Some(m) = module
-        && !tests.iter().any(|t| t.module == m)
-    {
-        let mut with: Vec<String> = Vec::new();
-        for t in tests.iter().filter(|t| !t.module.is_empty()) {
-            let shown = format!("`{}`", t.module);
-            if !with.contains(&shown) {
-                with.push(shown);
+) -> Result<TestRun, TestError> {
+    let start = Instant::now();
+    let top = Path::new(path);
+    let mut roots = Vec::new();
+    if top.is_dir() {
+        module_roots(top, &mut roots).map_err(TestError::Run)?;
+        if roots.is_empty() {
+            return Err(TestError::Run(format!("{path} has no .aye files")));
+        }
+    } else {
+        roots.push(top.to_path_buf());
+    }
+    let exe = std::env::temp_dir().join(format!("aye-test-{}", std::process::id()));
+    let mut reached: HashSet<PathBuf> = HashSet::new();
+    let mut with_tests: Vec<String> = Vec::new();
+    let mut ran: HashSet<String> = HashSet::new();
+    let mut results = Vec::new();
+    for dir in roots {
+        let canon = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+        if top.is_dir() && reached.contains(&canon) {
+            continue;
+        }
+        let mut root = Root::load(&dir.to_string_lossy()).map_err(TestError::Run)?;
+        root.target = target;
+        let base = root.base.clone();
+        let (mut c, tests, files, dirs) =
+            compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
+        c.cflags = cflags.to_vec();
+        let prefix: Vec<String> = base
+            .strip_prefix(top)
+            .map(|p| {
+                p.components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut todo = Vec::new();
+        for (i, mut test) in tests.into_iter().enumerate() {
+            let at =
+                std::fs::canonicalize(base.join(test.module.replace('.', "/"))).unwrap_or_default();
+            if reached.contains(&at) {
+                continue;
+            }
+            test.module = prefix
+                .iter()
+                .map(String::as_str)
+                .chain(Some(test.module.as_str()).filter(|m| !m.is_empty()))
+                .collect::<Vec<_>>()
+                .join(".");
+            if !test.module.is_empty() && !with_tests.contains(&test.module) {
+                with_tests.push(test.module.clone());
+            }
+            let name = test.shown();
+            if name.contains(filter) && module.is_none_or(|m| m == test.module) {
+                todo.push((i, name, test.module));
             }
         }
-        let list = if with.is_empty() {
+        reached.extend(dirs);
+        if todo.is_empty() {
+            continue;
+        }
+        cc(&c, &exe, mode).map_err(TestError::Run)?;
+        for (i, name, module) in todo {
+            let began = Instant::now();
+            let out = match c.target.run_command(&exe).arg(i.to_string()).output() {
+                Ok(o) => o,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&exe);
+                    return Err(TestError::Run(format!("cannot run {}: {e}", exe.display())));
+                }
+            };
+            let ms = began.elapsed().as_millis() as u64;
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            let passed = out.status.success();
+            let mut failures = parse_failures(&files, &stderr);
+            if !passed && failures.is_empty() {
+                use std::os::unix::process::ExitStatusExt;
+                failures.push(Failure::Crash(
+                    match (out.status.code(), out.status.signal()) {
+                        (Some(c), _) => format!("exit status {c}"),
+                        (_, s) => format!("terminated by signal {}", s.unwrap_or(0)),
+                    },
+                ));
+            }
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            ran.insert(module);
+            results.push(TestResult {
+                name,
+                passed,
+                stdout,
+                stderr,
+                failures,
+                ms,
+            });
+        }
+        let _ = std::fs::remove_file(&exe);
+    }
+    if let Some(m) = module
+        && results.is_empty()
+        && !with_tests.iter().any(|t| t == m)
+    {
+        let list = if with_tests.is_empty() {
             "none".to_string()
         } else {
-            with.join(", ")
+            with_tests
+                .iter()
+                .map(|t| format!("`{t}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         return Err(TestError::Run(format!(
             "no tests in module `{m}` (modules with tests: {list})"
         )));
     }
-    let exe = std::env::temp_dir().join(format!("aye-test-{}", std::process::id()));
-    cc(&c, &exe, mode).map_err(TestError::Run)?;
-    let mut results = Vec::new();
-    for (i, test) in tests.into_iter().enumerate() {
-        let name = test.shown();
-        if !name.contains(filter) || module.is_some_and(|m| m != test.module) {
-            continue;
-        }
-        let out = match c.target.run_command(&exe).arg(i.to_string()).output() {
-            Ok(o) => o,
-            Err(e) => {
-                let _ = std::fs::remove_file(&exe);
-                return Err(TestError::Run(format!("cannot run {}: {e}", exe.display())));
-            }
-        };
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        let passed = out.status.success();
-        let mut failures = parse_failures(&files, &stderr);
-        if !passed && failures.is_empty() {
-            use std::os::unix::process::ExitStatusExt;
-            failures.push(Failure::Crash(
-                match (out.status.code(), out.status.signal()) {
-                    (Some(c), _) => format!("exit status {c}"),
-                    (_, s) => format!("terminated by signal {}", s.unwrap_or(0)),
-                },
-            ));
-        }
-        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-        results.push(TestResult {
-            name,
-            passed,
-            stdout,
-            stderr,
-            failures,
-        });
-    }
-    let _ = std::fs::remove_file(&exe);
-    Ok(results)
+    Ok(TestRun {
+        results,
+        modules: ran.len(),
+        ms: start.elapsed().as_millis() as u64,
+    })
 }
 
 /// The failures that a test process reported on stderr: lines
@@ -735,9 +849,10 @@ impl TestResult {
             })
             .collect();
         format!(
-            r#"{{"name":{},"status":"{}","failures":[{}],"stdout":{},"stderr":{}}}"#,
+            r#"{{"name":{},"status":"{}","ms":{},"failures":[{}],"stdout":{},"stderr":{}}}"#,
             json_str(&self.name),
             if self.passed { "pass" } else { "fail" },
+            self.ms,
             failures.join(","),
             json_str(&self.stdout),
             json_str(&self.stderr)

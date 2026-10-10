@@ -1,23 +1,23 @@
-test "join puts one slash at the seam" ... ok
-test "join skips an empty part" ... ok
-test "dirname" ... ok
-test "dirname with trailing and doubled slashes" ... ok
-test "dirname of . and .. is by the last slash" ... ok
-test "basename" ... ok
-test "basename with trailing and doubled slashes" ... ok
-test "basename of . and .." ... ok
-test "extension" ... ok
-test "extension of dot files, . and .." ... ok
-test "normalize drops . and doubled slashes" ... ok
-test "normalize drops a trailing slash, except for the root" ... ok
-test "normalize resolves .." ... ok
-test "normalize at the root and at the start of a relative path" ... ok
-test "normalize of nothing is ." ... ok
-test "normalize keeps names that only look like . and .." ... ok
-test "isUnder: a path inside the root" ... ok
-test "isUnder: a path that climbs out of the root" ... ok
-test "isUnder: a longer name is not inside" ... ok
-test "isUnder: an absolute and a relative path do not mix" ... ok
-test "join, normalize and isUnder free what they allocate" ... ok
+test "join puts one slash at the seam" ... ok (N ms)
+test "join skips an empty part" ... ok (N ms)
+test "dirname" ... ok (N ms)
+test "dirname with trailing and doubled slashes" ... ok (N ms)
+test "dirname of . and .. is by the last slash" ... ok (N ms)
+test "basename" ... ok (N ms)
+test "basename with trailing and doubled slashes" ... ok (N ms)
+test "basename of . and .." ... ok (N ms)
+test "extension" ... ok (N ms)
+test "extension of dot files, . and .." ... ok (N ms)
+test "normalize drops . and doubled slashes" ... ok (N ms)
+test "normalize drops a trailing slash, except for the root" ... ok (N ms)
+test "normalize resolves .." ... ok (N ms)
+test "normalize at the root and at the start of a relative path" ... ok (N ms)
+test "normalize of nothing is ." ... ok (N ms)
+test "normalize keeps names that only look like . and .." ... ok (N ms)
+test "isUnder: a path inside the root" ... ok (N ms)
+test "isUnder: a path that climbs out of the root" ... ok (N ms)
+test "isUnder: a longer name is not inside" ... ok (N ms)
+test "isUnder: an absolute and a relative path do not mix" ... ok (N ms)
+test "join, normalize and isUnder free what they allocate" ... ok (N ms)
 
-21 passed; 0 failed
+21 passed; 0 failed; 1 modules; N ms

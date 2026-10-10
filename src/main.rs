@@ -212,6 +212,9 @@ fn main() -> ExitCode {
         }
         None => driver::host_target(),
     };
+    if args.cmd == "test" {
+        return test(&args, target);
+    }
     let mut root = match Root::load(&args.file) {
         Ok(r) => r,
         Err(e) => {
@@ -244,9 +247,6 @@ fn main() -> ExitCode {
     }
     if args.cmd == "fix" {
         return fix(&args.file);
-    }
-    if args.cmd == "test" {
-        return test(&args, root);
     }
     let mut c = match driver::compile_root(root, args.mode) {
         Ok(c) => c,
@@ -602,9 +602,10 @@ fn fix(path: &str) -> ExitCode {
 /// `aye test`: one line per test, and for a failed test its output (stdout,
 /// then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
-fn test(args: &Args, root: Root) -> ExitCode {
-    let results = match driver::run_tests(
-        root,
+fn test(args: &Args, target: &'static driver::Target) -> ExitCode {
+    let run = match driver::run_tests(
+        &args.file,
+        target,
         args.mode,
         &args.filter,
         args.module.as_deref(),
@@ -631,6 +632,7 @@ fn test(args: &Args, root: Root) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let results = &run.results;
     let failed = results.iter().filter(|r| !r.passed).count();
     let passed = results.len() - failed;
     if args.json {
@@ -641,11 +643,12 @@ fn test(args: &Args, root: Root) -> ExitCode {
             tests.join(",")
         );
     } else {
-        for r in &results {
+        for r in results {
             println!(
-                "test \"{}\" ... {}",
+                "test \"{}\" ... {} ({} ms)",
                 r.name,
-                if r.passed { "ok" } else { "FAILED" }
+                if r.passed { "ok" } else { "FAILED" },
+                r.ms
             );
             if !r.passed {
                 for l in r.stdout.lines().chain(r.stderr.lines()) {
@@ -653,7 +656,10 @@ fn test(args: &Args, root: Root) -> ExitCode {
                 }
             }
         }
-        println!("\n{passed} passed; {failed} failed");
+        println!(
+            "\n{passed} passed; {failed} failed; {} modules; {} ms",
+            run.modules, run.ms
+        );
     }
     if failed == 0 {
         ExitCode::SUCCESS

@@ -1,0 +1,13 @@
+// `aye test treetests` runs the tests of every module under the directory:
+// the root, `util` (which the root imports) and `lonely` (which nothing
+// imports). `util` is a root of its own too, and is tested once.
+
+import util
+
+pub fn main() {
+    @println(util.twice(21))
+}
+
+test "root" {
+    @expectEqual(42, util.twice(21))
+}
