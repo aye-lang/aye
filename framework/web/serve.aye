@@ -1,0 +1,133 @@
+// web.run: serves a route table over std.http. The allocator std.http gives
+// a handler is an arena freed once the response is written; the request,
+// the response and the page live in it.
+
+import std.fs
+import std.fs.WriteError
+import std.http
+import std.mem.AllocError
+import std.mem.Allocator
+import std.net.ListenError
+import std.os
+import std.text
+import std.text.Builder
+
+/// Why `run` gave up: it could not listen, write or allocate.
+pub error ServeError = ListenError || WriteError || AllocError
+
+/// What every connection thread reads: the route table.
+struct App {
+    routes: []Route
+}
+
+/// The port after `--port` in the program's arguments, or `fallback`.
+pub fn portArg(alloc: Allocator, fallback: u16) u16 {
+    let args = os.args(alloc) catch |e| {
+        return fallback
+    }
+    var i: usize = 1
+    while i + 1 < args.len {
+        if text.eql(args[i], "--port") {
+            let n = text.parseInt(args[i + 1]) catch |e| {
+                return fallback
+            }
+            if n >= 0 && n <= 65535 {
+                return n as u16
+            }
+            return fallback
+        }
+        i += 1
+    }
+    return fallback
+}
+
+/// Listens on 127.0.0.1:`port` (0 picks a free port), prints `listening on
+/// 127.0.0.1:<port>`, and serves `routes` until the process ends. A path
+/// that no route has gets 404.
+pub fn run(alloc: Allocator, port: u16, routes: []Route) ServeError!void {
+    var app = App { routes: routes }
+    var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
+    var line = Builder.init(alloc)
+    defer line.deinit()
+    try line.append("listening on 127.0.0.1:")
+    try line.appendUint(server.port() as u64)
+    try line.append("\n")
+    try fs.stdout().write(line.bytes())
+    try server.run(alloc)
+}
+
+fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: Allocator) {
+    var req = Request {
+        method: methodOf(hreq.method),
+        path: pathOf(hreq.target),
+        body: hreq.body,
+        arena: alloc,
+    }
+    var res = Response.init(alloc)
+    if find(app.routes, req.method, req.path) |h| {
+        h(&req, &mut res) catch |e| {
+            fail(&mut res, e)
+        }
+    } else {
+        fail(&mut res, Error.NotFound)
+    }
+    let hs = alloc.alloc(http.Header { name: "Content-Type", value: res.contentType }, 1 + res.headers.len()) catch |e| {
+        hres.status = 500
+        return
+    }
+    for i in 0..res.headers.len() {
+        hs[i + 1] = res.headers.items()[i]
+    }
+    hres.status = res.status
+    hres.headers = hs
+    hres.body = res.page.bytes()
+}
+
+// Turns the response into the plain page of the status that `e` means.
+fn fail(res: *mut Response, e: Error) {
+    res.status = statusOf(e)
+    res.headers.clear()
+    res.text(http.reason(res.status)) catch |e2| {
+        res.page.buf.clear()
+    }
+}
+
+fn statusOf(e: Error) u16 {
+    if e == Error.BadRequest {
+        return 400
+    }
+    if e == Error.NotFound {
+        return 404
+    }
+    if e == Error.MethodNotAllowed {
+        return 405
+    }
+    return 500
+}
+
+fn methodOf(m: []u8) Method {
+    if text.eql(m, "GET") {
+        return Method.Get
+    }
+    if text.eql(m, "POST") {
+        return Method.Post
+    }
+    if text.eql(m, "PUT") {
+        return Method.Put
+    }
+    if text.eql(m, "PATCH") {
+        return Method.Patch
+    }
+    if text.eql(m, "DELETE") {
+        return Method.Delete
+    }
+    return Method.Other
+}
+
+// The target without its query string.
+fn pathOf(target: []u8) []u8 {
+    if text.indexOf(target, "?") |i| {
+        return target[0..i]
+    }
+    return target
+}

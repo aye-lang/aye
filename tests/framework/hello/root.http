@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 58
+
+<!doctype html><title>Hello</title><h1>Hello from Aye</h1>
