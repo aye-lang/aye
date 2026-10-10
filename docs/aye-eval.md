@@ -5,23 +5,23 @@
 - Each run: a fresh agent in an empty temp dir, tools Write, Edit, Read and `Bash(aye *)`; it learns Aye from `aye spec`, `aye check`, `aye explain`. The task's `tests/eval/<task>/check.sh` judges its `main.aye`.
 - Rerun: `python3 scripts/eval.py --runs 1` (`--tasks a,b`, `--aye <binary>`); `--self-test` checks the tasks. Transcripts: `target/eval/20261010-170713/` (not in git).
 
-| Task | Run | Pass | `aye check` calls | Turns | Input tokens | Output tokens | Cost (USD) | Wall (s) | Refused calls | End |
-|---|---|---|---|---|---|---|---|---|---|---|
-| cli_grep | 1 | yes | 2 | 18 | 148,195 | 2,112 | 0.10 | 43 | 1 | success |
-| cli_grep | 2 | yes | 3 | 19 | 208,746 | 2,343 | 0.11 | 53 | 1 | success |
-| cli_grep | 3 | yes | 1 | 9 | 182,843 | 2,117 | 0.16 | 31 | 1 | success |
-| file_lines | 1 | yes | 1 | 12 | 255,940 | 3,154 | 0.18 | 41 | 1 | success |
-| file_lines | 2 | yes | 1 | 12 | 209,107 | 2,940 | 0.17 | 38 | 1 | success |
-| file_lines | 3 | yes | 1 | 11 | 218,441 | 2,744 | 0.15 | 37 | 1 | success |
-| http_hello | 1 | yes | 4 | 33 | 304,452 | 5,635 | 0.15 | 77 | 1 | success |
-| http_hello | 2 | yes | 1 | 12 | 271,063 | 4,476 | 0.20 | 47 | 1 | success |
-| http_hello | 3 | yes | 1 | 11 | 275,096 | 2,905 | 0.21 | 43 | 1 | success |
-| json_total | 1 | yes | 1 | 10 | 227,170 | 2,156 | 0.15 | 34 | 0 | success |
-| json_total | 2 | yes | 1 | 23 | 214,172 | 3,272 | 0.11 | 55 | 1 | success |
-| json_total | 3 | yes | 1 | 11 | 267,505 | 2,492 | 0.16 | 38 | 1 | success |
-| word_freq | 1 | yes | 1 | 12 | 312,841 | 3,329 | 0.24 | 43 | 2 | success |
-| word_freq | 2 | yes | 0 | 12 | 163,003 | 2,877 | 0.15 | 32 | 2 | success |
-| word_freq | 3 | yes | 1 | 11 | 151,158 | 1,904 | 0.13 | 28 | 0 | success |
+| Task | Run | Pass | `aye check` calls | Turns | Input tokens | Output tokens | Cost (USD) | Wall (s) | Refused calls | std modules | End |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| cli_grep | 1 | yes | 2 | 18 | 148,195 | 2,112 | 0.10 | 43 | 1 | std.fs std.heap std.mem std.os std.text | success |
+| cli_grep | 2 | yes | 3 | 19 | 208,746 | 2,343 | 0.11 | 53 | 1 | std.fs std.heap std.os | success |
+| cli_grep | 3 | yes | 1 | 9 | 182,843 | 2,117 | 0.16 | 31 | 1 | std.fs std.heap std.log std.mem std.os | success |
+| file_lines | 1 | yes | 1 | 12 | 255,940 | 3,154 | 0.18 | 41 | 1 | std.fs std.heap std.mem std.os std.text | success |
+| file_lines | 2 | yes | 1 | 12 | 209,107 | 2,940 | 0.17 | 38 | 1 | std.fs std.heap std.log std.mem std.os std.text | success |
+| file_lines | 3 | yes | 1 | 11 | 218,441 | 2,744 | 0.15 | 37 | 1 | std.fs std.heap std.log std.mem std.os std.text | success |
+| http_hello | 1 | yes | 4 | 33 | 304,452 | 5,635 | 0.15 | 77 | 1 | std.heap std.mem std.net std.os | success |
+| http_hello | 2 | yes | 1 | 12 | 271,063 | 4,476 | 0.20 | 47 | 1 | std.heap std.mem std.net std.os | success |
+| http_hello | 3 | yes | 1 | 11 | 275,096 | 2,905 | 0.21 | 43 | 1 | std.heap std.http std.log std.mem std.os std.text | success |
+| json_total | 1 | yes | 1 | 10 | 227,170 | 2,156 | 0.15 | 34 | 0 | std.fs std.heap std.json std.log std.mem std.os | success |
+| json_total | 2 | yes | 1 | 23 | 214,172 | 3,272 | 0.11 | 55 | 1 | std.fs std.heap std.json std.mem std.os std.text | success |
+| json_total | 3 | yes | 1 | 11 | 267,505 | 2,492 | 0.16 | 38 | 1 | std.fs std.heap std.json std.mem std.os std.text | success |
+| word_freq | 1 | yes | 1 | 12 | 312,841 | 3,329 | 0.24 | 43 | 2 | std.fs std.heap std.list std.map std.mem std.sort | success |
+| word_freq | 2 | yes | 0 | 12 | 163,003 | 2,877 | 0.15 | 32 | 2 | std.fs std.heap std.list std.map std.mem std.sort | success |
+| word_freq | 3 | yes | 1 | 11 | 151,158 | 1,904 | 0.13 | 28 | 0 | std.fs std.heap std.list std.map std.mem std.sort | success |
 
 Passed 15 of 15 runs.
 
