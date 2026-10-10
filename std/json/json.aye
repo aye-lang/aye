@@ -1,4 +1,5 @@
-// std.json: parse JSON (RFC 8259) into a tree of `Value`s.
+// std.json: parse JSON (RFC 8259) into a tree of `Value`s, and write a tree
+// back out (`write`, `writePretty`, `stringify`).
 //
 // `parse` and `parseDiag` take an `*mut Arena` and allocate the whole tree
 // in it (strings are copies, so the text may go away), so one
@@ -9,6 +10,9 @@
 // feed, carriage return) around the value. The tree is read with the
 // methods of `Value`; each gives null for the wrong kind of value.
 //
+// `write` and `writePretty` append to a `text.Builder`; a number is written
+// with the shortest digits that read back as the same `f64`.
+//
 // An error value is only a name, so `parseDiag` also adds one `std.diag`
 // diagnostic with the byte offset and what was expected; `parse` does not.
 
@@ -16,6 +20,7 @@ import std.diag.Diagnostics
 import std.heap.Arena
 import std.list.List
 import std.mem
+import std.mem.AllocError
 import std.mem.Allocator
 import std.text
 import std.text.Builder
@@ -568,5 +573,326 @@ fn isDigit(c: u8) bool {
     return c >= '0' && c <= '9'
 }
 
+/// Writes `v` as compact JSON (no whitespace) to `b`. A string is escaped
+/// per RFC 8259: `"` and `\` get a backslash, the control characters
+/// below 0x20 are `\n` `\t` `\r` `\b` `\f` or `\u00XX`, and every other
+/// byte (`/` and non-ASCII too) is copied as it is. Object members keep
+/// their order. A number is written as `writeNumber` does.
+pub fn write(b: *mut Builder, v: *Value) AllocError!void {
+    match v.* {
+        .Null => try b.append("null")
+        .Bool { value } => {
+            if value {
+                try b.append("true")
+            } else {
+                try b.append("false")
+            }
+        }
+        .Number { value } => try writeNumber(b, value)
+        .String { value } => try writeString(b, value)
+        .Array { items } => {
+            try b.appendByte('[')
+            for i, _ in items {
+                if i > 0 {
+                    try b.appendByte(',')
+                }
+                try write(b, &items[i])
+            }
+            try b.appendByte(']')
+        }
+        .Object { members } => {
+            try b.appendByte('{')
+            for i, _ in members {
+                if i > 0 {
+                    try b.appendByte(',')
+                }
+                try writeString(b, members[i].key)
+                try b.appendByte(':')
+                try write(b, &members[i].value)
+            }
+            try b.appendByte('}')
+        }
+    }
+}
+
+/// Like `write`, with a newline and 2 more spaces of indent for each level
+/// of array and object, and `": "` after a member name. An empty array or
+/// object stays `[]` or `{}`. `indent` is the number of spaces the value's
+/// own level is already indented by (0 for a whole document): the lines
+/// inside the value start 2 further in, and the closing bracket is
+/// `indent` in. The first line gets no indent, and no newline ends the
+/// text.
+pub fn writePretty(b: *mut Builder, v: *Value, indent: usize) AllocError!void {
+    match v.* {
+        .Array { items } => {
+            if items.len == 0 {
+                return b.append("[]")
+            }
+            try b.appendByte('[')
+            for i, _ in items {
+                if i > 0 {
+                    try b.appendByte(',')
+                }
+                try newline(b, indent + 2)
+                try writePretty(b, &items[i], indent + 2)
+            }
+            try newline(b, indent)
+            try b.appendByte(']')
+        }
+        .Object { members } => {
+            if members.len == 0 {
+                return b.append("{}")
+            }
+            try b.appendByte('{')
+            for i, _ in members {
+                if i > 0 {
+                    try b.appendByte(',')
+                }
+                try newline(b, indent + 2)
+                try writeString(b, members[i].key)
+                try b.append(": ")
+                try writePretty(b, &members[i].value, indent + 2)
+            }
+            try newline(b, indent)
+            try b.appendByte('}')
+        }
+        _ => try write(b, v)
+    }
+}
+
+/// `v` as compact JSON (see `write`) in new memory from `alloc`; free it
+/// with `alloc.free`.
+pub fn stringify(alloc: Allocator, v: *Value) AllocError![]mut u8 {
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try write(&mut b, v)
+    return b.toOwned()
+}
+
+/// Are `a` and `b` the same JSON value? Kinds must match, strings are
+/// compared by bytes, numbers by `==` (so 0 and -0 are equal, and a NaN
+/// is equal to nothing), arrays element by element, and objects member by
+/// member in order, names included (a repeated name counts each time).
+pub fn equals(a: *Value, b: *Value) bool {
+    match a.* {
+        .Null => {
+            return b.isNull()
+        }
+        .Bool { value } => {
+            if b.asBool() |o| {
+                return o == value
+            }
+        }
+        .Number { value } => {
+            if b.asNumber() |o| {
+                return o == value
+            }
+        }
+        .String { value } => {
+            if b.asString() |o| {
+                return mem.eql(o, value)
+            }
+        }
+        .Array { items } => {
+            if b.asArray() |o| {
+                if o.len != items.len {
+                    return false
+                }
+                for i, _ in items {
+                    if !equals(&items[i], &o[i]) {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+        .Object { members } => {
+            if b.asObject() |o| {
+                if o.len != members.len {
+                    return false
+                }
+                for i, _ in members {
+                    if !mem.eql(members[i].key, o[i].key) || !equals(&members[i].value, &o[i].value) {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+    }
+    return false
+}
+
+/// Appends `v` as a JSON number. A whole number below 2^53 in size has no
+/// fraction or exponent (`-0` stays `-0`). Any other number gets the
+/// shortest digits that read back as the same `f64`, laid out as
+/// `JSON.stringify` does: plain decimal for sizes from 1e-6 up to below
+/// 1e21 (`0.1`, `123456.789`, `1e20` as 100000000000000000000), else
+/// digits with an exponent (`1e+21`, `5e-324`, `-1.5e-10`). NaN and the
+/// infinities have no JSON form and the parser never makes them; they are
+/// written as `null`.
+pub fn writeNumber(b: *mut Builder, v: f64) AllocError!void {
+    if v != v || v > 1.7976931348623157e308 || v < -1.7976931348623157e308 {
+        return b.append("null")
+    }
+    if copysign(1.0, v) < 0.0 {
+        try b.appendByte('-')
+    }
+    let a = fabs(v)
+    if a == 0.0 {
+        return b.appendByte('0')
+    }
+    if a < 9007199254740992.0 {
+        let n = a as u64
+        if n as f64 == a {
+            return b.appendUint(n)
+        }
+    }
+    var digits = [17]u8{0, ..}
+    let d = shortest(a, digits[..])
+    let ds = digits[..d.count]
+    let n = d.point as i64
+    let k = d.count as i64
+    if k <= n && n <= 21 {
+        try b.append(ds)
+        var z = n - k
+        while z > 0 {
+            try b.appendByte('0')
+            z -= 1
+        }
+        return
+    }
+    if 0 < n && n <= 21 {
+        try b.append(ds[..n as usize])
+        try b.appendByte('.')
+        return b.append(ds[n as usize..])
+    }
+    if -6 < n && n <= 0 {
+        try b.append("0.")
+        var z = -n
+        while z > 0 {
+            try b.appendByte('0')
+            z -= 1
+        }
+        return b.append(ds)
+    }
+    try b.appendByte(ds[0])
+    if d.count > 1 {
+        try b.appendByte('.')
+        try b.append(ds[1..])
+    }
+    try b.appendByte('e')
+    var e = n - 1
+    if e < 0 {
+        try b.appendByte('-')
+        e = -e
+    } else {
+        try b.appendByte('+')
+    }
+    return b.appendInt(e)
+}
+
+fn newline(b: *mut Builder, indent: usize) AllocError!void {
+    try b.appendByte('\n')
+    var i: usize = 0
+    while i < indent {
+        try b.appendByte(' ')
+        i += 1
+    }
+}
+
+fn writeHex(b: *mut Builder, c: u8) AllocError!void {
+    let digits = "0123456789abcdef"
+    try b.append("\\u00")
+    try b.appendByte(digits[(c >> 4) as usize])
+    try b.appendByte(digits[(c & 15) as usize])
+}
+
+fn writeString(b: *mut Builder, s: []u8) AllocError!void {
+    try b.appendByte('"')
+    for c in s {
+        match c {
+            '"' => try b.append("\\\"")
+            '\\' => try b.append("\\\\")
+            '\n' => try b.append("\\n")
+            '\r' => try b.append("\\r")
+            '\t' => try b.append("\\t")
+            0x08 => try b.append("\\b")
+            0x0C => try b.append("\\f")
+            _ => {
+                if c < 0x20 {
+                    try writeHex(b, c)
+                } else {
+                    try b.appendByte(c)
+                }
+            }
+        }
+    }
+    try b.appendByte('"')
+}
+
+// The decimal digits of a positive float and where the point goes: the
+// value is 0.DIGITS x 10^point.
+struct Digits {
+    count: usize
+    point: i32
+}
+
+// Writes the shortest digits that `strtod` reads back as exactly `a` (1 to
+// 17 of them; 17 always do) to the start of `out`. `ecvt` rounds `a`
+// correctly to `p` digits, so the first `p` that reads back is the
+// shortest.
+fn shortest(a: f64, out: []mut u8) Digits {
+    var cand = [48]u8{0, ..}
+    var pt = [1]i32{0}
+    var sg = [1]i32{0}
+    var p: usize = 1
+    var point: i32 = 0
+    while true {
+        let raw = ecvt(a, p as i32, pt[..].ptr, sg[..].ptr)
+        point = pt[0]
+        cand[0] = '0'
+        cand[1] = '.'
+        var i: usize = 0
+        while i < p {
+            out[i] = raw[i]
+            cand[2 + i] = raw[i]
+            i += 1
+        }
+        cand[2 + p] = 'e'
+        let end = putInt(cand[..], 3 + p, point)
+        cand[end] = 0
+        if p == 17 || strtod(cand[..].ptr, []u8{}.ptr) == a {
+            break
+        }
+        p += 1
+    }
+    return Digits { count: p, point: point }
+}
+
+// Writes the decimal `v` (|v| < 1000) to `buf` from `at`; returns the end.
+fn putInt(buf: []mut u8, at: usize, v: i32) usize {
+    var i = at
+    var x = v
+    if x < 0 {
+        buf[i] = '-'
+        i += 1
+        x = -x
+    }
+    if x >= 100 {
+        buf[i] = '0' + (x / 100) as u8
+        i += 1
+    }
+    if x >= 10 {
+        buf[i] = '0' + ((x / 10) % 10) as u8
+        i += 1
+    }
+    buf[i] = '0' + (x % 10) as u8
+    return i + 1
+}
+
 // `end` is a `char **` in C; std passes null.
 extern fn strtod(s: [*]u8, end: [*]u8) f64
+extern fn ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
+extern fn copysign(x: f64, y: f64) f64
+extern fn fabs(x: f64) f64

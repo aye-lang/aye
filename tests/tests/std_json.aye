@@ -1,5 +1,6 @@
-// O3.1: std.json parses into an arena; the tests run on the leak-checked
-// allocator, so an arena that is not freed would be reported.
+// O3.1, O3.1a: std.json parses into an arena and writes a tree back; the
+// tests run on the leak-checked allocator, so an arena or a string that is
+// not freed would be reported.
 
 import std.diag.Diagnostics
 import std.heap.Arena
@@ -7,7 +8,9 @@ import std.json
 import std.json.ParseError
 import std.json.Value
 import std.mem
+import std.mem.Allocator
 import std.testing
+import std.text.Builder
 
 test "scalars" {
     var arena = Arena.init(testing.allocator())
@@ -74,4 +77,80 @@ test "a parse without diagnostics still gives the tag" {
         return
     }
     @expect(false)
+}
+
+fn compact(alloc: Allocator, v: *Value) ![]mut u8 {
+    return json.stringify(alloc, v)
+}
+
+test "write escapes strings and keeps order" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "{\"b\":\"a\\\"\\\\\\/\\n\\t\\r\\b\\f\\u0001\\u001f\xC3\xA9\",\"a\":[null,true,false]}")
+    let out = try compact(testing.allocator(), &v)
+    defer testing.allocator().free(out)
+    @expect(mem.eql(out, "{\"b\":\"a\\\"\\\\/\\n\\t\\r\\b\\f\\u0001\\u001f\xC3\xA9\",\"a\":[null,true,false]}"))
+}
+
+test "write numbers: whole, shortest and exponent forms" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "[0,-0,12,-7,9007199254740991,0.1,0.30000000000000004,123456.789,1e20,1e21,5e-324,1e-7,0.000001,-1.5e-10]")
+    let out = try compact(testing.allocator(), &v)
+    defer testing.allocator().free(out)
+    @expect(mem.eql(out, "[0,-0,12,-7,9007199254740991,0.1,0.30000000000000004,123456.789,100000000000000000000,1e+21,5e-324,1e-7,0.000001,-1.5e-10]"))
+}
+
+test "a number that is not finite is written as null" {
+    var nan = Value.Number { value: 0.0 / 0.0 }
+    var inf = Value.Number { value: 1.0e308 * 10.0 }
+    let a = try compact(testing.allocator(), &nan)
+    defer testing.allocator().free(a)
+    let b = try compact(testing.allocator(), &inf)
+    defer testing.allocator().free(b)
+    @expect(mem.eql(a, "null"))
+    @expect(mem.eql(b, "null"))
+}
+
+test "writePretty indents two spaces a level" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "{\"a\":[1,{}],\"b\":[],\"c\":{\"d\":null}}")
+    var b = Builder.init(testing.allocator())
+    defer b.deinit()
+    try json.writePretty(&mut b, &v, 0)
+    @expect(mem.eql(b.bytes(), "{\n  \"a\": [\n    1,\n    {}\n  ],\n  \"b\": [],\n  \"c\": {\n    \"d\": null\n  }\n}"))
+    b.clear()
+    var w = try json.parse(&mut arena, "[true]")
+    try json.writePretty(&mut b, &w, 4)
+    @expect(mem.eql(b.bytes(), "[\n      true\n    ]"))
+}
+
+test "equals compares kinds, bytes, numbers and member order" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var a = try json.parse(&mut arena, "{\"a\":[1,\"x\"],\"b\":null}")
+    var same = try json.parse(&mut arena, " { \"a\" : [ 1.0 , \"x\" ] , \"b\" : null } ")
+    var swapped = try json.parse(&mut arena, "{\"b\":null,\"a\":[1,\"x\"]}")
+    var other = try json.parse(&mut arena, "{\"a\":[1,\"y\"],\"b\":null}")
+    var shorter = try json.parse(&mut arena, "{\"a\":[1],\"b\":null}")
+    @expect(json.equals(&a, &same))
+    @expect(!json.equals(&a, &swapped))
+    @expect(!json.equals(&a, &other))
+    @expect(!json.equals(&a, &shorter))
+    var zero = try json.parse(&mut arena, "0")
+    var negzero = try json.parse(&mut arena, "-0")
+    var str = try json.parse(&mut arena, "\"0\"")
+    @expect(json.equals(&zero, &negzero))
+    @expect(!json.equals(&zero, &str))
+}
+
+test "stringify then parse gives an equal tree" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "{\"k\":[0.1,1e300,-2.5e-8,\"\\u0000\\ud83d\\ude00\"],\"n\":{}}")
+    let out = try compact(testing.allocator(), &v)
+    defer testing.allocator().free(out)
+    var again = try json.parse(&mut arena, out)
+    @expect(json.equals(&v, &again))
 }
