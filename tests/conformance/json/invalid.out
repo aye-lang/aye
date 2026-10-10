@@ -1,0 +1,77 @@
+'[1,]' => UnexpectedToken @3: expected a value
+'{"a":1,}' => UnexpectedToken @7: expected a string
+'[,1]' => UnexpectedToken @1: expected a value
+'[1 2]' => UnexpectedToken @3: expected ',' or ']'
+'{"a" 1}' => UnexpectedToken @5: expected ':'
+'{a:1}' => UnexpectedToken @1: expected a string
+'{'a':1}' => UnexpectedToken @1: expected a string
+'{"a":}' => UnexpectedToken @5: expected a value
+'{1:2}' => UnexpectedToken @1: expected a string
+'[1' => UnexpectedEnd @2: expected ',' or ']'
+'{"a":1' => UnexpectedEnd @6: expected ',' or '}'
+'{"a"' => UnexpectedEnd @4: expected ':'
+'{' => UnexpectedEnd @1: expected a string
+'[' => UnexpectedEnd @1: expected a value
+']' => UnexpectedToken @0: expected a value
+'1 2' => TrailingData @2: expected the end of the text
+'[] []' => TrailingData @3: expected the end of the text
+'[1,2]]' => TrailingData @5: expected the end of the text
+'{"a":1}}' => TrailingData @7: expected the end of the text
+'nul' => UnexpectedEnd @3: expected a value
+'nulL' => UnexpectedToken @3: expected a value
+'[tru]' => UnexpectedToken @4: expected a value
+'True' => UnexpectedToken @0: expected a value
+'NaN' => UnexpectedToken @0: expected a value
+'Infinity' => UnexpectedToken @0: expected a value
+'-Infinity' => InvalidNumber @1: expected a digit
+'-NaN' => InvalidNumber @1: expected a digit
+'01' => InvalidNumber @1: a number has no leading zeros
+'-01' => InvalidNumber @2: a number has no leading zeros
+'00' => InvalidNumber @1: a number has no leading zeros
+'-' => InvalidNumber @1: expected a digit
+'[-]' => InvalidNumber @2: expected a digit
+'-a' => InvalidNumber @1: expected a digit
+'+1' => UnexpectedToken @0: expected a value
+'.5' => UnexpectedToken @0: expected a value
+'1.' => InvalidNumber @2: expected a digit
+'1.e3' => InvalidNumber @2: expected a digit
+'1e' => InvalidNumber @2: expected a digit
+'1e+' => InvalidNumber @3: expected a digit
+'0x10' => TrailingData @1: expected the end of the text
+'1e400' => NumberOutOfRange @0: a number too large for a 64-bit float
+'-1e400' => NumberOutOfRange @0: a number too large for a 64-bit float
+'"abc' => UnexpectedEnd @4: expected '"' to end the string
+'"\x"' => InvalidEscape @1: expected one of " \ / b f n r t u after '\'
+'"\u12"' => InvalidEscape @1: expected four hex digits after \u
+'"\uZZZZ"' => InvalidEscape @1: expected four hex digits after \u
+'"\uD800"' => InvalidSurrogate @1: a high surrogate needs a \u low surrogate after it
+'"\uDC00"' => InvalidSurrogate @1: a low surrogate needs a high surrogate before it
+'"\uD83D\u0041"' => InvalidSurrogate @1: a high surrogate needs a \u low surrogate after it
+'"\uD83Dx"' => InvalidSurrogate @1: a high surrogate needs a \u low surrogate after it
+'"\uDE00\uD83D"' => InvalidSurrogate @1: a low surrogate needs a high surrogate before it
+'"\' => UnexpectedEnd @2: expected an escape after '\'
+'// c' => UnexpectedToken @0: expected a value
+'[1 /* c */]' => UnexpectedToken @3: expected ',' or ']'
+'# c' => UnexpectedToken @0: expected a value
+'' => UnexpectedEnd @0: expected a value
+' \x0a' => UnexpectedEnd @2: expected a value
+'"a\x09b"' => ControlCharacter @2: a control character in a string must be escaped
+'"a\x0ab"' => ControlCharacter @2: a control character in a string must be escaped
+'"\x01"' => ControlCharacter @1: a control character in a string must be escaped
+'\xef\xbb\xbf1' => UnexpectedToken @0: expected a value
+'\x0b1' => UnexpectedToken @0: expected a value
+'\xc2\xa01' => UnexpectedToken @0: expected a value
+'1\x00' => TrailingData @1: expected the end of the text
+'"\xc3"' => InvalidUtf8 @1: invalid UTF-8 in a string
+'"\xff"' => InvalidUtf8 @1: invalid UTF-8 in a string
+'"\xc0\x80"' => InvalidUtf8 @1: invalid UTF-8 in a string
+'"\xed\xa0\x80"' => InvalidUtf8 @1: invalid UTF-8 in a string
+513 arrays
+TooDeep
+512
+100000 arrays
+TooDeep
+512
+513 objects
+TooDeep
+2560
