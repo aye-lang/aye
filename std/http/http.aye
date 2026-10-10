@@ -1,5 +1,5 @@
 // std.http: the HTTP/1.1 wire format, `Server`, a thread per connection, and
-// a plain-HTTP client (`get`, `post`, `request`; `https://` is not built yet).
+// a client (`get`, `post`, `request`; `https://` through libcurl).
 // `parse` reads one request from a byte buffer and says how many bytes it used,
 // so a server can parse pipelined requests by parsing again from the rest.
 // `writeResponse` builds a response. A handler takes a context pointer and
@@ -10,6 +10,9 @@
 // is refused. The size limits give distinct error tags, so the server can
 // answer 400, 413, 414, 431 or 505 (`errorStatus`).
 
+@linkOptional("libcurl")
+
+import std
 import std.heap.Arena
 import std.heap.General
 import std.list.List
@@ -20,11 +23,13 @@ import std.net
 import std.net.Conn
 import std.net.ListenError
 import std.net.Listener
+import std.os
 import std.sync.Atomic
 import std.text
 import std.text.Builder
 import std.thread
 import std.thread.Thread
+import std.time
 
 /// Why `parse` gave no request. `Incomplete` is not a fault: the buffer
 /// holds only the start of a request, so read more bytes and parse again.
@@ -673,21 +678,31 @@ fn send(a: Allocator, conn: Conn, res: Response, how: []u8) {
     }
 }
 
-// The client: HTTP/1.1 over `std.net`, one request per connection
-// (`Connection: close`). `https://` URLs are refused with `HttpsUnsupported`
-// at one place (`exchange`), so a TLS transport can fill it in later.
+// The client: HTTP/1.1, one request per connection (`Connection: close`).
+// `http://` runs over `std.net`. For `https://`, libcurl (linked only where
+// installed) opens the connection in connect-only mode, which includes the
+// TLS handshake, the certificate check and the host-name check; the bytes
+// then move with `curl_easy_send` and `curl_easy_recv`. The request writer
+// and the response parser are the same for both. Without libcurl, an
+// `https://` URL is `HttpsUnsupported`. When the environment variable
+// `AYE_HTTP_DEBUG` is set, a failed connect logs libcurl's text with
+// `std.log.info`.
 
 /// Why a client call gave no response. `InvalidUrl`, `UnsupportedScheme`
-/// (not http or https) and `HttpsUnsupported` come from the URL;
+/// (not http or https) come from the URL; `HttpsUnsupported` is an
+/// `https://` URL in a program built without libcurl;
 /// `InvalidRequest` is a method or header that cannot be sent; the connect
 /// tags are `UnknownHost`, `ConnectionRefused`, `ConnectFailed` and
-/// `TimedOut`. `ConnectionClosed` is a connection that failed or ended
+/// `TimedOut`; `TlsFailed` is a TLS handshake or certificate failure (an
+/// untrusted or expired certificate, a wrong host name, a bad `caFile`).
+/// `ConnectionClosed` is a connection that failed or ended
 /// before the response was complete; `BadResponse` is malformed input.
 /// `HeadersTooLarge`, `BodyTooLarge` and `TooManyRedirects` are limits.
 pub error ClientError {
     InvalidUrl,
     UnsupportedScheme,
     HttpsUnsupported,
+    TlsFailed,
     InvalidRequest,
     UnknownHost,
     ConnectionRefused,
@@ -712,6 +727,10 @@ pub struct ClientOptions {
     /// Follow 301, 302, 303, 307 and 308 with a `Location` (at most 10
     /// times). Off to begin with: the redirect is returned as it is.
     followRedirects: bool = false
+    /// A file of PEM certificates that `https://` trusts instead of the
+    /// system's store (null to begin with: the system's store). The
+    /// certificate and the host name are always checked.
+    caFile: ?[]u8 = null
 }
 
 /// A URL split by `parseUrl`; the slices point into the string given.
@@ -979,16 +998,67 @@ fn writeRequest(out: *mut Builder, u: Url, method: []u8, headers: []Header, body
     try out.append(body)
 }
 
-// One request on its own connection. The transport (a TCP `Conn` for
-// http) is chosen here.
-fn exchange(alloc: Allocator, opts: ClientOptions, u: Url, method: []u8, headers: []Header, body: []u8) ClientError!Response {
-    if u.https {
-        return ClientError.HttpsUnsupported
+// An open connection of the client: a TCP `Conn` (http) or a libcurl
+// handle in connect-only mode (https). Exactly one is set.
+struct Stream {
+    conn: ?Conn
+    curl: ?*mut Curl
+
+    // Waits at most `ms` for data: the number of bytes read, 0 when the
+    // peer has closed.
+    fn read(self: Self, buf: []mut u8, ms: u32) ClientError!usize {
+        if self.curl |h| {
+            if @hasLink("libcurl") {
+                return tlsRead(h, buf, ms)
+            } else {
+                return ClientError.HttpsUnsupported
+            }
+        }
+        let c = self.conn orelse return ClientError.ConnectionClosed
+        return c.readTimeout(buf, ms) catch |e| {
+            return match e {
+                .TimedOut => ClientError.TimedOut
+                .ConnectionReset => ClientError.ConnectionClosed
+                .ReadFailed => ClientError.ConnectionClosed
+            }
+        }
     }
-    try checkRequest(method, headers)
-    var out = Builder.init(alloc)
-    defer out.deinit()
-    writeRequest(&mut out, u, method, headers, body) catch return ClientError.OutOfMemory
+
+    // Writes all of `bytes`; one wait for the socket takes at most `ms`.
+    fn write(self: Self, bytes: []u8, ms: u32) ClientError!void {
+        if self.curl |h| {
+            if @hasLink("libcurl") {
+                return tlsWrite(h, bytes, ms)
+            } else {
+                return ClientError.HttpsUnsupported
+            }
+        }
+        let c = self.conn orelse return ClientError.ConnectionClosed
+        c.write(bytes) catch return ClientError.ConnectionClosed
+    }
+
+    fn close(self: Self) {
+        if self.curl |h| {
+            if @hasLink("libcurl") {
+                curl_easy_cleanup(h)
+            }
+        }
+        if self.conn |c| {
+            c.close()
+        }
+    }
+}
+
+// Opens the connection of `u`: where the transport is chosen.
+fn openStream(alloc: Allocator, opts: ClientOptions, u: Url) ClientError!Stream {
+    if u.https {
+        if @hasLink("libcurl") {
+            let h = try tlsConnect(alloc, opts, u)
+            return Stream { conn: null, curl: h }
+        } else {
+            return ClientError.HttpsUnsupported
+        }
+    }
     let conn = net.connect(u.host, u.port) catch |e| {
         return match e {
             .InvalidAddress => ClientError.InvalidUrl
@@ -999,20 +1069,24 @@ fn exchange(alloc: Allocator, opts: ClientOptions, u: Url, method: []u8, headers
             .ConnectFailed => ClientError.ConnectFailed
         }
     }
+    return Stream { conn: conn, curl: null }
+}
+
+// One request on its own connection.
+fn exchange(alloc: Allocator, opts: ClientOptions, u: Url, method: []u8, headers: []Header, body: []u8) ClientError!Response {
+    try checkRequest(method, headers)
+    var out = Builder.init(alloc)
+    defer out.deinit()
+    writeRequest(&mut out, u, method, headers, body) catch return ClientError.OutOfMemory
+    let conn = try openStream(alloc, opts, u)
     defer conn.close()
-    conn.write(out.bytes()) catch return ClientError.ConnectionClosed
+    try conn.write(out.bytes(), opts.timeoutMs)
     return readResponse(alloc, opts, conn, method)
 }
 
 // Waits for data: the number of bytes read, 0 when the peer has closed.
-fn readSome(conn: Conn, buf: []mut u8, ms: u32) ClientError!usize {
-    return conn.readTimeout(buf, ms) catch |e| {
-        return match e {
-            .TimedOut => ClientError.TimedOut
-            .ConnectionReset => ClientError.ConnectionClosed
-            .ReadFailed => ClientError.ConnectionClosed
-        }
-    }
+fn readSome(conn: Stream, buf: []mut u8, ms: u32) ClientError!usize {
+    return conn.read(buf, ms)
 }
 
 // The status and headers of the response head `head` (the status line and
@@ -1059,7 +1133,7 @@ fn parseHead(alloc: Allocator, head: []u8) ClientError!Response {
 // Reads the response to a request with `method` from `conn`: the head, then
 // the body by Transfer-Encoding: chunked, Content-Length, or until the peer
 // closes. An interim 1xx response is skipped.
-fn readResponse(alloc: Allocator, opts: ClientOptions, conn: Conn, method: []u8) ClientError!Response {
+fn readResponse(alloc: Allocator, opts: ClientOptions, conn: Stream, method: []u8) ClientError!Response {
     let limits = Limits { maxRequestLine: 8192, maxHeaders: 16384, maxBody: opts.maxBodyBytes }
     var wire = Builder.init(alloc)
     defer wire.deinit()
@@ -1167,4 +1241,138 @@ fn readResponse(alloc: Allocator, opts: ClientOptions, conn: Conn, method: []u8)
     }
     res.body = rest.toOwned() catch return ClientError.OutOfMemory
     return res
+}
+
+// TLS through libcurl: the easy interface in connect-only mode, hand-declared
+// like `browser/net/http.aye`. Only called where `@hasLink("libcurl")`.
+
+extern struct Curl {}
+
+extern fn curl_easy_init() ?*mut Curl
+extern fn curl_easy_setopt(h: *mut Curl, option: i32, ...) i32
+extern fn curl_easy_perform(h: *mut Curl) i32
+extern fn curl_easy_send(h: *mut Curl, buf: [*]u8, n: usize, sent: *mut usize) i32
+extern fn curl_easy_recv(h: *mut Curl, buf: [*]u8, n: usize, got: *mut usize) i32
+extern fn curl_easy_cleanup(h: *mut Curl)
+extern fn curl_easy_strerror(code: i32) [*]u8
+extern fn strlen(s: [*]u8) usize
+
+let CURLOPT_URL: i32 = 10002
+let CURLOPT_ERRORBUFFER: i32 = 10010
+let CURLOPT_CAINFO: i32 = 10065
+let CURLOPT_NOSIGNAL: i32 = 99
+let CURLOPT_CONNECT_ONLY: i32 = 141
+let CURLOPT_CONNECTTIMEOUT_MS: i32 = 156
+let CURLOPT_HTTP_VERSION: i32 = 84
+// CURL_HTTP_VERSION_1_1: no ALPN offer of h2.
+let CURL_HTTP_VERSION_1_1: i64 = 2
+let CURLE_AGAIN: i32 = 81
+
+// The error tag of a failed connect (`curl_easy_perform` result `code`).
+fn tlsConnectError(code: i32) ClientError {
+    return match code {
+        3 => ClientError.InvalidUrl
+        6 => ClientError.UnknownHost
+        27 => ClientError.OutOfMemory
+        28 => ClientError.TimedOut
+        35, 51, 53, 54, 58, 59, 60, 64, 66, 77, 80, 82, 83, 90, 91, 98 => ClientError.TlsFailed
+        _ => ClientError.ConnectFailed
+    }
+}
+
+// Appends `s` and a NUL byte.
+fn cString(b: *mut Builder, s: []u8) AllocError!void {
+    try b.append(s)
+    try b.appendByte(0)
+}
+
+// Connects to `u` (an https URL) and finishes the TLS handshake. The
+// certificate and host name are checked by libcurl's defaults
+// (CURLOPT_SSL_VERIFYPEER and CURLOPT_SSL_VERIFYHOST stay on).
+fn tlsConnect(alloc: Allocator, opts: ClientOptions, u: Url) ClientError!*mut Curl {
+    let h = curl_easy_init() orelse return ClientError.ConnectFailed
+    errdefer curl_easy_cleanup(h)
+    var target = Builder.init(alloc)
+    defer target.deinit()
+    target.append("https://") catch return ClientError.OutOfMemory
+    target.append(u.authority) catch return ClientError.OutOfMemory
+    cString(&mut target, "/") catch return ClientError.OutOfMemory
+    var err = @zeroed([256]u8)
+    curl_easy_setopt(h, CURLOPT_URL, target.bytes().ptr)
+    curl_easy_setopt(h, CURLOPT_CONNECT_ONLY, 1 as i64)
+    curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1)
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT_MS, opts.timeoutMs as i64)
+    curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1 as i64)
+    curl_easy_setopt(h, CURLOPT_ERRORBUFFER, err[..].ptr)
+    var ca = Builder.init(alloc)
+    defer ca.deinit()
+    if opts.caFile |path| {
+        cString(&mut ca, path) catch return ClientError.OutOfMemory
+        curl_easy_setopt(h, CURLOPT_CAINFO, ca.bytes().ptr)
+    }
+    let code = curl_easy_perform(h)
+    // `err` ends with this call: libcurl must not keep the pointer.
+    curl_easy_setopt(h, CURLOPT_ERRORBUFFER, 0 as i64)
+    if code != 0 {
+        if os.getenv("AYE_HTTP_DEBUG") |_| {
+            var detail = err[0..strlen(err[..].ptr)]
+            if detail.len == 0 {
+                let t = curl_easy_strerror(code)
+                detail = t[0..strlen(t)]
+            }
+            std.log.info("std.http: https connect to {} failed (libcurl {}): {}", u.authority, code, detail)
+        }
+        return tlsConnectError(code)
+    }
+    return h
+}
+
+// libcurl has no blocking mode here: `curl_easy_recv` and `curl_easy_send`
+// give CURLE_AGAIN when the socket is not ready. This sleeps a little
+// (1 ms, doubling to 20 ms) and says TimedOut once `ms` have passed since
+// `start` (`time.monotonicMs`).
+fn pause(start: u64, ms: u32, step: *mut u64) ClientError!void {
+    if time.monotonicMs() - start >= ms as u64 {
+        return ClientError.TimedOut
+    }
+    time.sleep(step.*)
+    if step.* < 20 {
+        step.* = step.* * 2
+    }
+}
+
+fn tlsRead(h: *mut Curl, buf: []mut u8, ms: u32) ClientError!usize {
+    let start = time.monotonicMs()
+    var step: u64 = 1
+    while true {
+        var got: usize = 0
+        let code = curl_easy_recv(h, buf.ptr, buf.len, &mut got)
+        if code == 0 {
+            return got
+        }
+        if code != CURLE_AGAIN {
+            return ClientError.ConnectionClosed
+        }
+        try pause(start, ms, &mut step)
+    }
+    unreachable
+}
+
+fn tlsWrite(h: *mut Curl, bytes: []u8, ms: u32) ClientError!void {
+    var off: usize = 0
+    var start = time.monotonicMs()
+    var step: u64 = 1
+    while off < bytes.len {
+        var sent: usize = 0
+        let code = curl_easy_send(h, bytes[off..].ptr, bytes.len - off, &mut sent)
+        if code == 0 {
+            off += sent
+            start = time.monotonicMs()
+            step = 1
+        } else if code == CURLE_AGAIN {
+            try pause(start, ms, &mut step)
+        } else {
+            return ClientError.ConnectionClosed
+        }
+    }
 }

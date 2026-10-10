@@ -1533,7 +1533,7 @@ std.os        args, getenv, exit                                             bel
 std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
-std.http      HTTP/1.1 server and client: listen, Server.run, get, post; parse  aye doc --signatures std.http
+std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON (RFC 8259): parse into an arena tree; write, stringify    aye doc --signatures std.json
 std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
 std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
