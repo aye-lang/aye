@@ -3,5 +3,11 @@ test "an object keeps its order and finds the last of a repeated name" ... ok
 test "accessors give null for the wrong kind" ... ok
 test "errors carry a tag and an offset" ... ok
 test "a parse without diagnostics still gives the tag" ... ok
+test "write escapes strings and keeps order" ... ok
+test "write numbers: whole, shortest and exponent forms" ... ok
+test "a number that is not finite is written as null" ... ok
+test "writePretty indents two spaces a level" ... ok
+test "equals compares kinds, bytes, numbers and member order" ... ok
+test "stringify then parse gives an equal tree" ... ok
 
-5 passed; 0 failed
+11 passed; 0 failed
