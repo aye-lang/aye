@@ -28,8 +28,8 @@ and `git worktree list` (expected: main only). Next, in order:
    the Linux triples compile on Linux, cross-linking from a Mac needs a
    sysroot, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 and O5.2 done. **O9 holds** (checked on 91fb479: `aye test
    <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
-   `--json`, leak-is-failure, all golden-covered). In flight: O1.17a (golden workers), O2.7
-   (freestanding runtime). Next: O5.1a, O1.17b.
+   `--json`, leak-is-failure, all golden-covered). O1.17a done. In flight: O2.7 (freestanding runtime), O1.17b
+   (first-exec stall). Next: O5.1a, O2.8.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
    15/15 and showed the spec core is still too large for Claude Code's
@@ -39,7 +39,7 @@ and `git worktree list` (expected: main only). Next, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O1.17a, O2.7, then O5.1a | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O2.7, O1.17b, then O5.1a | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
