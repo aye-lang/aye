@@ -1,0 +1,1 @@
+error[E0117]: unknown target `nope`; targets are aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding

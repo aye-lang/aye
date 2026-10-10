@@ -21,7 +21,9 @@
 //!   exists. Skipped without libclang, or when `pkg-config` does not know a
 //!   package of `X.needs`.
 //! - `tests/errors/X.aye`: must fail to compile with exactly the diagnostics
-//!   in `X.err`, one per line, in order.
+//!   in `X.err`, one per line, in order. With `X.args` (such as `--target
+//!   wasm32-wasip1`), `aye check X.aye <args>` must print exactly `X.err` on
+//!   stderr and exit with status 1.
 //! - `tests/tests/X.aye`: `aye test X.aye` (debug mode) must print exactly
 //!   `X.out`, and `aye test --json X.aye` exactly `X.json` if it exists. The
 //!   exit status must be 0 when no test failed, and 1 otherwise.
@@ -302,6 +304,21 @@ fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
 fn error_case(path: &Path) -> Result<(), String> {
     let src = read(path).unwrap();
     let expected = read(&path.with_extension("err")).ok_or("missing .err file")?;
+    if let Some(args) = read(&path.with_extension("args")) {
+        let file = name(path);
+        let mut argv = vec!["check", file.as_str()];
+        argv.extend(args.split_whitespace());
+        let (_, err, code) = aye(path.parent().unwrap(), &argv)?;
+        if code == Some(1) && err.trim_end() == expected.trim_end() {
+            return Ok(());
+        }
+        return Err(format!(
+            "`aye {}`: status {code:?}\n--- expected\n{}\n--- got\n{}",
+            argv.join(" "),
+            expected.trim_end(),
+            err.trim_end()
+        ));
+    }
     match driver::compile_to_c(&name(path), &src, Mode::Debug) {
         Ok(_) => Err("compiled successfully, expected an error".into()),
         Err(d) if join(&d) == expected.trim_end() => Ok(()),
@@ -637,6 +654,112 @@ fn cli_build_link(work: &Path) -> Result<(), String> {
         return Err(format!(
             "the program of `aye build -o` printed:\n{}",
             String::from_utf8_lossy(&out.stdout)
+        ));
+    }
+    Ok(())
+}
+
+/// `aye build --target x86_64-macos` makes a Mach-O x86_64 executable; it
+/// runs when Rosetta is there. Skipped off macOS.
+fn cli_target_x86_64(work: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        println!("skipped cli/aye build --target x86_64-macos: not macOS");
+        return Ok(());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let exe = work.join("hello_x86_64");
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            "x86_64-macos",
+            "tests/cases/hello.aye",
+            "-o",
+            exe.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!(
+            "`aye build --target x86_64-macos`: {code:?}\n{err}"
+        ));
+    }
+    // A Mach-O 64-bit header: magic `cf fa ed fe`, then the CPU type
+    // (x86_64: `07 00 00 01`).
+    let bytes = std::fs::read(&exe).map_err(|e| e.to_string())?;
+    if bytes[..8] != [0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01] {
+        return Err(format!("not a Mach-O x86_64 file: {:02x?}", &bytes[..8]));
+    }
+    if !Command::new("arch")
+        .args(["-x86_64", "true"])
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        println!("skipped running cli/aye build --target x86_64-macos: no Rosetta");
+        return Ok(());
+    }
+    let out = Command::new("arch")
+        .arg("-x86_64")
+        .arg(&exe)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let want = read(&root.join("tests/cases/hello.out")).unwrap();
+    if !out.status.success() || String::from_utf8_lossy(&out.stdout) != want {
+        return Err(format!(
+            "the x86_64 program printed:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        ));
+    }
+    Ok(())
+}
+
+/// `aye build --target wasm32-wasip1` links `hello.aye` into a WebAssembly
+/// module (bytes `\0asm`). Skipped without the WASI toolchain.
+fn cli_target_wasm(work: &Path) -> Result<(), String> {
+    let wasi = driver::find_target("wasm32-wasip1").unwrap();
+    if !wasi.toolchain_available() {
+        println!("skipped cli/aye build --target wasm32-wasip1: no WASI toolchain");
+        return Ok(());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let wasm = work.join("hello.wasm");
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            "wasm32-wasip1",
+            "tests/cases/hello.aye",
+            "-o",
+            wasm.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!(
+            "`aye build --target wasm32-wasip1`: {code:?}\n{err}"
+        ));
+    }
+    let bytes = std::fs::read(&wasm).map_err(|e| e.to_string())?;
+    if bytes[..4] != *b"\0asm" {
+        return Err(format!("not a wasm file: {:02x?}", &bytes[..4]));
+    }
+    // `aye run` runs it under Node when `node` is there.
+    if !Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        println!("skipped running cli/aye build --target wasm32-wasip1: no node");
+        return Ok(());
+    }
+    let (out, err, code) = aye(
+        root,
+        &["run", "--target", "wasm32-wasip1", "tests/cases/hello.aye"],
+    )?;
+    let want = read(&root.join("tests/cases/hello.out")).unwrap();
+    if code != Some(0) || out != want {
+        return Err(format!(
+            "`aye run --target wasm32-wasip1`: {code:?}\n{out}{err}"
         ));
     }
     Ok(())
@@ -1041,6 +1164,16 @@ fn main() {
         add(&mut jobs, "cli/aye build -o".to_string(), move || {
             cli_build_link(w)
         });
+        add(
+            &mut jobs,
+            "cli/aye build --target x86_64-macos".to_string(),
+            move || cli_target_x86_64(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target wasm32-wasip1".to_string(),
+            move || cli_target_wasm(w),
+        );
         add(&mut jobs, "cli/aye check".to_string(), cli_check);
         add(
             &mut jobs,

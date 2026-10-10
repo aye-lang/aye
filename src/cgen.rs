@@ -728,6 +728,7 @@ AYE_RT void aye_stack_unguard(void) {
    unlimited stack (Linux) is taken as 8 MiB. */
 AYE_RT void aye_stack_guard_main(void) {
     if (!AYE_CHECKS) return;
+#ifndef __wasm32__ /* no signals and no guard page: a stack overflow traps */
     aye_sigaction_t sa = {0};
     sa.action = (void *)aye_on_fault;
     sa.flags = AYE_SA_FLAGS;
@@ -737,6 +738,7 @@ AYE_RT void aye_stack_guard_main(void) {
     size_t size = (size_t)8 << 20;
     if (aye_rt_getrlimit(3, lim) == 0 && lim[0] < ((uint64_t)1 << 40)) size = (size_t)lim[0];
     aye_stack_guard(size);
+#endif
 }
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and

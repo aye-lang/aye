@@ -48,7 +48,9 @@ aye spec [<section> | all]                            # print the core of the la
 ```
 
 `build`, `run` and `test` take `--cflags "flags"` for more clang flags, such
-as `--cflags -fsanitize=thread`.
+as `--cflags -fsanitize=thread`. `--target <t>` (`aarch64-macos`,
+`x86_64-macos`, `aarch64-linux`, `x86_64-linux`, `wasm32-wasip1`,
+`wasm32-freestanding`; default: this machine) builds for another target.
 
 `aye fmt` works on tokens and keeps every comment and line break; it sets
 indentation (4 spaces) and spacing, keeps at most one blank line in a row and
