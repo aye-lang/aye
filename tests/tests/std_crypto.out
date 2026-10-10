@@ -4,5 +4,8 @@ test "streaming in two pieces equals one shot, at every split" ... ok
 test "websocket handshake accept key" ... ok
 test "hmac keys of 0, 64 and 65 bytes" ... ok
 test "hmac streaming equals one shot" ... ok
+test "randomBytes fills a long buffer and writes only the slice" ... ok
+test "randomBytes of nothing" ... ok
+test "constantTimeEqual compares length and every byte" ... ok
 
-6 passed; 0 failed
+9 passed; 0 failed

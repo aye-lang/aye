@@ -1,0 +1,8 @@
+test "base64 vectors, both ways" ... ok
+test "base64 keeps all byte values" ... ok
+test "base64 url alphabet and padding" ... ok
+test "base64 rejects bad characters and lengths" ... ok
+test "hex lowercase out, both cases in" ... ok
+test "hex rejects odd length and non-hex" ... ok
+
+6 passed; 0 failed
