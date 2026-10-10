@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Bump when the generated source changes, so old cache entries are not used.
-const GENERATOR_VERSION: u32 = 1;
+const GENERATOR_VERSION: u32 = 2;
 
 /// A header to import.
 #[derive(Clone, Debug, Hash)]

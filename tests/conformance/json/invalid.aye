@@ -1,0 +1,154 @@
+// Texts that RFC 8259 does not allow: the error tag, the byte offset and
+// the message that `parseDiag` reports.
+
+import std.diag.Diagnostics
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.text
+import std.text.Builder
+
+let CASES =
+    \\[1,]
+    \\{"a":1,}
+    \\[,1]
+    \\[1 2]
+    \\{"a" 1}
+    \\{a:1}
+    \\{'a':1}
+    \\{"a":}
+    \\{1:2}
+    \\[1
+    \\{"a":1
+    \\{"a"
+    \\{
+    \\[
+    \\]
+    \\1 2
+    \\[] []
+    \\[1,2]]
+    \\{"a":1}}
+    \\nul
+    \\nulL
+    \\[tru]
+    \\True
+    \\NaN
+    \\Infinity
+    \\-Infinity
+    \\-NaN
+    \\01
+    \\-01
+    \\00
+    \\-
+    \\[-]
+    \\-a
+    \\+1
+    \\.5
+    \\1.
+    \\1.e3
+    \\1e
+    \\1e+
+    \\0x10
+    \\1e400
+    \\-1e400
+    \\"abc
+    \\"\x"
+    \\"\u12"
+    \\"\uZZZZ"
+    \\"\uD800"
+    \\"\uDC00"
+    \\"\uD83D\u0041"
+    \\"\uD83Dx"
+    \\"\uDE00\uD83D"
+    \\"\
+    \\// c
+    \\[1 /* c */]
+    \\# c
+
+fn show(gpa: *mut General, input: []u8) !void {
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    var diags = Diagnostics.init(gpa.allocator())
+    defer diags.deinit()
+    var out = Builder.init(gpa.allocator())
+    defer out.deinit()
+    let digits = "0123456789abcdef"
+    try out.appendByte('\'')
+    for c in input {
+        if c < 0x20 || c >= 0x7F {
+            try out.append("\\x")
+            try out.appendByte(digits[(c >> 4) as usize])
+            try out.appendByte(digits[(c & 15) as usize])
+        } else {
+            try out.appendByte(c)
+        }
+    }
+    try out.append("' => ")
+    let v = json.parseDiag(&mut arena, input, &mut diags) catch |e| {
+        try out.append(@tagName(e))
+        try out.append(" @")
+        try out.appendUint(diags.items()[0].start as u64)
+        try out.append(": ")
+        try out.append(diags.items()[0].message)
+        @println(out.bytes())
+        return
+    }
+    @println("parsed (a bug)")
+}
+
+fn report(arena: *mut Arena, diags: *mut Diagnostics, label: []u8, input: []u8) !void {
+    diags.clear()
+    let v = json.parseDiag(arena, input, diags) catch |e| {
+        @println(label)
+        @println(@tagName(e))
+        @println(diags.items()[0].start)
+        return
+    }
+    @println("parsed (a bug)")
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var it = text.split(CASES, "\n")
+    while it.next() |line| {
+        if line.len > 0 {
+            try show(&mut gpa, line)
+        }
+    }
+    // Empty and whitespace-only texts, control characters, invalid UTF-8.
+    try show(&mut gpa, "")
+    try show(&mut gpa, " \n")
+    try show(&mut gpa, "\"a\tb\"")
+    try show(&mut gpa, "\"a\nb\"")
+    try show(&mut gpa, "\"\x01\"")
+    try show(&mut gpa, "\xEF\xBB\xBF1")
+    try show(&mut gpa, "\x0B1")
+    try show(&mut gpa, "\xC2\xA01")
+    try show(&mut gpa, "1\x00")
+    try show(&mut gpa, "\"\xC3\"")
+    try show(&mut gpa, "\"\xFF\"")
+    try show(&mut gpa, "\"\xC0\x80\"")
+    try show(&mut gpa, "\"\xED\xA0\x80\"")
+    // Nesting: 512 levels parse (see valid.aye), 513 do not.
+    var deep = Builder.init(gpa.allocator())
+    defer deep.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    var diags = Diagnostics.init(gpa.allocator())
+    defer diags.deinit()
+    for _ in 0..json.maxDepth + 1 {
+        try deep.appendByte('[')
+    }
+    try report(&mut arena, &mut diags, "513 arrays", deep.bytes())
+    deep.clear()
+    for _ in 0..100000 {
+        try deep.appendByte('[')
+    }
+    try report(&mut arena, &mut diags, "100000 arrays", deep.bytes())
+    deep.clear()
+    for _ in 0..json.maxDepth + 1 {
+        try deep.append("{\"a\":")
+    }
+    try report(&mut arena, &mut diags, "513 objects", deep.bytes())
+}

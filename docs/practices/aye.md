@@ -453,6 +453,24 @@ Callers take `&ev.key`, `&ev.motion` with no cast.
 unchecked casts. A literal sets exactly one field (E0104); a union has no
 `==`.
 
+### A std `extern fn` must not reuse a libc name that a program may `@cimport`
+**Context:** std declares a libc function by hand, and some program
+`@cimport`s the header that declares the same function (the browser's
+`archive.aye` imports dirent.h).
+**Bad:** `extern fn closedir(dir: [*]u8) i32` in `std/fs/fs.aye`: with
+`import std.fs` and `@cimport("dirent.h")` the program fails with
+`E0096: C function `closedir` is declared twice with different
+signatures`. `extern("closedir") fn cClosedir` does not help: the check
+is on the C name.
+**Good:** a prelude function under an `aye_std_` name that calls the libc
+function through its `aye_rt_` alias (`aye_std_closedir`,
+`aye_std_rewinddir` in `src/cgen.rs`):
+```aye
+extern fn aye_std_closedir(dir: [*]u8)
+```
+**Why:** the prelude's names are ours alone, so no header can declare
+them. `aye check browser` finds this.
+
 ## Coroutines (`std.coro`)
 
 ### Resume a coroutine only on the thread that made it

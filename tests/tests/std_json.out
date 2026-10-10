@@ -1,0 +1,7 @@
+test "scalars" ... ok
+test "an object keeps its order and finds the last of a repeated name" ... ok
+test "accessors give null for the wrong kind" ... ok
+test "errors carry a tag and an offset" ... ok
+test "a parse without diagnostics still gives the tag" ... ok
+
+5 passed; 0 failed

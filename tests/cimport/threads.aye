@@ -2,7 +2,11 @@
 // typedefs of other headers (`sys/_pthread/` on macOS,
 // `bits/pthreadtypes.h` on Linux) that the functions use, so `@cimport`
 // declares them too, with the fields of the records they name: an
-// attribute lives on the stack with the size C gives it.
+// attribute lives on the stack with the size C gives it. Only
+// `pthread.h`'s own declarations come in, not those of `time.h`, which it
+// includes: std.time's `nanosleep` does not clash with C's (gap #54).
+
+import std.time
 
 @link("pthread")
 
@@ -36,6 +40,7 @@ pub fn main() {
     var thread = @zeroed(pt.pthread_t)
     @println(pt.pthread_create(&mut thread, &attr, work, @ptrCast([*]u8, &mut job)) == 0)
     @println(pt.pthread_join(thread, null) == 0)
+    time.sleep(0)
     @println(job.sum)
     @println(pt.pthread_attr_destroy(&mut attr) == 0)
 }

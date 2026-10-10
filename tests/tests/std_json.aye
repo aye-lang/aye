@@ -1,0 +1,77 @@
+// O3.1: std.json parses into an arena; the tests run on the leak-checked
+// allocator, so an arena that is not freed would be reported.
+
+import std.diag.Diagnostics
+import std.heap.Arena
+import std.json
+import std.json.ParseError
+import std.json.Value
+import std.mem
+import std.testing
+
+test "scalars" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "  -12.5e1 ")
+    @expectEqual(-125.0, v.asNumber().?)
+    v = try json.parse(&mut arena, "true")
+    @expect(v.asBool().?)
+    v = try json.parse(&mut arena, "null")
+    @expect(v.isNull())
+    v = try json.parse(&mut arena, "\"a\\u00e9\\uD83D\\uDE00\\n\"")
+    @expect(mem.eql(v.asString().?, "a\xC3\xA9\xF0\x9F\x98\x80\n"))
+}
+
+test "an object keeps its order and finds the last of a repeated name" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    let v = try json.parse(&mut arena, "{\"b\":1,\"a\":[2,3],\"b\":4}")
+    let members = v.asObject().?
+    @expectEqual(3, members.len)
+    @expect(mem.eql(members[0].key, "b"))
+    @expect(mem.eql(members[1].key, "a"))
+    @expectEqual(4.0, v.get("b").?.asNumber().?)
+    @expectEqual(3.0, v.get("a").?.at(1).?.asNumber().?)
+    @expect(v.get("c") == null)
+    @expect(v.get("a").?.at(2) == null)
+}
+
+test "accessors give null for the wrong kind" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    let v = try json.parse(&mut arena, "[\"x\", 1, null]")
+    @expect(v.get("x") == null)
+    @expect(v.asString() == null)
+    @expect(v.at(0).?.asNumber() == null)
+    @expect(v.at(1).?.asString() == null)
+    @expect(v.at(1).?.asBool() == null)
+    @expect(v.at(1).?.asArray() == null)
+    @expect(v.at(1).?.asObject() == null)
+    @expect(!v.at(1).?.isNull())
+    @expect(v.at(2).?.isNull())
+}
+
+test "errors carry a tag and an offset" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    var diags = Diagnostics.init(testing.allocator())
+    defer diags.deinit()
+    json.parseDiag(&mut arena, "[1,]", &mut diags) catch |e| {
+        @expect(e == ParseError.UnexpectedToken)
+        @expectEqual(1, diags.len())
+        @expectEqual(3, diags.items()[0].start)
+        @expectEqual(2, diags.items()[0].code)
+        return
+    }
+    @expect(false)
+}
+
+test "a parse without diagnostics still gives the tag" {
+    var arena = Arena.init(testing.allocator())
+    defer arena.deinit()
+    json.parse(&mut arena, "01") catch |e| {
+        @expect(e == ParseError.InvalidNumber)
+        return
+    }
+    @expect(false)
+}

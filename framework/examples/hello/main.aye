@@ -1,0 +1,19 @@
+// The hello app: one page, `/`, in a hand-written route table. Any other
+// path gets 404.
+//
+//     hello [--port N]        listens on 127.0.0.1:N (8080 by default)
+
+import std.heap.General
+import web
+import web.Method
+import web.Route
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let routes = [1]Route{
+        Route { method: Method.Get, pattern: "/", handler: page },
+    }
+    try web.run(alloc, web.portArg(alloc, 8080), routes[..])
+}

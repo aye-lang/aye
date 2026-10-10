@@ -1,0 +1,36 @@
+// web.Html: the body of a page, built by appending.
+
+import std.text.Builder
+
+/// A growing HTML document. `raw` appends markup as it is; `text` appends
+/// text with `& < > "` escaped.
+pub struct Html {
+    buf: Builder
+
+    /// Appends `s` unchanged.
+    pub fn raw(self: *mut Self, s: []u8) Error!void {
+        try self.buf.append(s)
+    }
+
+    /// Appends `s` as text: `&`, `<`, `>` and `"` become entities.
+    pub fn text(self: *mut Self, s: []u8) Error!void {
+        for c in s {
+            if c == '&' {
+                try self.buf.append("&amp;")
+            } else if c == '<' {
+                try self.buf.append("&lt;")
+            } else if c == '>' {
+                try self.buf.append("&gt;")
+            } else if c == '"' {
+                try self.buf.append("&quot;")
+            } else {
+                try self.buf.appendByte(c)
+            }
+        }
+    }
+
+    /// The bytes appended so far.
+    pub fn bytes(self: *Self) []u8 {
+        return self.buf.bytes()
+    }
+}

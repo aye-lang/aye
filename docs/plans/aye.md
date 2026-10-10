@@ -65,7 +65,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, list, log, map, math, mem, net (IPv4 TCP, O1.3), os, pool, sort, sync, testing, text, thread, time. Missing for O6: http, json, path, process, wall clock, crypto, base64/hex, fs directories and stat.
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1). Missing for O6: wall clock (O3.2), crypto (O3.3), base64/hex (O3.3a), json writer (O3.1a).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
@@ -105,45 +105,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O1 server basics
 
-#### O1.5: std.fs breadth
-- lane: aye
-- goal: `stat` (size, mtime, kind), `readDir`, `mkdir`, `remove`, `rename` in `std.fs`.
-- serves: O6
-- files: `std/fs/fs.aye`, `docs/spec.md` (fs stays in full in the spec), `tests/cases/`
-- verify: `cargo test --release --test golden` → exit 0, with goldens in a temp directory
-- depends on: –
-- parallel with: O1.3b, O1.4, O1.6 (merge one after the other)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: `stat` must work on macOS and Linux (`st_mtimespec` vs `st_mtim`, the X1.1 problem); if X1.1 chose a helper, reuse it.
-
-#### O1.5a: std.path
-- lane: aye
-- goal: `join`, `dirname`, `basename`, `extension`, `normalize`, and a check that a path stays under a root.
-- serves: O6
-- files: `std/path/` (new), `docs/spec.md` §15 (index line)
-- verify: `cargo test --release --test golden` → exit 0, with `test` blocks covering `..`, `.`, trailing and doubled slashes
-- depends on: –
-- parallel with: all std steps (merge one after the other)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
-#### O1.6: std.process and the environment
-- lane: aye
-- goal: `spawn(argv)` with stdin/stdout/stderr piped or inherited, `wait` → exit status, `kill`; `std.os.getenv`.
-- serves: O6
-- files: `std/process/` (new), `std/os/os.aye`, `docs/spec.md`, `tests/cases/`
-- verify: `cargo test --release --test golden` → exit 0, with a golden that runs `/bin/echo`, pipes through `cat`, and reads a non-zero exit status
-- depends on: –
-- parallel with: O1.3b, O1.4, O1.5 (merge one after the other)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: if the time box runs out, commit `spawn`/`wait` and report `getenv` and `kill` as the follow-up.
-
 #### O1.7: first HTTP benchmark
 - lane: aye
 - goal: hello world on `std.http` in `fast` mode against Go `net/http` and Node 22 `http`, `ab -k -c 50 -n 100000`; if Aye is below Node, propose a diagnose step.
@@ -157,33 +118,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
-#### O1.9: quiet exit on a closed pipe
-- lane: aye
-- goal: `aye spec | head`, `aye doc --signatures std | head` and every other command exit quietly when stdout is closed (no Rust panic text); agents pipe output to `head` all the time.
-- serves: AI-writability (no misleading panic in tool output)
-- files: `src/main.rs` (or wherever output is written), a test in `tests/golden.rs` or a new small test
-- verify: `cargo test --release` → exit 0, with a test that runs `aye spec` with a closed stdout and checks stderr is empty
-- depends on: –
-- parallel with: all but other `src/main.rs` steps
-- where: cloud (local until X1.2)
-- model: sonnet
-- time box: 20 min
-- notes: found in X2.2 (`aye spec | head -3` printed a broken-pipe panic).
-
 ## Cards: O3 std breadth (next)
-
-#### O3.1: std.json parse
-- lane: aye
-- goal: parse JSON into a tree in an arena, with typed accessors that give clear errors.
-- serves: O6
-- files: `std/json/` (new), `docs/spec.md` §15, `tests/conformance/json/`
-- verify: `cargo test --release --test conformance` → exit 0, area `json` with the RFC 8259 valid and invalid cases
-- depends on: –
-- parallel with: O3.2, O3.3 (merge one after the other)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: `browser/js/json.aye` parses JSON for JS values; a model, not importable.
 
 #### O3.1a: std.json writer
 - lane: aye
@@ -281,6 +216,14 @@ sources `tests/spec.rs` reads; they merge one after the other.
 Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
+- O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
+- O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
+- O1.5b `std.fs.readDir`: `stat` fallback for `DT_UNKNOWN` entries; a follow-links `stat` beside the `lstat` one if a caller needs it (O1.5 report). Verify: `cargo test --release --test golden`.
+- P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
+- O1.13a the spec core is ~1.2 KB under the 40000-byte cap (`aye_spec_core_is_small`); when it fills up, move §12 (1.9 KB) out of the core or shorten §7.
+- O1.12a E0006 hint follow-ups: goldens for `or` and for `a and b` outside `if` (other E0006 sites in `src/parser.rs` may skip `Parser::unexpected`); the `not` hint fires on any syntax error after an identifier named `not`, guard it (O1.12 report).
+- O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
 - O2.3 wasm32-wasi prelude without threads, coroutines or `mmap`; goldens and conformance under Node 22 `node:wasi` (old O2 table).
@@ -299,7 +242,7 @@ brackets.
 - O7.1 `docs/aye-bench.md` complete: req/s rerun, `browser/` build times, binary sizes (old O7 table).
 - O7.2 server gate O13, recorded in `docs/milestones.md` (old O7 table).
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).
-- `Arena.reset` keeping its first block (framework F1.1, need 5).
+- `Arena.reset` keeping its first block (framework need 5; F1.1 did not need it, later phases may).
 - Signals for graceful stop (framework F3, need 10).
 
 ## Reference

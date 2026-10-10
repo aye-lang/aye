@@ -1,0 +1,10 @@
+// The home page of the hello app.
+
+import web.Error
+import web.Request
+import web.Response
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let html = res.html()
+    try html.raw("<!doctype html><title>Hello</title><h1>Hello from Aye</h1>")
+}

@@ -64,6 +64,11 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
         include_str!("../std/http/http.aye"),
     ),
     (
+        "std.json",
+        "std/json/json.aye",
+        include_str!("../std/json/json.aye"),
+    ),
+    (
         "std.list",
         "std/list/list.aye",
         include_str!("../std/list/list.aye"),
@@ -95,9 +100,19 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
     ),
     ("std.os", "std/os/os.aye", include_str!("../std/os/os.aye")),
     (
+        "std.path",
+        "std/path/path.aye",
+        include_str!("../std/path/path.aye"),
+    ),
+    (
         "std.pool",
         "std/pool/pool.aye",
         include_str!("../std/pool/pool.aye"),
+    ),
+    (
+        "std.process",
+        "std/process/process.aye",
+        include_str!("../std/process/process.aye"),
     ),
     (
         "std.sort",
