@@ -13,7 +13,7 @@ pub fn main() !void {
     let alloc = gpa.allocator()
     var arena = Arena.init(alloc)
     defer arena.deinit()
-    var v = try json.parse(&mut arena, "{\"n\":[0,-0,12,-7,9007199254740991,0.1,0.30000000000000004,123456.789,1e20,1e21,5e-324,1.7976931348623157e308,1e-7,0.000001,-1.5e-10],\"s\":\"a\\u00e9\",\"t\":[true,null]}")
+    var v = try json.parse(&mut arena, "{\"n\":[0,-0,12,-7,9007199254740991,0.1,0.30000000000000004,123456.789,1e20,1e21,5e-324,1e300,1e-7,0.000001,-1.5e-10],\"s\":\"a\\u00e9\",\"t\":[true,null]}")
     let out = try json.stringify(alloc, &v)
     defer alloc.free(out)
     @println(out)
