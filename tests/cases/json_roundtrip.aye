@@ -1,0 +1,26 @@
+// std.json parses and writes numbers: the writer asks `ecvt` for up to 17
+// digits and checks them with `strtod`. Runs on wasm32-freestanding too
+// (X.freestanding), where both come from the host.
+
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.text.Builder
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    var arena = Arena.init(alloc)
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "{\"n\":[0,-0,12,-7,9007199254740991,0.1,0.30000000000000004,123456.789,1e20,1e21,5e-324,1.7976931348623157e308,1e-7,0.000001,-1.5e-10],\"s\":\"a\\u00e9\",\"t\":[true,null]}")
+    let out = try json.stringify(alloc, &v)
+    defer alloc.free(out)
+    @println(out)
+    var again = try json.parse(&mut arena, out)
+    @println(json.equals(&v, &again))
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try json.writePretty(&mut b, &v, 0)
+    @println(b.bytes())
+}
