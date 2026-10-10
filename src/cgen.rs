@@ -57,7 +57,264 @@ void __asan_unpoison_memory_region(void const volatile *, size_t);
 #define AYE_RT static __attribute__((unused))
 #define AYE_STR_(x) #x
 #define AYE_STR(x) AYE_STR_(x)
+#ifdef AYE_FREESTANDING
+/* wasm32-freestanding: no libc. The host provides `env.aye_write(fd, ptr,
+   len)` and `env.aye_abort()`; the runtime below stands in for the libc
+   symbols that the prelude reaches through `AYE_SYM` (`aye_fs_*`) and for
+   those that clang and std call by their own names (`memcpy`, `puts`).
+   `main` becomes the export `aye_main`. */
+#define AYE_SYM(n) "aye_fs_" n
+#define main __attribute__((export_name("aye_main"))) aye_main
+#define AYE_EXPORT(n) __attribute__((export_name(n)))
+__attribute__((import_module("env"), import_name("aye_write"))) extern void aye_js_write(int, const void *, size_t);
+__attribute__((import_module("env"), import_name("aye_abort"))) extern void aye_js_abort(void) __attribute__((noreturn));
+void *aye_fs_memcpy(void *, const void *, size_t) __asm__("memcpy");
+void *aye_fs_memmove(void *, const void *, size_t) __asm__("memmove");
+void *aye_fs_memset(void *, int, size_t) __asm__("memset");
+int aye_fs_memcmp_(const void *, const void *, size_t) __asm__("memcmp");
+size_t aye_fs_strlen(const char *) __asm__("strlen");
+int aye_fs_puts(const char *) __asm__("puts");
+void *aye_fs_memcpy(void *d, const void *s, size_t n) {
+    uint8_t *p = d;
+    const uint8_t *q = s;
+    while (n--) *p++ = *q++;
+    return d;
+}
+void *aye_fs_memmove(void *d, const void *s, size_t n) {
+    uint8_t *p = d;
+    const uint8_t *q = s;
+    if (p < q) while (n--) *p++ = *q++;
+    else while (n--) p[n] = q[n];
+    return d;
+}
+void *aye_fs_memset(void *d, int c, size_t n) {
+    uint8_t *p = d;
+    while (n--) *p++ = (uint8_t)c;
+    return d;
+}
+int aye_fs_memcmp_(const void *a, const void *b, size_t n) {
+    const uint8_t *p = a, *q = b;
+    for (; n; n--, p++, q++) if (*p != *q) return *p - *q;
+    return 0;
+}
+int aye_fs_memcmp(const void *a, const void *b, size_t n) { return aye_fs_memcmp_(a, b, n); }
+size_t aye_fs_strlen(const char *s) {
+    size_t n = 0;
+    while (s[n]) n++;
+    return n;
+}
+/* clang's overflow check of a 64-bit `*` calls compiler-rt's __multi3 */
+__int128 __multi3(__int128 a, __int128 b) {
+    uint64_t al = (uint64_t)a, ah = (uint64_t)((unsigned __int128)a >> 64);
+    uint64_t bl = (uint64_t)b, bh = (uint64_t)((unsigned __int128)b >> 64);
+    uint64_t a0 = al & 0xffffffff, a1 = al >> 32, b0 = bl & 0xffffffff, b1 = bl >> 32;
+    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    uint64_t mid = (p00 >> 32) + (p01 & 0xffffffff) + (p10 & 0xffffffff);
+    uint64_t lo = (p00 & 0xffffffff) | (mid << 32);
+    uint64_t hi = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32) + al * bh + ah * bl;
+    return (__int128)(((unsigned __int128)hi << 64) | lo);
+}
+int aye_fs_fflush(void *f) { return 0; }
+void aye_fs_abort(void) { aye_js_abort(); }
+void aye_fs_exit(int code) { __builtin_trap(); }
+/* Blocks of 2^c bytes (c >= 4) after a 16-byte header, from a bump pointer
+   that grows the memory by pages; a freed block goes on the list of its
+   class and is reused as is. */
+extern uint8_t __heap_base;
+static uint8_t *aye_fs_brk, *aye_fs_end;
+static void *aye_fs_lists[32];
+void *aye_fs_malloc(size_t n) {
+    unsigned c = 4;
+    while (c < 31 && ((size_t)1 << c) < n) c++;
+    if (((size_t)1 << c) < n) return 0;
+    void *p = aye_fs_lists[c];
+    if (p) {
+        aye_fs_lists[c] = *(void **)p;
+        return p;
+    }
+    if (!aye_fs_brk) {
+        aye_fs_brk = (uint8_t *)(((size_t)&__heap_base + 15) & ~(size_t)15);
+        aye_fs_end = (uint8_t *)(__builtin_wasm_memory_size(0) * 65536);
+    }
+    size_t total = ((size_t)1 << c) + 16;
+    if ((size_t)(aye_fs_end - aye_fs_brk) < total) {
+        size_t pages = (total - (size_t)(aye_fs_end - aye_fs_brk) + 65535) / 65536;
+        if (__builtin_wasm_memory_grow(0, pages) == (size_t)-1) return 0;
+        aye_fs_end += pages * 65536;
+    }
+    *(size_t *)aye_fs_brk = c;
+    p = aye_fs_brk + 16;
+    aye_fs_brk += total;
+    return p;
+}
+void aye_fs_free(void *p) {
+    if (!p) return;
+    size_t c = *(size_t *)((uint8_t *)p - 16);
+    *(void **)p = aye_fs_lists[c];
+    aye_fs_lists[c] = p;
+}
+/* printf and dprintf: `%s %.*s %c %d %u %x %g %%` with `l` and `ll`,
+   written to `env.aye_write` in pieces of at most 128 bytes. */
+typedef struct {
+    int fd;
+    size_t n;
+    char buf[128];
+} aye_fs_out;
+static void aye_fs_flush(aye_fs_out *o) {
+    if (o->n) aye_js_write(o->fd, o->buf, o->n);
+    o->n = 0;
+}
+static void aye_fs_put(aye_fs_out *o, const char *s, size_t n) {
+    if (n >= sizeof o->buf) {
+        aye_fs_flush(o);
+        aye_js_write(o->fd, s, n);
+        return;
+    }
+    if (o->n + n > sizeof o->buf) aye_fs_flush(o);
+    __builtin_memcpy(o->buf + o->n, s, n);
+    o->n += n;
+}
+static void aye_fs_putu(aye_fs_out *o, unsigned long long v, unsigned base) {
+    char t[24];
+    int i = 24;
+    do {
+        t[--i] = "0123456789abcdef"[v % base];
+        v /= base;
+    } while (v);
+    aye_fs_put(o, t + i, (size_t)(24 - i));
+}
+static double aye_fs_pow10(int e) {
+    static const double p[] = {1e1, 1e2, 1e4, 1e8, 1e16, 1e32, 1e64, 1e128, 1e256};
+    double r = 1;
+    for (int i = 0; e; i++, e >>= 1) if (e & 1) r *= p[i];
+    return r;
+}
+/* `%g`: six significant digits, no trailing zeros */
+static void aye_fs_putg(aye_fs_out *o, double x) {
+    if (x != x) return aye_fs_put(o, "nan", 3);
+    if (x < 0 || (x == 0 && 1 / x < 0)) {
+        aye_fs_put(o, "-", 1);
+        x = -x;
+    }
+    if (x > 1.7976931348623157e308) return aye_fs_put(o, "inf", 3);
+    if (x == 0) return aye_fs_put(o, "0", 1);
+    int e = 0;
+    if (x >= 10) {
+        for (int k = 256; k; k >>= 1) if (x >= aye_fs_pow10(e + k)) e += k;
+        x /= aye_fs_pow10(e);
+    } else if (x < 1) {
+        int m = 0;
+        for (int k = 256; k; k >>= 1) if (x * aye_fs_pow10(m + k) < 10) m += k;
+        x *= aye_fs_pow10(m);
+        e = -m;
+    }
+    while (x >= 10) x /= 10, e++;
+    while (x < 1) x *= 10, e--;
+    uint64_t m = (uint64_t)(x * 1e5 + 0.5);
+    if (m >= 1000000) {
+        m = 100000;
+        e++;
+    }
+    char d[6];
+    for (int i = 5; i >= 0; i--, m /= 10) d[i] = (char)('0' + m % 10);
+    int nd = 6;
+    while (nd > 1 && d[nd - 1] == '0') nd--;
+    char t[16];
+    int n = 0;
+    if (e < -4 || e >= 6) {
+        t[n++] = d[0];
+        if (nd > 1) t[n++] = '.';
+        for (int i = 1; i < nd; i++) t[n++] = d[i];
+        t[n++] = 'e';
+        t[n++] = e < 0 ? '-' : '+';
+        unsigned a = (unsigned)(e < 0 ? -e : e);
+        if (a >= 100) t[n++] = (char)('0' + a / 100);
+        t[n++] = (char)('0' + a / 10 % 10);
+        t[n++] = (char)('0' + a % 10);
+    } else if (e < 0) {
+        t[n++] = '0';
+        t[n++] = '.';
+        for (int i = -e - 1; i > 0; i--) t[n++] = '0';
+        for (int i = 0; i < nd; i++) t[n++] = d[i];
+    } else {
+        for (int i = 0; i <= e; i++) t[n++] = i < nd ? d[i] : '0';
+        if (nd > e + 1) t[n++] = '.';
+        for (int i = e + 1; i < nd; i++) t[n++] = d[i];
+    }
+    aye_fs_put(o, t, (size_t)n);
+}
+static void aye_fs_vformat(aye_fs_out *o, const char *f, __builtin_va_list ap) {
+    for (; *f; f++) {
+        if (*f != '%') {
+            size_t n = 0;
+            while (f[n] && f[n] != '%') n++;
+            aye_fs_put(o, f, n);
+            f += n - 1;
+            continue;
+        }
+        f++;
+        int prec = -1, l = 0;
+        if (*f == '.' && f[1] == '*') {
+            prec = __builtin_va_arg(ap, int);
+            f += 2;
+        }
+        while (*f == 'l') l++, f++;
+        switch (*f) {
+        case 's': {
+            const char *s = __builtin_va_arg(ap, const char *);
+            size_t n = 0;
+            while ((prec < 0 || n < (size_t)prec) && s[n]) n++;
+            aye_fs_put(o, s, n);
+            break;
+        }
+        case 'c': {
+            char c = (char)__builtin_va_arg(ap, int);
+            aye_fs_put(o, &c, 1);
+            break;
+        }
+        case 'd': {
+            long long v = l > 1 ? __builtin_va_arg(ap, long long) : l ? __builtin_va_arg(ap, long) : __builtin_va_arg(ap, int);
+            if (v < 0) aye_fs_put(o, "-", 1);
+            aye_fs_putu(o, v < 0 ? 0ull - (unsigned long long)v : (unsigned long long)v, 10);
+            break;
+        }
+        case 'u':
+        case 'x': {
+            unsigned long long v = l > 1 ? __builtin_va_arg(ap, unsigned long long) : l ? __builtin_va_arg(ap, unsigned long) : __builtin_va_arg(ap, unsigned);
+            aye_fs_putu(o, v, *f == 'u' ? 10 : 16);
+            break;
+        }
+        case 'g': aye_fs_putg(o, __builtin_va_arg(ap, double)); break;
+        case '%': aye_fs_put(o, "%", 1); break;
+        }
+    }
+    aye_fs_flush(o);
+}
+int aye_fs_printf(const char *f, ...) {
+    aye_fs_out o = {1, 0};
+    __builtin_va_list ap;
+    __builtin_va_start(ap, f);
+    aye_fs_vformat(&o, f, ap);
+    __builtin_va_end(ap);
+    return 0;
+}
+int aye_fs_dprintf(int fd, const char *f, ...) {
+    aye_fs_out o = {fd, 0};
+    __builtin_va_list ap;
+    __builtin_va_start(ap, f);
+    aye_fs_vformat(&o, f, ap);
+    __builtin_va_end(ap);
+    return 0;
+}
+int aye_fs_puts(const char *s) {
+    aye_js_write(1, s, aye_fs_strlen(s));
+    aye_js_write(1, "\n", 1);
+    return 1;
+}
+#else
 #define AYE_SYM(n) AYE_STR(__USER_LABEL_PREFIX__) n
+#define AYE_EXPORT(n)
+#endif
 extern int aye_rt_printf(const char *, ...) __asm__(AYE_SYM("printf"));
 extern int aye_rt_dprintf(int, const char *, ...) __asm__(AYE_SYM("dprintf"));
 extern int aye_rt_fflush(void *) __asm__(AYE_SYM("fflush"));
@@ -1623,7 +1880,10 @@ impl Gen {
             self.out.push_str("    }\n    return 2;\n}\n");
             return;
         }
-        let main = p.funcs.iter().find(|f| f.is_main).unwrap();
+        // Only a freestanding program can lack `main` (it exports functions).
+        let Some(main) = p.funcs.iter().find(|f| f.is_main) else {
+            return;
+        };
         if let Type::ErrorUnion(..) = main.ret {
             let _ = write!(
                 self.out,
@@ -1883,7 +2143,8 @@ impl Gen {
             params.join(", ")
         };
         if f.export {
-            return format!("{} {}({params})", c_type(&f.ret), extern_symbol(&f.name));
+            let name = extern_symbol(&f.name);
+            return format!("AYE_EXPORT(\"{name}\") {} {name}({params})", c_type(&f.ret));
         }
         format!("static {} {}({params})", c_type(&f.ret), fn_name(&f.name))
     }
