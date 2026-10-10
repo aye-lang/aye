@@ -1,0 +1,3 @@
+READ of size 8
+debug: SUMMARY: AddressSanitizer: use-after-poison pool_stale_read.aye:23 in aye_f_main
+safe: SUMMARY: AddressSanitizer: heap-use-after-free pool_stale_read.aye:23 in aye_f_main
