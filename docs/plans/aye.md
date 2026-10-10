@@ -135,7 +135,8 @@ brackets.
 - O4.1 manifest and `aye.lock` design; `docs/framework.md` already fixed "declarative file, not a `build.aye` run" (old O4 table).
 - O4.2 local path dependencies: a root imports a module from another root (old O4 table; also the browser split, P8.1).
 - O4.3 URL dependencies: fetch, hash check against `aye.lock`, offline build from the cache (old O4 table).
-- O5.1 `aye test <dir>` over every module, time per test, summary line; retires `browser/unit_tests.aye` (old O5 table).
+- O5.1a `aye test <dir>`: a subdirectory that is not imported and does not compile on its own fails the whole run (O5.1 report); decide: skip with a note, or a `--strict`. Verify: a golden with a broken lonely module.
+- O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
 - O5.2 per-test CPU-time limit and `-j` (old O5 table; `practices/workflow.md` "A speed test limits CPU time").
 - O6.1 `aye lsp` diagnostics and formatting over JSON-RPC (old O6 table).
 - O6.2 `aye lsp` hover with `///` and go to definition (old O6 table).
