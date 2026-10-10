@@ -1530,6 +1530,7 @@ std.diag      Diagnostics: coded messages over byte ranges, lineCol          bel
 std.os        args, exit                                                     below
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn                below
 std.http      HTTP/1.1 parser, response writer, thread-per-connection serve  aye doc --signatures std.http
+std.crypto    SHA-256, SHA-1, HMAC-SHA-256 (streaming and one-shot)          aye doc --signatures std.crypto
 ```
 
 ### std.mem

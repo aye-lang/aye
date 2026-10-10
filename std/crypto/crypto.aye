@@ -1,0 +1,322 @@
+// std.crypto: hash functions (SHA-256, SHA-1) and HMAC-SHA-256, in plain
+// Aye.
+//
+// Each hash is a struct fed with `update` and ended with `final`; the
+// one-shot functions do both. Words are `u32`: sums wrap (`+%`) and
+// rotations are two shifts, as FIPS 180-4 defines them. SHA-1 is broken
+// as a signature or collision-resistant hash; it is here for protocols
+// that name it (the WebSocket handshake).
+
+import std.mem
+
+let K256 = [64]u32{
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+}
+
+fn rotr(x: u32, n: u32) u32 {
+    return (x >> n) | (x << (32 - n))
+}
+
+fn rotl(x: u32, n: u32) u32 {
+    return (x << n) | (x >> (32 - n))
+}
+
+/// Big-endian word `i` of a 64-byte block.
+fn word(block: []u8, i: usize) u32 {
+    let p = i * 4
+    return ((block[p] as u32) << 24) | ((block[p + 1] as u32) << 16) | ((block[p + 2] as u32) << 8) | (block[p + 3] as u32)
+}
+
+/// Writes `x` big-endian at `out[at..at + 4]`.
+fn putWord(out: []mut u8, at: usize, x: u32) {
+    out[at] = (x >> 24) as u8
+    out[at + 1] = ((x >> 16) & 255) as u8
+    out[at + 2] = ((x >> 8) & 255) as u8
+    out[at + 3] = (x & 255) as u8
+}
+
+/// Pads the message in `buf[..used]` as FIPS 180-4 5.1.1 says (a 1 bit,
+/// zeros, the length in bits as 64 bits big-endian) and returns how many
+/// 64-byte blocks the padding makes: 1, or 2 when it does not fit in one.
+/// `buf` is 128 bytes.
+fn pad(buf: []mut u8, used: usize, total: u64) usize {
+    buf[used] = 0x80
+    var blocks: usize = 1
+    if used >= 56 {
+        blocks = 2
+    }
+    let end = blocks * 64
+    mem.set(buf[used + 1..end], 0)
+    let bits = total *% 8
+    putWord(buf, end - 8, (bits >> 32) as u32)
+    putWord(buf, end - 4, (bits & 0xffffffff) as u32)
+    return blocks
+}
+
+/// SHA-256 (FIPS 180-4) state. Make it with `Sha256.init()`.
+pub struct Sha256 {
+    state: [8]u32
+    buf: [128]u8
+    used: usize
+    total: u64
+
+    /// A hash of the empty message so far.
+    pub fn init() Sha256 {
+        return Sha256 {
+            state: [8]u32{
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+            },
+            buf: [128]u8{0, ..},
+            used: 0,
+            total: 0,
+        }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        var i: usize = 0
+        while i < data.len {
+            var n = 64 - self.used
+            if n > data.len - i {
+                n = data.len - i
+            }
+            mem.copy(self.buf[self.used..], data[i..i + n])
+            self.used += n
+            i += n
+            if self.used == 64 {
+                self.block(self.buf[..64])
+                self.used = 0
+            }
+        }
+        self.total += data.len as u64
+    }
+
+    /// The digest of everything added. The hash is spent afterwards: make a
+    /// new one with `init` for the next message.
+    pub fn final(self: *mut Self) [32]u8 {
+        let blocks = pad(self.buf[..], self.used, self.total)
+        for b in 0..blocks {
+            self.block(self.buf[b * 64..b * 64 + 64])
+        }
+        var out = [32]u8{0, ..}
+        for i in 0..8 {
+            putWord(out[..], i * 4, self.state[i])
+        }
+        return out
+    }
+
+    fn block(self: *mut Self, data: []u8) {
+        var w = [64]u32{0, ..}
+        for t in 0..16 {
+            w[t] = word(data, t)
+        }
+        for t in 16..64 {
+            let x = w[t - 15]
+            let y = w[t - 2]
+            let s0 = rotr(x, 7) ^ rotr(x, 18) ^ (x >> 3)
+            let s1 = rotr(y, 17) ^ rotr(y, 19) ^ (y >> 10)
+            w[t] = w[t - 16] +% s0 +% w[t - 7] +% s1
+        }
+        var a = self.state[0]
+        var b = self.state[1]
+        var c = self.state[2]
+        var d = self.state[3]
+        var e = self.state[4]
+        var f = self.state[5]
+        var g = self.state[6]
+        var h = self.state[7]
+        for t in 0..64 {
+            let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+            let ch = (e & f) ^ (~e & g)
+            let t1 = h +% s1 +% ch +% K256[t] +% w[t]
+            let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+            let maj = (a & b) ^ (a & c) ^ (b & c)
+            let t2 = s0 +% maj
+            h = g
+            g = f
+            f = e
+            e = d +% t1
+            d = c
+            c = b
+            b = a
+            a = t1 +% t2
+        }
+        self.state[0] +%= a
+        self.state[1] +%= b
+        self.state[2] +%= c
+        self.state[3] +%= d
+        self.state[4] +%= e
+        self.state[5] +%= f
+        self.state[6] +%= g
+        self.state[7] +%= h
+    }
+}
+
+/// The SHA-256 digest of `data`.
+pub fn sha256(data: []u8) [32]u8 {
+    var h = Sha256.init()
+    h.update(data)
+    return h.final()
+}
+
+/// SHA-1 (FIPS 180-4) state. Make it with `Sha1.init()`. Not for new
+/// security designs.
+pub struct Sha1 {
+    state: [5]u32
+    buf: [128]u8
+    used: usize
+    total: u64
+
+    /// A hash of the empty message so far.
+    pub fn init() Sha1 {
+        return Sha1 {
+            state: [5]u32{0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0},
+            buf: [128]u8{0, ..},
+            used: 0,
+            total: 0,
+        }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        var i: usize = 0
+        while i < data.len {
+            var n = 64 - self.used
+            if n > data.len - i {
+                n = data.len - i
+            }
+            mem.copy(self.buf[self.used..], data[i..i + n])
+            self.used += n
+            i += n
+            if self.used == 64 {
+                self.block(self.buf[..64])
+                self.used = 0
+            }
+        }
+        self.total += data.len as u64
+    }
+
+    /// The digest of everything added. The hash is spent afterwards: make a
+    /// new one with `init` for the next message.
+    pub fn final(self: *mut Self) [20]u8 {
+        let blocks = pad(self.buf[..], self.used, self.total)
+        for b in 0..blocks {
+            self.block(self.buf[b * 64..b * 64 + 64])
+        }
+        var out = [20]u8{0, ..}
+        for i in 0..5 {
+            putWord(out[..], i * 4, self.state[i])
+        }
+        return out
+    }
+
+    fn block(self: *mut Self, data: []u8) {
+        var w = [80]u32{0, ..}
+        for t in 0..16 {
+            w[t] = word(data, t)
+        }
+        for t in 16..80 {
+            w[t] = rotl(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1)
+        }
+        var a = self.state[0]
+        var b = self.state[1]
+        var c = self.state[2]
+        var d = self.state[3]
+        var e = self.state[4]
+        for t in 0..80 {
+            var f: u32 = 0
+            var k: u32 = 0
+            if t < 20 {
+                f = (b & c) | (~b & d)
+                k = 0x5a827999
+            } else if t < 40 {
+                f = b ^ c ^ d
+                k = 0x6ed9eba1
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d)
+                k = 0x8f1bbcdc
+            } else {
+                f = b ^ c ^ d
+                k = 0xca62c1d6
+            }
+            let tmp = rotl(a, 5) +% f +% e +% k +% w[t]
+            e = d
+            d = c
+            c = rotl(b, 30)
+            b = a
+            a = tmp
+        }
+        self.state[0] +%= a
+        self.state[1] +%= b
+        self.state[2] +%= c
+        self.state[3] +%= d
+        self.state[4] +%= e
+    }
+}
+
+/// The SHA-1 digest of `data`.
+pub fn sha1(data: []u8) [20]u8 {
+    var h = Sha1.init()
+    h.update(data)
+    return h.final()
+}
+
+/// HMAC-SHA-256 (RFC 2104, RFC 4231) state. Make it with
+/// `HmacSha256.init(key)`.
+pub struct HmacSha256 {
+    inner: Sha256
+    opad: [64]u8
+
+    /// A MAC under `key`; any key length (a key over 64 bytes is hashed
+    /// first).
+    pub fn init(key: []u8) HmacSha256 {
+        var k = [64]u8{0, ..}
+        if key.len > 64 {
+            let hk = sha256(key)
+            mem.copy(k[..], hk[..])
+        } else {
+            mem.copy(k[..], key)
+        }
+        var ipad = [64]u8{0, ..}
+        var opad = [64]u8{0, ..}
+        for i in 0..64 {
+            ipad[i] = k[i] ^ 0x36
+            opad[i] = k[i] ^ 0x5c
+        }
+        var inner = Sha256.init()
+        inner.update(ipad[..])
+        return HmacSha256 { inner: inner, opad: opad }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        self.inner.update(data)
+    }
+
+    /// The MAC of everything added. The state is spent afterwards.
+    pub fn final(self: *mut Self) [32]u8 {
+        let ih = self.inner.final()
+        var outer = Sha256.init()
+        outer.update(self.opad[..])
+        outer.update(ih[..])
+        return outer.final()
+    }
+}
+
+/// The HMAC-SHA-256 of `msg` under `key`.
+pub fn hmacSha256(key: []u8, msg: []u8) [32]u8 {
+    var h = HmacSha256.init(key)
+    h.update(msg)
+    return h.final()
+}

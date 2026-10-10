@@ -1,0 +1,8 @@
+test "sha256 at the padding boundaries" ... ok
+test "sha1 at the padding boundaries" ... ok
+test "streaming in two pieces equals one shot, at every split" ... ok
+test "websocket handshake accept key" ... ok
+test "hmac keys of 0, 64 and 65 bytes" ... ok
+test "hmac streaming equals one shot" ... ok
+
+6 passed; 0 failed

@@ -1,0 +1,106 @@
+// std.crypto: padding boundaries, streaming in pieces, HMAC key lengths.
+
+import std.crypto.HmacSha256
+import std.crypto.Sha1
+import std.crypto.Sha256
+import std.crypto.hmacSha256
+import std.crypto.sha1
+import std.crypto.sha256
+import std.mem
+
+/// `d` as lowercase hex must equal `want`.
+fn expectHex(d: []u8, want: []u8) {
+    let digits = "0123456789abcdef"
+    var buf = [64]u8{0, ..}
+    for i, b in d {
+        buf[i * 2] = digits[(b >> 4) as usize]
+        buf[i * 2 + 1] = digits[(b & 15) as usize]
+    }
+    @expect(mem.eql(buf[..d.len * 2], want))
+}
+
+/// 128 bytes of "a".
+fn manyA() [128]u8 {
+    return [128]u8{97, ..}
+}
+
+test "sha256 at the padding boundaries" {
+    let a = manyA()
+    let d55 = sha256(a[..55])
+    expectHex(d55[..], "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318")
+    let d56 = sha256(a[..56])
+    expectHex(d56[..], "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a")
+    let d63 = sha256(a[..63])
+    expectHex(d63[..], "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34")
+    let d64 = sha256(a[..64])
+    expectHex(d64[..], "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb")
+    let d65 = sha256(a[..65])
+    expectHex(d65[..], "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0")
+    let d119 = sha256(a[..119])
+    expectHex(d119[..], "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb")
+    let d120 = sha256(a[..120])
+    expectHex(d120[..], "2f3d335432c70b580af0e8e1b3674a7c020d683aa5f73aaaedfdc55af904c21c")
+}
+
+test "sha1 at the padding boundaries" {
+    let a = manyA()
+    let d55 = sha1(a[..55])
+    expectHex(d55[..], "c1c8bbdc22796e28c0e15163d20899b65621d65a")
+    let d56 = sha1(a[..56])
+    expectHex(d56[..], "c2db330f6083854c99d4b5bfb6e8f29f201be699")
+    let d63 = sha1(a[..63])
+    expectHex(d63[..], "03f09f5b158a7a8cdad920bddc29b81c18a551f5")
+    let d64 = sha1(a[..64])
+    expectHex(d64[..], "0098ba824b5c16427bd7a1122a5a442a25ec644d")
+    let d65 = sha1(a[..65])
+    expectHex(d65[..], "11655326c708d70319be2610e8a57d9a5b959d3b")
+    let d119 = sha1(a[..119])
+    expectHex(d119[..], "ee971065aaa017e0632a8ca6c77bb3bf8b1dfc56")
+    let d120 = sha1(a[..120])
+    expectHex(d120[..], "f34c1488385346a55709ba056ddd08280dd4c6d6")
+}
+
+test "streaming in two pieces equals one shot, at every split" {
+    let a = manyA()
+    let want256 = sha256(a[..120])
+    let want1 = sha1(a[..120])
+    for cut in 0..121 {
+        var h = Sha256.init()
+        h.update(a[..cut])
+        h.update(a[cut..120])
+        let d = h.final()
+        @expect(mem.eql(d[..], want256[..]))
+        var g = Sha1.init()
+        g.update(a[..cut])
+        g.update(a[cut..120])
+        let e = g.final()
+        @expect(mem.eql(e[..], want1[..]))
+    }
+}
+
+test "websocket handshake accept key" {
+    // RFC 6455 section 1.3: SHA-1 of the key and the GUID; base64 of it is
+    // s3pPLMBiTxaQ9kYGzzhZRbK+xOo=.
+    let d = sha1("dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+    expectHex(d[..], "b37a4f2cc0624f1690f64606cf385945b2bec4ea")
+}
+
+test "hmac keys of 0, 64 and 65 bytes" {
+    let key = manyA()
+    let d0 = hmacSha256(key[..0], "x")
+    expectHex(d0[..], "4cbc96099a6467ce002461f10549b4898265ebe6188b45efacc44293516e62c4")
+    let d64 = hmacSha256(key[..64], "x")
+    expectHex(d64[..], "b65ca3a3235f948bc0e6bd747532c54a983b54ddad1a4d1bd8b958e065b1cab4")
+    let d65 = hmacSha256(key[..65], "x")
+    expectHex(d65[..], "5c8ad20f6d25c86ccfc9774f1c0ca49d3675f3a112d9905cce286e2636681b75")
+}
+
+test "hmac streaming equals one shot" {
+    let key = manyA()
+    let want = hmacSha256(key[..20], "abcdef")
+    var h = HmacSha256.init(key[..20])
+    h.update("abc")
+    h.update("def")
+    let d = h.final()
+    @expect(mem.eql(d[..], want[..]))
+}

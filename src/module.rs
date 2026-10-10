@@ -43,6 +43,11 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
         include_str!("../std/coro/coro.aye"),
     ),
     (
+        "std.crypto",
+        "std/crypto/crypto.aye",
+        include_str!("../std/crypto/crypto.aye"),
+    ),
+    (
         "std.diag",
         "std/diag/diag.aye",
         include_str!("../std/diag/diag.aye"),
