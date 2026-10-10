@@ -158,7 +158,6 @@ brackets.
 - O3.2a `std.time.parseHttp` lenient forms (RFC 850, asctime) if the HTTP client needs them; a `Date` header helper in `std.http` from `now()` (O3.2 report).
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
-- O1.5b `std.fs.readDir`: `stat` fallback for `DT_UNKNOWN` entries; a follow-links `stat` beside the `lstat` one if a caller needs it (O1.5 report). Verify: `cargo test --release --test golden`.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O1.15 `aye check` on an unknown `std.<x>` lists the std modules (eval 2026-10-10: `std.io` guessed in 3 runs, `std.str`, `std.fmt`, `std.string`). Verify: an error golden.
 - O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
