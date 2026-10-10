@@ -1547,8 +1547,8 @@ connection, until `s.stop()`. The handler reads `req.method`,
 until the response is written. The client is `http.get(arena,
 "http://host:8080/path")` (also `post`, `request`, `requestWith`): a
 `Response` with `status`, `headers`, `body` and `header(name)`, allocated
-in the arena; redirects are followed only on request, and `https://` is
-`HttpsUnsupported`.
+in the arena; redirects are followed only on request; `https://` goes
+through libcurl (`HttpsUnsupported` where it is not linked).
 
 ```aye
 import std.heap.General
