@@ -1,0 +1,1 @@
+keyword_and_expr.aye:4:15: error[E0006]: expected newline after statement, found identifier `and`; Aye has no `and`, write `&&`

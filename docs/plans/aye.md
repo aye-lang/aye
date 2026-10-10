@@ -65,7 +65,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a). Missing for O6: http client (O3.4, O3.5).
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client (O3.4). Missing for O6: HTTPS in the client (O3.5).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
@@ -119,19 +119,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O3 std breadth (next)
 
-#### O3.4: std.http client (plain HTTP)
-- lane: aye
-- goal: request, response, chunked bodies over `std.net`; redirects off by default.
-- serves: O6
-- files: `std/http/`
-- verify: `cargo test --release --test golden` → exit 0, with a golden against the O1.4a server
-- depends on: O1.4a
-- parallel with: O3.1–O3.3
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
 #### O3.5: HTTPS for the client
 - lane: aye
 - goal: HTTPS as O3.4a decided.
@@ -151,6 +138,7 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O3.4b `std.net.connect` timeout (a golden against an unroutable address); the http client golden against an IPv6 (`::1`) server (O3.4 report).
 - O3.3b `std.encoding` strict base64 (reject non-zero trailing bits) if tokens or signatures need it; the crypto conformance programs use `std.encoding.hexEncode` instead of private `hex` helpers (O3.3a report). Verify: `cargo test --release --test conformance`.
 - O3.1c `std.text.Builder.appendFloatExact` (shortest round-trip float formatting, lifted from `std.json.writeNumber`); `tests/conformance/json/valid.aye` prints through `json.write` instead of its private `render` (O3.1a report). Verify: `cargo test --release --test conformance`.
 - O3.2a `std.time.parseHttp` lenient forms (RFC 850, asctime) if the HTTP client needs them; a `Date` header helper in `std.http` from `now()` (O3.2 report).
@@ -159,7 +147,6 @@ brackets.
 - O1.5b `std.fs.readDir`: `stat` fallback for `DT_UNKNOWN` entries; a follow-links `stat` beside the `lstat` one if a caller needs it (O1.5 report). Verify: `cargo test --release --test golden`.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O1.13a the spec core is ~1.2 KB under the 40000-byte cap (`aye_spec_core_is_small`); when it fills up, move §12 (1.9 KB) out of the core or shorten §7.
-- O1.12a E0006 hint follow-ups: goldens for `or` and for `a and b` outside `if` (other E0006 sites in `src/parser.rs` may skip `Parser::unexpected`); the `not` hint fires on any syntax error after an identifier named `not`, guard it (O1.12 report).
 - O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).

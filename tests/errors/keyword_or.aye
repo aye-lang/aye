@@ -1,0 +1,7 @@
+pub fn main() {
+    let a = true
+    let b = false
+    if a or b {
+        @println("either")
+    }
+}

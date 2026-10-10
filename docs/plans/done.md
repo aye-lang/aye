@@ -43,6 +43,8 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O3.1a | 2026-10-10 | `std.json` writer: `write`, `writePretty`, `stringify`, `equals`, `writeNumber` (shortest round-trip digits, `JSON.stringify` layout, NaN/inf as null); conformance `json/roundtrip` (40/40 total), 6 more test blocks | 4a4ad33 |
 | O3.3a | 2026-10-10 | `std.crypto.randomBytes` (`getentropy`) and `constantTimeEqual`; new `std.encoding`: base64, base64url, hex encode/decode (RFC 4648 vectors); conformance areas `crypto` 4/4 and `encoding` 4/4 (45/45 total), golden `tests/tests/std_encoding.aye` | 8ae042a |
 | O6.4 | 2026-10-10 | `README.md` "Not yet supported" paragraph: `aye fmt`, `aye doc`, `Pool`, lists and string building are no longer listed as missing; names the 24 std modules and `aye doc --signatures` | (main) |
+| O3.4 | 2026-10-10 | `std.http` client: `request`/`requestWith`/`get`/`post`, `parseUrl`, `ClientOptions` (timeout per wait, body limit, redirects off by default), `ClientError`, `Response.header`; Content-Length, chunked and read-until-close bodies; `https://` is `HttpsUnsupported` until O3.5; golden `std_http_client` (O1.4a server + hand-written server), 7 unit tests | d649ec8 |
+| O1.12a | 2026-10-10 | E0006 hint goldens for `or` and `and` outside `if`; the `not` hint fires only when an operand follows `not` (`keyword_not_var` has none) | 8e5e383 |
 
 ## Browser lane
 
