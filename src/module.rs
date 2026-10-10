@@ -90,6 +90,11 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
     ),
     ("std.os", "std/os/os.aye", include_str!("../std/os/os.aye")),
     (
+        "std.path",
+        "std/path/path.aye",
+        include_str!("../std/path/path.aye"),
+    ),
+    (
         "std.pool",
         "std/pool/pool.aye",
         include_str!("../std/pool/pool.aye"),
