@@ -1,11 +1,48 @@
 // std.fs: files, and the standard input, output and error streams.
 
 import std.mem.Allocator
+import std.mem.AllocError
 
 pub error OpenError { NotFound, AccessDenied, OpenFailed }
 pub error ReadError { ReadFailed, OutOfMemory }
 pub error WriteError { WriteFailed }
 pub error ReadFileError = OpenError || ReadError
+pub error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathFailed }
+pub error ReadDirError = PathError || AllocError
+
+/// What a path names: a regular file, a directory, a symbolic link, or
+/// anything else (a device, a socket, a pipe; also an entry that the file
+/// system does not describe).
+pub enum Kind { File, Dir, Symlink, Other }
+
+/// What `stat` knows about a path: the size in bytes, the modification time
+/// in nanoseconds since 1970-01-01 UTC, and the kind.
+pub struct Stat {
+    size: u64
+    mtime: i64
+    kind: Kind
+}
+
+/// An entry of a directory: its name (without the directory) and kind.
+pub struct DirEntry {
+    name: []u8
+    kind: Kind
+}
+
+/// The entries of a directory, from `readDir`. The names are valid until
+/// `deinit`.
+pub struct DirEntries {
+    items: []mut DirEntry
+    store: []mut DirEntry
+    names: []mut u8
+    alloc: Allocator
+
+    /// Free the entries and their names.
+    pub fn deinit(self: Self) {
+        self.alloc.free(self.store)
+        self.alloc.free(self.names)
+    }
+}
 
 /// An open file: a file descriptor.
 pub struct File {
@@ -206,6 +243,143 @@ pub fn mtime(path: []u8) ?i64 {
     return ns
 }
 
+/// Size, modification time and kind of the file at `path`. A symbolic link
+/// is not followed: its own kind is `Symlink`, and its size is the length
+/// of its target.
+pub fn stat(path: []u8) PathError!Stat {
+    var out = @zeroed([3]i64)
+    try pathResult(aye_std_lstat(path.ptr, path.len, &mut out[0]))
+    return Stat { size: out[0] as u64, mtime: out[1], kind: kindOfMode(out[2]) }
+}
+
+/// The entries of the directory at `path`, in no particular order, without
+/// `.` and `..`. Free the result with `deinit`. A symbolic link is a
+/// `Symlink`, and the kind is `Other` where the file system does not say.
+pub fn readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries {
+    var err: i32 = 0
+    let dir = aye_std_opendir(path.ptr, path.len, &mut err) orelse return pathError(err)
+    defer {
+        _ = closedir(dir)
+    }
+    // Two passes: count the entries and the bytes of their names, then
+    // fill. If the directory changes in between, the second pass stops at
+    // the room it has.
+    var count: usize = 0
+    var bytes: usize = 0
+    var kind: i32 = 0
+    while aye_std_readdir(dir, &mut kind) |name| {
+        let n = strlen(name)
+        if !isDots(name[0..n]) {
+            count += 1
+            bytes += n
+        }
+    }
+    if count == 0 {
+        return DirEntries {
+            items: []mut DirEntry{},
+            store: []mut DirEntry{},
+            names: []mut u8{},
+            alloc: alloc,
+        }
+    }
+    rewinddir(dir)
+    let names = try alloc.alloc(0 as u8, bytes)
+    let store = alloc.alloc(DirEntry { name: []u8{}, kind: Kind.Other }, count) catch |e| {
+        alloc.free(names)
+        return e
+    }
+    var used: usize = 0
+    var n: usize = 0
+    while aye_std_readdir(dir, &mut kind) |name| {
+        let len = strlen(name)
+        if isDots(name[0..len]) {
+            continue
+        }
+        if n == count || used + len > bytes {
+            break
+        }
+        memcpy(names[used..].ptr, name, len)
+        store[n] = DirEntry { name: names[used..used + len], kind: kindOfType(kind) }
+        used += len
+        n += 1
+    }
+    return DirEntries { items: store[0..n], store: store, names: names, alloc: alloc }
+}
+
+/// Create the directory at `path`; its parent must exist.
+pub fn mkdir(path: []u8) PathError!void {
+    try pathResult(aye_std_pathop(0, path.ptr, path.len, path.ptr, 0))
+}
+
+/// Delete the file, symbolic link or empty directory at `path`.
+pub fn remove(path: []u8) PathError!void {
+    try pathResult(aye_std_pathop(1, path.ptr, path.len, path.ptr, 0))
+}
+
+/// Rename or move `from` to `to`; an existing `to` is replaced (a file by
+/// a file, an empty directory by a directory).
+pub fn rename(from: []u8, to: []u8) PathError!void {
+    try pathResult(aye_std_pathop(2, from.ptr, from.len, to.ptr, to.len))
+}
+
+// 0, or -errno (ENOTEMPTY as -39), as nothing or an error.
+fn pathResult(code: i32) PathError!void {
+    if code != 0 {
+        return pathError(code)
+    }
+}
+
+fn pathError(code: i32) PathError {
+    if code == -2 {
+        return PathError.NotFound
+    }
+    if code == -13 {
+        return PathError.AccessDenied
+    }
+    if code == -17 {
+        return PathError.Exists
+    }
+    if code == -20 {
+        return PathError.NotADirectory
+    }
+    if code == -39 {
+        return PathError.NotEmpty
+    }
+    return PathError.PathFailed
+}
+
+// The S_IFMT bits of a mode: S_IFREG, S_IFDIR, S_IFLNK.
+fn kindOfMode(mode: i64) Kind {
+    if mode == 0x8000 {
+        return Kind.File
+    }
+    if mode == 0x4000 {
+        return Kind.Dir
+    }
+    if mode == 0xa000 {
+        return Kind.Symlink
+    }
+    return Kind.Other
+}
+
+// A `d_type`: DT_REG, DT_DIR, DT_LNK.
+fn kindOfType(t: i32) Kind {
+    if t == 8 {
+        return Kind.File
+    }
+    if t == 4 {
+        return Kind.Dir
+    }
+    if t == 10 {
+        return Kind.Symlink
+    }
+    return Kind.Other
+}
+
+fn isDots(name: []u8) bool {
+    return name.len == 1 && name[0] == '.' || name.len == 2 && name[0] == '.' && name[1] == '.'
+}
+
 /// Read the whole file at `path` into new memory from `alloc` (free it
 /// with `alloc.free`).
 pub fn readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8 {
@@ -233,6 +407,13 @@ extern fn aye_std_open(path: [*]u8, len: usize) i32
 extern fn aye_std_create(path: [*]u8, len: usize) i32
 extern fn aye_std_exists(path: [*]u8, len: usize) bool
 extern fn aye_std_mtime(path: [*]u8, len: usize, ns: *mut i64) bool
+extern fn aye_std_lstat(path: [*]u8, len: usize, out: *mut i64) i32
+extern fn aye_std_pathop(op: i32, path: [*]u8, len: usize, to: [*]u8, tolen: usize) i32
+extern fn aye_std_opendir(path: [*]u8, len: usize, err: *mut i32) ?[*]u8
+extern fn aye_std_readdir(dir: [*]u8, kind: *mut i32) ?[*]u8
+extern fn closedir(dir: [*]u8) i32
+extern fn rewinddir(dir: [*]u8)
+extern fn strlen(s: [*]u8) usize
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32

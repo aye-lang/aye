@@ -1,0 +1,25 @@
+false
+true
+mkdir: exists
+mkdir: not found
+0
+6 file
+true
+true
+0 file
+dir
+symlink
+stat: not found
+a.txt file
+b.txt file
+empty file
+link symlink
+sub dir
+readDir: not found
+readDir: not a directory
+false
+true
+rename: not found
+remove: not empty
+false
+remove: not found
