@@ -64,9 +64,11 @@ an AI agent next to `aye spec`.
 
 `aye spec` prints the core of [`docs/spec.md`](docs/spec.md), a
 self-contained language reference meant to be given to an AI agent before
-it writes Aye: syntax, types, errors, memory, modules, the std index and
-the pitfalls, at most 40000 bytes so it fits one tool output, then a list
-of the other sections. `aye spec <section>` prints one (`aye spec 11`,
+it writes Aye: the first program, the std index and the pitfalls first,
+then syntax, types, statements, expressions and errors, at most 28000
+bytes so a coding agent sees it inline, then a list of the other sections
+(with a hint of when to read the ones left out, such as `9 memory` and
+`12 modules`). `aye spec <section>` prints one (`aye spec 11`,
 `aye spec generics`, `aye spec std.fs`), `aye spec all` the whole
 document. Every ` ```aye ` program in it is checked by `tests/spec.rs`.
 

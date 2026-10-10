@@ -4,8 +4,9 @@
 //! and names every pub function of the modules it lists in full, std's pub
 //! functions have doc comments (what `aye doc --signatures std.m` prints for
 //! the others), and it stays within about 30k tokens. `aye spec` prints a
-//! core of at most 40000 bytes and lists the other sections; the sections
-//! together are the whole document.
+//! core of at most 28000 bytes, the std index and the pitfalls right after
+//! the first program, and lists the other sections; the sections together
+//! are the whole document.
 
 use std::process::Command;
 
@@ -170,16 +171,31 @@ fn aye_spec_all_prints_the_spec() {
     assert_eq!(aye_spec(&["all"]), SPEC);
 }
 
-/// The core fits one tool output (Claude Code cuts a longer one).
+/// The core fits one tool output inline (Claude Code saves a longer one to
+/// a file); the std index and the pitfalls come right after the first
+/// program, so a read cut short still shows them.
 #[test]
 fn aye_spec_core_is_small() {
     let core = aye_spec(&[]);
     assert!(
-        core.len() <= 40_000,
+        core.len() <= 28_000,
         "`aye spec` prints {} bytes",
         core.len()
     );
-    assert!(core.contains("\n## 15. std\n"), "the core has no std index");
+    let at = |h: &str| {
+        core.find(h)
+            .unwrap_or_else(|| panic!("the core has no `{h}`"))
+    };
+    let (first, std, pitfalls, decls) = (
+        at("\n## 1. "),
+        at("\n## 15. std\n"),
+        at("\n## 18. "),
+        at("\n## 4. "),
+    );
+    assert!(
+        first < std && std < pitfalls && pitfalls < decls,
+        "the core does not start with sections 1, 15 and 18"
+    );
 }
 
 /// The names `aye spec` gives: those of its core line ("This is the core of
