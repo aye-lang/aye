@@ -1574,6 +1574,7 @@ struct File { fd: i32 }
 std.fs.open(path: []u8) OpenError!File      open a file for reading
 std.fs.create(path: []u8) OpenError!File    create (or empty) a file for writing
 std.fs.exists(path: []u8) bool              is there a file or directory at path?
+std.fs.mtime(path: []u8) ?i64               its modification time in ns since 1970; null if stat fails
 std.fs.readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8   the whole file; free with alloc.free
 std.fs.stdin() File
 std.fs.stdout() File
@@ -2225,6 +2226,9 @@ end. The edits of one diagnostic are applied together.
   inside.
 - C's `void *` is `?[*]u8`; pass `&mut x` where C wants a pointer, and
   `@ptrCast` it when C wants a `void *`.
+- `@print`/`@println` take one value: `@println(a, b)` is an error. Print
+  each value with its own `@print`, or build the line with `std.text.Builder`.
+- Logic is `&&`, `||`, `!`; `and`, `or` and `not` are not keywords.
 - Output to stdout is `@print`/`@println` or `std.fs.stdout().write(bytes)`;
   `std.log` writes to stderr.
 - `main` is `pub fn main()` or `pub fn main() !void`; arguments come from

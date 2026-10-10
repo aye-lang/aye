@@ -157,18 +157,18 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
-#### O1.9: quiet exit on a closed pipe
+#### O1.13: `aye spec` that fits one tool output
 - lane: aye
-- goal: `aye spec | head`, `aye doc --signatures std | head` and every other command exit quietly when stdout is closed (no Rust panic text); agents pipe output to `head` all the time.
-- serves: AI-writability (no misleading panic in tool output)
-- files: `src/main.rs` (or wherever output is written), a test in `tests/golden.rs` or a new small test
-- verify: `cargo test --release` → exit 0, with a test that runs `aye spec` with a closed stdout and checks stderr is empty
-- depends on: –
-- parallel with: all but other `src/main.rs` steps
-- where: cloud (local until X1.2)
-- model: sonnet
-- time box: 20 min
-- notes: found in X2.2 (`aye spec | head -3` printed a broken-pipe panic).
+- goal: `aye spec` prints a core of at most ~40 KB (syntax, types, errors, memory, modules, the §15 std index, pitfalls) plus a list of the other sections, and `aye spec <section>` prints one section; §15 lists `std.http`'s main calls (`listen`, `Server.run`, request and response) so agents use it instead of raw `std.net`.
+- serves: AI-writability; O4 (the spec within ~30k tokens), O13
+- files: `src/main.rs` (spec command), `docs/spec.md` (section split markers, §15), `tests/spec.rs`, `README.md` if it shows `aye spec`
+- verify: `cargo test --release` → exit 0, with tests that `aye spec | wc -c` ≤ 40000, that every section name in its list prints non-empty with `aye spec <name>`, and that the concatenation of all sections equals `docs/spec.md`
+- depends on: O1.12 merged (both edit `docs/spec.md`)
+- parallel with: F1.1
+- where: cloud
+- model: opus (what goes in the core is design judgment)
+- time box: 45 min
+- notes: eval evidence: 81.5 KB spec read back in chunks was most input tokens; http_hello used `std.net` because the spec only points at `aye doc`. The eval rerun (`scripts/eval.py --runs 3`) needs a `claude` login: main runs it locally after the merge.
 
 ## Cards: O3 std breadth (next)
 
@@ -281,6 +281,9 @@ sources `tests/spec.rs` reads; they merge one after the other.
 Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
+- O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O1.12a E0006 hint follow-ups: goldens for `or` and for `a and b` outside `if` (other E0006 sites in `src/parser.rs` may skip `Parser::unexpected`); the `not` hint fires on any syntax error after an identifier named `not`, guard it (O1.12 report).
+- O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
 - O2.3 wasm32-wasi prelude without threads, coroutines or `mmap`; goldens and conformance under Node 22 `node:wasi` (old O2 table).
@@ -299,7 +302,7 @@ brackets.
 - O7.1 `docs/aye-bench.md` complete: req/s rerun, `browser/` build times, binary sizes (old O7 table).
 - O7.2 server gate O13, recorded in `docs/milestones.md` (old O7 table).
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).
-- `Arena.reset` keeping its first block (framework F1.1, need 5).
+- `Arena.reset` keeping its first block (framework need 5; F1.1 did not need it, later phases may).
 - Signals for graceful stop (framework F3, need 10).
 
 ## Reference

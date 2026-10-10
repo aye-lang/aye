@@ -21,7 +21,9 @@ SDL2 (`brew install sdl2`) and are skipped when `pkg-config` lacks them.
 `@cimport` reads C headers with libclang, which the compiler loads only
 when it needs it (it comes with the Command Line Tools on macOS; on Linux,
 the clang or `libclang` packages); the tests in `tests/cimport` are skipped
-without it.
+without it. On Ubuntu 24.04, `sh scripts/setup-ubuntu.sh` installs all of
+this; on a Mac, `scripts/linux.sh <command>` runs a command in an Ubuntu
+24.04 container (see `docs/practices/workflow.md`, "Test on Linux").
 
 ```sh
 cargo build --release

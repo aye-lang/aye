@@ -1,0 +1,57 @@
+// js/cbrt: Math.cbrt, a port of fdlibm's cbrt (FreeBSD lib/msun/src/s_cbrt.c,
+// the version V8 uses in src/base/ieee754.cc). The C library's cbrt differs
+// in the last bit between libms (glibc gives 3.0000000000000004 for
+// cbrt(27)), so the result is computed here.
+//
+// ====================================================
+// Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+//
+// Developed at SunPro, a Sun Microsystems, Inc. business.
+// Permission to use, copy, modify, and distribute this
+// software is freely granted, provided that this notice
+// is preserved.
+// ====================================================
+//
+// Optimized by Bruce D. Evans.
+
+let CBRT_B1: u64 = 715094163
+let CBRT_B2: u64 = 696219795
+let CBRT_P0: f64 = 1.87595182427177009643
+let CBRT_P1: f64 = -1.88497979543377169875
+let CBRT_P2: f64 = 1.621429720105354466140
+let CBRT_P3: f64 = -0.758397934778766047437
+let CBRT_P4: f64 = 0.145996192886612446982
+
+fn cbrt(x: f64) f64 {
+    let bits = f64Bits(x)
+    let sign = bits & 0x8000000000000000
+    let hx = (bits >> 32) & 0x7fffffff
+    let low = bits & 0xffffffff
+    if hx >= 0x7ff00000 {
+        return x + x
+    }
+    var t = 0.0
+    if hx < 0x00100000 {
+        if (hx | low) == 0 {
+            return x
+        }
+        // subnormal: scale by 2**54
+        let t54 = f64FromBits(0x4350000000000000) * x
+        let high = (f64Bits(t54) >> 32) & 0x7fffffff
+        t = f64FromBits(sign | (((high / 3) + CBRT_B2) << 32))
+    } else {
+        t = f64FromBits(sign | (((hx / 3) + CBRT_B1) << 32))
+    }
+    // new cbrt to 23 bits
+    var r = (t * t) * (t / x)
+    t = t * ((CBRT_P0 + r * (CBRT_P1 + r * CBRT_P2)) + ((r * r) * r) * (CBRT_P3 + r * CBRT_P4))
+    // round t away from zero to 23 bits
+    t = f64FromBits((f64Bits(t) + 0x80000000) & 0xffffffffc0000000)
+    // one Newton step to 53 bits
+    let s = t * t
+    r = x / s
+    let w = t + t
+    r = (r - t) / (w + r)
+    t = t + t * r
+    return t
+}

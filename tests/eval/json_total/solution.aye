@@ -1,0 +1,347 @@
+import std
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text.Builder
+
+error JsonError { Invalid }
+error Fail = JsonError || AllocError
+
+struct P {
+    s: []u8
+    i: usize
+}
+
+fn ws(p: *mut P) {
+    while p.i < p.s.len {
+        let c = p.s[p.i]
+        if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+            return
+        }
+        p.i += 1
+    }
+}
+
+fn peek(p: *mut P) u8 {
+    if p.i < p.s.len {
+        return p.s[p.i]
+    }
+    return 0
+}
+
+fn eat(p: *mut P, c: u8) JsonError!void {
+    ws(p)
+    if peek(p) != c {
+        return JsonError.Invalid
+    }
+    p.i += 1
+}
+
+fn word(p: *mut P, w: []u8) JsonError!void {
+    if p.i + w.len > p.s.len || !std.text.eql(p.s[p.i..p.i + w.len], w) {
+        return JsonError.Invalid
+    }
+    p.i += w.len
+}
+
+fn hex4(p: *mut P) JsonError!u32 {
+    if p.i + 4 > p.s.len {
+        return JsonError.Invalid
+    }
+    var v: u32 = 0
+    for k in 0..4 {
+        let c = p.s[p.i + k]
+        var d: u32 = 0
+        if c >= '0' && c <= '9' {
+            d = (c - '0') as u32
+        } else if c >= 'a' && c <= 'f' {
+            d = (c - 'a') as u32 + 10
+        } else if c >= 'A' && c <= 'F' {
+            d = (c - 'A') as u32 + 10
+        } else {
+            return JsonError.Invalid
+        }
+        v = v * 16 + d
+    }
+    p.i += 4
+    return v
+}
+
+// Parses a string at p.i (after whitespace) and appends it, decoded, to out.
+fn str(p: *mut P, out: *mut Builder) !void {
+    try eat(p, '"')
+    while true {
+        if p.i >= p.s.len {
+            return JsonError.Invalid
+        }
+        let c = p.s[p.i]
+        p.i += 1
+        if c == '"' {
+            return
+        }
+        if c < 0x20 {
+            return JsonError.Invalid
+        }
+        if c != '\\' {
+            try out.appendByte(c)
+            continue
+        }
+        if p.i >= p.s.len {
+            return JsonError.Invalid
+        }
+        let e = p.s[p.i]
+        p.i += 1
+        match e {
+            '"' => try out.appendByte('"'),
+            '\\' => try out.appendByte('\\'),
+            '/' => try out.appendByte('/'),
+            'b' => try out.appendByte(8),
+            'f' => try out.appendByte(12),
+            'n' => try out.appendByte('\n'),
+            'r' => try out.appendByte('\r'),
+            't' => try out.appendByte('\t'),
+            'u' => {
+                var code = try hex4(p)
+                if code >= 0xD800 && code < 0xDC00 {
+                    try word(p, "\\u")
+                    let lo = try hex4(p)
+                    if lo < 0xDC00 || lo >= 0xE000 {
+                        return JsonError.Invalid
+                    }
+                    code = 0x10000 + (code - 0xD800) * 0x400 + (lo - 0xDC00)
+                }
+                try out.appendChar(code)
+            },
+            _ => {
+                return JsonError.Invalid
+            },
+        }
+    }
+    return
+}
+
+fn isDigit(c: u8) bool {
+    return c >= '0' && c <= '9'
+}
+
+fn digits(p: *mut P) JsonError!void {
+    if !isDigit(peek(p)) {
+        return JsonError.Invalid
+    }
+    while isDigit(peek(p)) {
+        p.i += 1
+    }
+}
+
+// Checks a number's grammar; returns its text.
+fn number(p: *mut P) JsonError![]u8 {
+    ws(p)
+    let start = p.i
+    if peek(p) == '-' {
+        p.i += 1
+    }
+    if peek(p) == '0' {
+        p.i += 1
+    } else {
+        try digits(p)
+    }
+    if peek(p) == '.' {
+        p.i += 1
+        try digits(p)
+    }
+    if peek(p) == 'e' || peek(p) == 'E' {
+        p.i += 1
+        if peek(p) == '+' || peek(p) == '-' {
+            p.i += 1
+        }
+        try digits(p)
+    }
+    return p.s[start..p.i]
+}
+
+fn value(p: *mut P, tmp: *mut Builder, depth: usize) Fail!void {
+    if depth > 500 {
+        return JsonError.Invalid
+    }
+    ws(p)
+    let c = peek(p)
+    if c == '"' {
+        try str(p, tmp)
+    } else if c == '{' {
+        p.i += 1
+        ws(p)
+        if peek(p) == '}' {
+            p.i += 1
+            return
+        }
+        while true {
+            try str(p, tmp)
+            try eat(p, ':')
+            try value(p, tmp, depth + 1)
+            ws(p)
+            if peek(p) == '}' {
+                p.i += 1
+                return
+            }
+            try eat(p, ',')
+        }
+    } else if c == '[' {
+        p.i += 1
+        ws(p)
+        if peek(p) == ']' {
+            p.i += 1
+            return
+        }
+        while true {
+            try value(p, tmp, depth + 1)
+            ws(p)
+            if peek(p) == ']' {
+                p.i += 1
+                return
+            }
+            try eat(p, ',')
+        }
+    } else if c == 't' {
+        try word(p, "true")
+    } else if c == 'f' {
+        try word(p, "false")
+    } else if c == 'n' {
+        try word(p, "null")
+    } else {
+        let n = try number(p)
+    }
+    return
+}
+
+fn item(p: *mut P, alloc: Allocator, out: *mut Builder, total: *mut i64) !void {
+    var name = Builder.init(alloc)
+    defer name.deinit()
+    var key = Builder.init(alloc)
+    defer key.deinit()
+    var hasName = false
+    var qty: ?i64 = null
+    try eat(p, '{')
+    ws(p)
+    if peek(p) == '}' {
+        return JsonError.Invalid
+    }
+    while true {
+        key.clear()
+        try str(p, &mut key)
+        try eat(p, ':')
+        ws(p)
+        if std.text.eql(key.bytes(), "name") && peek(p) == '"' {
+            name.clear()
+            try str(p, &mut name)
+            hasName = true
+        } else if std.text.eql(key.bytes(), "qty") {
+            let text = try number(p)
+            let v = std.text.parseInt(text) catch |e| {
+                return JsonError.Invalid
+            }
+            qty = v
+        } else {
+            key.clear()
+            try value(p, &mut key, 0)
+        }
+        ws(p)
+        if peek(p) == '}' {
+            p.i += 1
+            break
+        }
+        try eat(p, ',')
+    }
+    if !hasName {
+        return JsonError.Invalid
+    }
+    if qty |q| {
+        try out.append(name.bytes())
+        try out.appendByte(' ')
+        try out.appendInt(q)
+        try out.appendByte('\n')
+        total.* += q
+    } else {
+        return JsonError.Invalid
+    }
+}
+
+fn items(p: *mut P, alloc: Allocator, out: *mut Builder, total: *mut i64) !void {
+    try eat(p, '[')
+    ws(p)
+    if peek(p) == ']' {
+        p.i += 1
+        return
+    }
+    while true {
+        try item(p, alloc, out, total)
+        ws(p)
+        if peek(p) == ']' {
+            p.i += 1
+            return
+        }
+        try eat(p, ',')
+    }
+    return
+}
+
+fn document(p: *mut P, alloc: Allocator, out: *mut Builder) !void {
+    var key = Builder.init(alloc)
+    defer key.deinit()
+    var total: i64 = 0
+    var found = false
+    try eat(p, '{')
+    ws(p)
+    if peek(p) != '}' {
+        while true {
+            key.clear()
+            try str(p, &mut key)
+            try eat(p, ':')
+            if std.text.eql(key.bytes(), "items") && !found {
+                try items(p, alloc, out, &mut total)
+                found = true
+            } else {
+                key.clear()
+                try value(p, &mut key, 0)
+            }
+            ws(p)
+            if peek(p) == '}' {
+                break
+            }
+            try eat(p, ',')
+        }
+    }
+    p.i += 1
+    ws(p)
+    if !found || p.i != p.s.len {
+        return JsonError.Invalid
+    }
+    try out.append("total ")
+    try out.appendInt(total)
+    try out.appendByte('\n')
+}
+
+fn run(alloc: Allocator) bool {
+    let input = std.fs.stdin().readAll(alloc) catch |e| {
+        return false
+    }
+    defer alloc.free(input)
+    var out = Builder.init(alloc)
+    defer out.deinit()
+    var p = P { s: input, i: 0 }
+    document(&mut p, alloc, &mut out) catch |e| {
+        return false
+    }
+    std.fs.stdout().write(out.bytes()) catch |e| {
+        return false
+    }
+    return true
+}
+
+pub fn main() {
+    var gpa = std.heap.General.init()
+    let ok = run(gpa.allocator())
+    gpa.deinit()
+    if !ok {
+        std.log.err("invalid json")
+        std.os.exit(1)
+    }
+}

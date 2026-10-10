@@ -1,0 +1,16 @@
+// web.Request: what a handler reads of the HTTP request.
+
+import std.mem.Allocator
+
+/// The request methods a route can name. Any other method is `Other`.
+pub enum Method { Get, Post, Put, Patch, Delete, Other }
+
+/// One request, as a handler sees it. `path` has no query string; `path`
+/// and `body` point into the connection's buffer. `arena` lives until the
+/// response is written: handlers allocate from it and never free.
+pub struct Request {
+    method: Method
+    path: []u8
+    body: []u8
+    arena: Allocator
+}
