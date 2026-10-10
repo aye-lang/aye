@@ -56,6 +56,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.9 | 2026-10-10 | Under ASan the debug free queue poisons quarantined blocks: stale `List`/`Pool` reads report `use-after-poison` (debug) and `heap-use-after-free` (safe); `tests/asan/` goldens, `asan_clang` detection (PATH, then Homebrew LLVM); macOS and Linux golden 284/284; gap #3 fixed; TSan also runs with Homebrew clang | 194aff5 |
 | O2.2 | 2026-10-10 | `--target` on build/run/test/emit-c/check with a target table (4 native triples, wasm32-wasip1 `.wasm` via Homebrew clang + wasi-libc, wasm32-freestanding waits for O2.4); E0117 unknown target, E0118 std module not on this target; `aye run --target wasm32-wasip1` through `node:wasi`; signal calls gated by `#ifndef __wasm32__`; goldens x86_64-macos build, wasm hello link, `errors/target_*` via `X.args`; macOS and Linux golden 288/288 | 5723001 |
 | P2.9a | 2026-10-10 | `sanitizer_clang` (PATH clang, then Homebrew LLVM, probed with a 30 s timeout) serves ASan and TSan; the ThreadSanitizer golden runs on this Mac and on Linux: M10 complete | 1b70497 |
+| O1.15 | 2026-10-10 | E0081 on an unknown `std.<x>` lists the std modules (from `STD_FILES`) and suggests a close name; goldens `errors/std_unknown`, `std_unknown_near`; golden 290/290 | 7e9b85c |
 
 ## Browser lane
 
