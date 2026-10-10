@@ -485,3 +485,11 @@ Proposed cards:
   - The Linux triples (no Linux machine).
   - `wasm32-wasip1-threads`: the sysroot has it; Node's `node:wasi` has no threads.
   - What a deep recursion does on wasm (no guard; the engine traps).
+
+O2.3 (what the wasip1 branch does, and where it differs from the diagnosis):
+
+- **Prelude, `#ifdef __wasm32__`:** wasi `O_RDONLY` (`0x4000000`) and create flags (`0x10009000`), `st_mode` at byte 24 and `d_type` at byte 8 (`d_type` is a WASI file type, mapped to the `DT_*` values), `tv_nsec` masked to 32 bits (the 4 padding bytes of `struct stat` are not zeroed), `CLOCK_MONOTONIC`/`CLOCK_REALTIME` as `&_CLOCK_*`, and `errno` mapped to the Linux numbers std compares (`aye_errno`: 44 to 2, 2 to 13, 20 to 17, 55 to 39, ...). `std.time.now` calls `aye_std_realtime`; a weak `getpid` returns 1 (wasi-libc has none; `std_fs` makes file names from it). The thread, mutex and signal code links as is (no `-lwasi-emulated-mman`: `mmap` is only in the coroutine branch, which the target lacks).
+- **`ecvt` stops at 15 digits in wasi-libc**, so `std.json` numbers like 0.30000000000000004 lost their tail: `std.json` calls `aye_std_ecvt`, which is `snprintf("%.*e")` on wasm.
+- **Stack:** wasm-ld's stack is 64 KiB with no guard (`many_instances` overflowed it): wasm links use `-z stack-size=8388608`. A deeper recursion is a `memory access out of bounds` trap, not `panic: stack overflow` (`stack_overflow` is `X.native`).
+- **Runner:** `scripts/wasi-run.mjs` (embedded in the driver), `node --no-warnings --single-threaded-gc`: Node 22.22.2 segfaults (exit 139) in a GC thread once a wasm heap passes 32 MiB (plain C reproduces it; Node 25 does not). Preopens: `.`, the cwd by its path, `/tmp`. An `abort` trap exits 134 after the panic message; any other trap prints the error and exits 1.
+- **Goldens:** `tests/cases` and `tests/tests` also run on wasm32-wasip1 (a program that imports a lacked module is skipped by its E0118; `X.native` marks the rest: `c_union` (`c_long` is LP64 in Aye), `extern_struct` and `leak` (sizes with 32-bit pointers), `stack_overflow`). `usize` is 32 bits: Aye code that assumes 8 bytes is the risk.
