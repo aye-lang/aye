@@ -435,3 +435,53 @@ O3.4 gives `std.http` a plain-HTTP client over `std.net`; O3.5 adds `https://`. 
   - Certificate and host-name verification is on by default and has no switch to turn it off. One optional field names an extra CA file (`CURLOPT_CAINFO`), so that the golden can trust the local test server's self-signed certificate (a checked-in test certificate and a small TLS test server).
   - TLS errors map to a small set of error tags (connect failed, certificate rejected, HTTPS unsupported in this build), not to libcurl's numeric codes.
 - **Explicitly out:** client certificates, HTTP/2 and HTTP/3, turning verification off, pinning, proxies, ALPN choice, session resumption across calls, connection reuse, server-side TLS, a pure-Aye TLS stack, and per-OS system TLS. The last two come back only if libcurl becomes a problem (a target without it that needs HTTPS, or binary-size limits for static builds) and gap #50 is closed.
+
+## Targets (O2)
+
+O2.1 diagnosis of `aye build --target wasm32-wasip1` and `wasm32-freestanding`, from compiles of `aye emit-c` output (no compiler change). Homebrew clang 23.1.2, wasi-libc sysroot, Node 22.22.2.
+
+- **Toolchain that works** (the O0.1 flags plus the driver's own, without `-pthread`):
+  `$(brew --prefix llvm)/bin/clang --target=wasm32-wasip1 --sysroot=$(brew --prefix wasi-libc)/share/wasi-sysroot -resource-dir=$(brew --prefix wasi-runtimes)/share/wasi-runtimes -std=gnu11 -fwrapv -fno-strict-aliasing -Wno-incompatible-library-redeclaration -O0 -g -x c - -o out.wasm -lm`.
+  The driver's `-pthread` breaks the link (`wasm-ld: error: --shared-memory is disallowed by errno.c.obj because it was not compiled with 'atomics' or 'bulk-memory' features`), so the wasm targets drop it. `main(int, char **)` is exported as `__main_argc_argv` on wasm.
+- **The emitted C compiles as is:** it includes only `stdint.h`, `stddef.h` and `stdbool.h` and reaches libc through `__asm__` labels, so every case compiled with no diagnostic; all failures are link errors (`undefined symbol`) or wrong constants at run time.
+- **It runs under Node:** a 10-line `node:wasi` script (`new WASI({version: 'preview1', preopens})`, `wasi.start`) ran `tests/cases/hello.aye` (31 KB wasm) and printed both lines, exit 0, once the three signal calls below were stubbed. `fast` mode links with no stub (its `AYE_CHECKS` 0 removes the guard). A panic prints its message, then `abort` is a wasm `unreachable` trap: Node prints a `RuntimeError` stack and exits 1, not 134.
+- **Hello needs:** `undefined symbol: sigaction` (3), `sigaltstack`, `getrlimit`, all from `aye_stack_guard_main` (the M9.7 overflow handler). wasm has no guard page and no signals; a stack overflow traps by itself.
+
+Matrix ("as is" = the current prelude works; "stub" = an `#ifdef __wasi__` branch or a constant table; "unsupported" = the std module is absent on the target). macOS and Linux on aarch64 and x86_64 are "as is" in every row (Linux compiled, not run, per M12).
+
+| Feature | wasm32-wasip1 | wasm32-freestanding |
+|---|---|---|
+| pthreads, `std.thread`, `std.sync` | stub: wasi-libc links `pthread_create` as a single-thread stub; `thread_stack.aye` linked (with `-lwasi-emulated-mman` for `munmap`) and returned `error: SystemResources`. Mutex/cond can stay (no contention); `spawn` should be absent | unsupported |
+| coroutines (`mmap` stacks, guard, asm switch) | unsupported: `coro_resume_done.aye` linked and ran to `panic: std.coro: coroutines are not supported on this target` (the prelude's `AYE_CORO_OK 0` branch); no `mmap`/`PROT_NONE`, no stack switch in wasm without Asyncify or stack switching | unsupported |
+| signals, SIGPIPE, overflow guard | stub: no-op `aye_stack_guard_main` (see above); SIGPIPE does not exist | stub (same) |
+| `getentropy` (`std.crypto.randomBytes`) | as is: ran, `random ok` | stub: a JS import |
+| sockets, `std.net`, `std.http` | unsupported: `socket`, `bind`, `listen`, `connect`, `getaddrinfo`, `freeaddrinfo`, `getsockname`, `setsockopt` undefined (`net_names.aye`) | unsupported |
+| `posix_spawn`/process, `std.process` | unsupported: `fork`, `execvp`, `waitpid`, `kill` undefined (`std_process.aye`) | unsupported |
+| `dlopen`/`@cimport` | stub: libclang runs on the host at compile time (no `dlopen` in the program); it must parse with `--target=wasm32-wasip1` and the sysroot or layouts are the host's (not tried) | same as wasip1 |
+| fs (`open`, stat, `opendir` helpers) | stub: `std_fs.aye` failed with `OpenFailed`. wasi-libc's `O_WRONLY|O_CREAT|O_TRUNC` is `0x10009000` (prelude: Linux `01101`), `O_RDONLY` is `0x4000000` (prelude: 0); errno values differ (`ENOENT` 44, `ENOTEMPTY` 55; std compares `-2`, `-13`); `struct stat` has `st_mode` at byte 24 (prelude's non-x86_64 branch: 16), `st_size` 48 and `st_mtim` 88 (as is); `dirent.d_type` at byte 8 (prelude: 18). With the three flag constants patched the golden matched except `not found` (errno). Needs a preopened directory | unsupported |
+| clock/time | stub: `std.time` ran (`sleep(20)`, 21 ms), but by accident: wasi-libc's `clockid_t` is a pointer (`CLOCK_MONOTONIC` is 66068), so the prelude's `1` and `std.time`'s `0` read the clock id from addresses 1 and 0 and both get the realtime clock; pass `CLOCK_MONOTONIC`/`CLOCK_REALTIME` | stub: a JS import |
+| 32-bit `usize` | as is in the C: `usize` is `size_t`, `isize` is `intptr_t`, `@sizeOf(usize)` printed 4. To check in O2.3: Aye code that assumes 8 (`std.net` `addrinfo` offsets, `pthread_t` as `uint64_t`, `timespec` read as `[2]i64`, which works because `tv_nsec` (32-bit `long`) is padded to 16 bytes and the padding was zeroed), and `usize` constants over 2^32 in std | as wasip1 |
+
+Freestanding (`--target=wasm32-unknown-unknown -nostdlib -Wl,--no-entry`): hello compiles; the link misses `printf`, `puts`, `write`, `fflush`, `malloc`, `abort` and the signal calls, which a small runtime of its own provides (output and abort as JS imports, `malloc` on `memory.grow`).
+
+- **Modules the targets lack.** wasm32-wasip1: `std.net`, `std.http`, `std.process`, `std.coro`, `std.thread` (`std.sync` stays, single-threaded). wasm32-freestanding: those plus `std.fs`, `std.os` (no args or env) and `std.time.sleep`.
+  - An `import` of one is a compile error with a new code: ``error[E0118]: `std.net` is not available on target `wasm32-wasip1` `` (no sockets in WASI preview 1), at the `import`.
+  - An unknown `--target` is ``error[E0117]: unknown target `x`; known targets: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding``.
+  - `@linkOptional` libraries are not installed on wasm targets (`@hasLink` false), so `std.http`'s libcurl branch stays out.
+
+Proposed cards:
+
+- **O2.2 `--target` and a target table.**
+  - files: `src/driver.rs` (a `Target` table: triple, clang flags, sysroot, `-pthread` or not, output suffix, runner), `src/main.rs` (`--target` on `build`, `run`, `test`, `emit-c`; default the host), `src/module.rs` (per-target absent std modules), `src/codes.rs` (E0117, E0118 with examples). Native targets pass `--target=<arch>-apple-macos` / `<arch>-linux-gnu`.
+  - verify: `cargo test --release` passes and `target/release/aye build --target x86_64-macos tests/cases/hello.aye -o /tmp/h && file /tmp/h` names x86_64; `aye build --target nope` exits 1 with E0117; an `import std.net` program under `--target wasm32-wasip1` exits 1 with E0118.
+- **O2.3 wasip1 prelude and tests under Node.**
+  - files: `src/cgen.rs` (`#ifdef __wasi__`: no-op stack guard, wasi `O_*`/errno/`stat`/`dirent` constants, `CLOCK_*` ids, no `mmap` cache), `std/time`, `std/fs` (errno mapped to the Linux numbers std compares), `tests/golden.rs` (`--target wasm32-wasip1` runs each case without a lacking import under `node tests/wasi_run.mjs`, preopen a temp dir; panic = exit 1 plus the message), `tests/conformance.rs`.
+  - verify: `cargo test --release --test golden wasm` and `--test conformance wasm` pass; `aye run --target wasm32-wasip1 tests/cases/std_fs.aye` prints `tests/cases/std_fs.out`.
+- **O2.4 freestanding.**
+  - files: `src/cgen.rs` (a freestanding runtime: `write`/`abort` as `env` imports, a page allocator on `__builtin_wasm_memory_grow`, no libc symbols), `src/driver.rs` (`-nostdlib -Wl,--no-entry`, `pub extern fn` → `-Wl,--export=`), `extern fn` without a body → wasm import, a JS loader test.
+  - verify: `aye build --target wasm32-freestanding tests/cases/hello.aye -o /tmp/h.wasm` and `node tests/freestanding_run.mjs /tmp/h.wasm` prints the golden; a test calls an exported `pub extern fn add(a: i32, b: i32) i32` from JS and gets the sum.
+- **Not confirmed:**
+  - `@cimport` for a wasm target (libclang not run with a wasm triple).
+  - The Linux triples (no Linux machine).
+  - `wasm32-wasip1-threads`: the sysroot has it; Node's `node:wasi` has no threads.
+  - What a deep recursion does on wasm (no guard; the engine traps).
