@@ -6,6 +6,8 @@
 //!   `X.stderr` exists, `main` must return an error: exit status 1, and
 //!   stderr equal to `X.stderr` in debug mode; safe and fast mode print no
 //!   error return trace, so there stderr must be the first line only.
+//!   A case with `X.needs` (`pkg-config` packages) or `X.tools` (programs on
+//!   `PATH`) is skipped when one is missing.
 //! - `tests/ffi/X.aye`: like `tests/cases`, for programs that link C
 //!   libraries with `@link`; skipped when `pkg-config` does not know a
 //!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
@@ -52,6 +54,17 @@ use std::process::Command;
 
 fn read(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
+}
+
+/// The programs in `X.tools` that are not on `PATH`.
+fn missing_tools(path: &Path) -> Vec<String> {
+    let tools = read(&path.with_extension("tools")).unwrap_or_default();
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    tools
+        .split_whitespace()
+        .filter(|t| !std::env::split_paths(&path_var).any(|d| d.join(t).is_file()))
+        .map(String::from)
+        .collect()
 }
 
 /// The packages in `X.needs` that `pkg-config` does not know.
@@ -167,6 +180,19 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A `tests/cases` program that needs C libraries or programs: skipped
+/// when `pkg-config` does not know a package of `X.needs`, or a program of
+/// `X.tools` is not on `PATH`.
+fn tool_case(path: &Path, work: &Path) -> Result<(), String> {
+    let mut missing = missing_packages(path);
+    missing.extend(missing_tools(path));
+    if !missing.is_empty() {
+        println!("skipped cases/{}: missing {}", name(path), missing.join(", "));
+        return Ok(());
+    }
+    run_case(path, work)
 }
 
 fn ffi_case(path: &Path, work: &Path) -> Result<(), String> {
@@ -969,7 +995,7 @@ fn main() {
         for p in &run_cases {
             let w = &work;
             add(&mut jobs, format!("cases/{}", name(p)), move || {
-                run_case(p, w)
+                tool_case(p, w)
             });
         }
         for p in &ffi_cases {
