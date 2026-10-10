@@ -1,0 +1,161 @@
+// RFC 8259 valid texts: each is parsed and printed back in a canonical
+// compact form (strings re-escaped, numbers printed with six digits).
+
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.json.Value
+import std.mem.AllocError
+import std.text
+import std.text.Builder
+
+let CASES =
+    \\null
+    \\true
+    \\false
+    \\0
+    \\-0
+    \\-1
+    \\123
+    \\1.5
+    \\-0.5
+    \\1e2
+    \\1E+2
+    \\2.5e-3
+    \\0e0
+    \\0.0
+    \\1e308
+    \\1e-400
+    \\12345678901234567890
+    \\0.1000000000000000055511151231257827021181583404541015625
+    \\""
+    \\"abc"
+    \\"\"\\\/\b\f\n\r\t"
+    \\"\u0041\u00e9\u20AC"
+    \\"\uD83D\uDE00"
+    \\"\u0000\u001f"
+    \\"é€😀"
+    \\[]
+    \\[ ]
+    \\{}
+    \\{ }
+    \\[1,2,3]
+    \\[[],[[]],{}]
+    \\{"a":1,"b":[true,null]}
+    \\{"":0}
+    \\{"a":1,"a":2}
+    \\{"k" : { "n" : [ ] } }
+    \\["\u00e9","\ud834\udd1e"]
+
+fn hex(b: *mut Builder, c: u8) AllocError!void {
+    let digits = "0123456789abcdef"
+    try b.append("\\u00")
+    try b.appendByte(digits[(c >> 4) as usize])
+    try b.appendByte(digits[(c & 15) as usize])
+}
+
+fn renderString(b: *mut Builder, s: []u8) AllocError!void {
+    try b.appendByte('"')
+    for c in s {
+        match c {
+            '"' => try b.append("\\\"")
+            '\\' => try b.append("\\\\")
+            '\n' => try b.append("\\n")
+            '\r' => try b.append("\\r")
+            '\t' => try b.append("\\t")
+            0x08 => try b.append("\\b")
+            0x0C => try b.append("\\f")
+            _ => {
+                if c < 0x20 {
+                    try hex(b, c)
+                } else {
+                    try b.appendByte(c)
+                }
+            }
+        }
+    }
+    try b.appendByte('"')
+}
+
+fn render(b: *mut Builder, v: *Value) AllocError!void {
+    match v.* {
+        .Null => try b.append("null")
+        .Bool { value } => {
+            if value {
+                try b.append("true")
+            } else {
+                try b.append("false")
+            }
+        }
+        .Number { value } => try b.appendFloat(value)
+        .String { value } => try renderString(b, value)
+        .Array { items } => {
+            try b.appendByte('[')
+            for i, _ in items {
+                if i > 0 {
+                    try b.appendByte(',')
+                }
+                try render(b, &items[i])
+            }
+            try b.appendByte(']')
+        }
+        .Object { members } => {
+            try b.appendByte('{')
+            for i, _ in members {
+                if i > 0 {
+                    try b.appendByte(',')
+                }
+                try renderString(b, members[i].key)
+                try b.appendByte(':')
+                try render(b, &members[i].value)
+            }
+            try b.appendByte('}')
+        }
+    }
+}
+
+fn show(gpa: *mut General, label: []u8, input: []u8) !void {
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    var out = Builder.init(gpa.allocator())
+    defer out.deinit()
+    try out.append(label)
+    try out.append(" => ")
+    var v = json.parse(&mut arena, input) catch |e| {
+        try out.append(@tagName(e))
+        @println(out.bytes())
+        return
+    }
+    try render(&mut out, &v)
+    @println(out.bytes())
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var it = text.split(CASES, "\n")
+    while it.next() |line| {
+        if line.len > 0 {
+            try show(&mut gpa, line, line)
+        }
+    }
+    // JSON whitespace is space, tab, line feed and carriage return.
+    try show(&mut gpa, "space, tab, CR and LF around the value", " \t\r\n[ 1,\n2 ]\r\n ")
+    // 512 levels is the limit.
+    var deep = Builder.init(gpa.allocator())
+    defer deep.deinit()
+    for _ in 0..json.maxDepth {
+        try deep.appendByte('[')
+    }
+    for _ in 0..json.maxDepth {
+        try deep.appendByte(']')
+    }
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let v = json.parse(&mut arena, deep.bytes()) catch |e| {
+        @println(@tagName(e))
+        return
+    }
+    @println(v is .Array)
+    @println(json.maxDepth)
+}
