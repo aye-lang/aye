@@ -31,6 +31,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O1.3b | 2026-10-08 | `std.net` resolves host names (`getaddrinfo`) and IPv6 (`::1`); `UnknownHost` tag; gap #50 (per-OS declarations) opened | d51f147 |
 | P2.6 | 2026-10-08 | `docs/milestones.md` opens with a status table: 17 milestones, 16 done, M10 partial (TSan not run on this Mac) | 9478de6 |
 | O1.3a | 2026-10-08 | `extern("name") fn` takes a C link name; `std.net` calls libc `listen`/`connect` directly; E0115 for an empty name or a body; errno stays a tiny helper (its symbol differs per OS) | 7b893ee |
+| O1.12 | 2026-10-10 | E0022 for `@println(a, b)` and E0006 for `and`/`or`/`not` name the fix (one `@print` per value or `std.text.Builder`; `&&`, `\|\|`, `!`); explanations, two §18 pitfalls, goldens `println_two_args`, `keyword_and`, `keyword_not` | f997b88 |
 
 ## Browser lane
 
@@ -123,6 +124,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | id | date | result | merge |
 |---|---|---|---|
 | F0.1 | 2026-10-08 | Design doc [`docs/framework.md`](../framework.md); open choices answered; the user's approval of its three questions is pending | 0124e64 |
+| F1.1 | 2026-10-10 | `framework/web` (request, response, `Html`, literal route table, `web.run` over `std.http`), `framework/examples/hello/`, `tests/framework.rs` (`/` 200, `/nope` 404); no compiler gap hit | ef6f47b |
 
 ## Project lane
 
