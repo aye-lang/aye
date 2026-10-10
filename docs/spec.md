@@ -5,7 +5,8 @@ explicit `Allocator` values and is released with `defer`. The syntax is
 Go-like (braces, `name: Type`, no semicolons), errors are values (Zig-style
 error unions), and enums are tagged unions with exhaustive `match`
 (Rust-style). This document describes exactly what the stage0 compiler
-accepts. It is printed by `aye spec` and versioned with the compiler.
+accepts. It is versioned with the compiler: `aye spec` prints its core and
+lists the other sections, `aye spec <name>` prints one, `aye spec all` all.
 
 Conventions: a block marked `aye` is a complete program that compiles; a
 block marked `aye-error` is a program that the compiler rejects, shown to
@@ -67,7 +68,7 @@ aye fmt [--check] <path>                              format in place (a directo
 aye doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
 aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   print the Aye declarations that @cimport makes of a C header
 aye explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program
-aye spec                                              print this document
+aye spec [<name> | all]                               print the core of this document and list the other sections; one section; all
 ```
 
 `<path>` is a `.aye` file or a directory. A file is a module of its own:
@@ -1506,9 +1507,10 @@ std is built into the compiler. Import it with `import std` (then use
 `std.fs...`), `import std.fs` (then `fs...`) or by item (`import
 std.mem.Allocator`).
 
-The modules. Those marked "below" are listed in full in this section; for
-the others, the command on their line prints every pub declaration with
-its documentation (from std's source, so it is always current):
+The modules. Those marked "below" are listed in full in this section,
+which `aye spec std.fs` (the module's name) prints for one; for the
+others, the command on their line prints every pub declaration with its
+documentation (from std's source, so it is always current):
 
 ```
 std.mem       Allocator, AllocError, byte slices: eql, copy, set, indexOf    below
@@ -1528,8 +1530,39 @@ std.testing   the leak-checked allocator of a test                           bel
 std.log       err, info: formatted lines to stderr                           below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, exit                                                     below
-std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn                below
-std.http      HTTP/1.1 parser, response writer, thread-per-connection serve  aye doc --signatures std.http
+std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
+std.http      HTTP/1.1 server: listen, Server.run, Request, Response; parse  aye doc --signatures std.http
+```
+
+An HTTP server is `std.http`, not raw `std.net`. `http.listen(T, host,
+port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves, a thread per
+connection, until `s.stop()`. The handler reads `req.method`,
+`req.target`, `req.body` and `req.header(name)`, and fills `res.status`
+(200), `res.headers` and `res.body`; its `alloc` is an arena that lives
+until the response is written.
+
+```aye
+import std.heap.General
+import std.http
+import std.http.Request
+import std.http.Response
+import std.mem.Allocator
+
+struct App {
+    name: []u8
+}
+
+fn hello(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    res.body = app.name
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var app = App { name: "hello\n" }
+    var s = try http.listen(App, "127.0.0.1", 8080, &mut app, hello)
+    try s.run(gpa.allocator())
+}
 ```
 
 ### std.mem

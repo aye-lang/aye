@@ -15,10 +15,36 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
   aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
   aye cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Aye declarations `@cimport` makes of a C header)
   aye explain <code>
-  aye spec";
+  aye spec [<section> | all]    (no argument: the core of the reference and a list of the other sections)";
 
 /// The language reference that `aye spec` prints.
 const SPEC: &str = include_str!("../docs/spec.md");
+
+/// The sections that `aye spec` prints with no argument, in the order of
+/// the document: what most programs need.
+const SPEC_CORE: &[&str] = &[
+    "1",
+    "4",
+    "5",
+    "conversions",
+    "6",
+    "7",
+    "8",
+    "9",
+    "12",
+    "15",
+    "18",
+];
+
+/// The `###` headings that start a section of their own, with its name.
+/// Every `## N. Title` heading starts one too, and so does every
+/// `### std.m` heading (named `std.m`).
+const SPEC_SPLITS: &[(&str, &str)] = &[
+    ("C functions and types", "c"),
+    ("simd", "simd"),
+    ("Conversions", "conversions"),
+    ("A complete CLI", "cli"),
+];
 
 struct Args {
     cmd: String,
@@ -110,12 +136,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if std::env::args().nth(1).as_deref() == Some("spec") {
-        if std::env::args().count() != 2 {
-            eprintln!("aye: `spec` takes no arguments\n{USAGE}");
-            return ExitCode::from(2);
-        }
-        print!("{SPEC}");
-        return ExitCode::SUCCESS;
+        return spec_cmd(std::env::args().skip(2).collect());
     }
     match std::env::args().nth(1).as_deref() {
         Some("fmt") => return fmt_cmd(std::env::args().skip(2).collect()),
@@ -346,6 +367,129 @@ fn doc_cmd(args: Vec<String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// A part of `docs/spec.md` that `aye spec <name>` prints.
+struct SpecSection {
+    /// `["4", "declarations"]` for `## 4. Declarations`, `["std.fs"]`.
+    names: Vec<String>,
+    /// The heading, or the `###` headings it holds: "C functions and
+    /// types, C headers".
+    title: String,
+    text: &'static str,
+}
+
+/// `SPEC` cut at the headings that start a section (see `SPEC_SPLITS`).
+/// The text before the first heading belongs to the first section, so the
+/// sections, in order, are the whole document.
+fn spec_sections() -> Vec<SpecSection> {
+    let mut found: Vec<(usize, Vec<String>, String)> = Vec::new();
+    let mut at = 0;
+    let mut in_code = false;
+    for line in SPEC.split_inclusive('\n') {
+        let l = line.trim_end();
+        let start = at;
+        at += line.len();
+        if l.starts_with("```") {
+            in_code = !in_code;
+        }
+        if in_code {
+            continue;
+        }
+        if let Some(h) = l.strip_prefix("## ") {
+            let (num, title) = match h.split_once(". ") {
+                Some((n, t)) if n.bytes().all(|b| b.is_ascii_digit()) => (Some(n), t),
+                _ => (None, h),
+            };
+            // The first word of the title: "declarations", "first" for "A
+            // first program", "pitfalls" for "Pitfalls (differences ...)".
+            let word = title
+                .split_whitespace()
+                .find(|w| *w != "A")
+                .unwrap_or(title);
+            let word: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+            let mut names: Vec<String> = num.map(String::from).into_iter().collect();
+            names.push(word.to_lowercase());
+            found.push((start, names, title.to_string()));
+        } else if let Some(h) = l.strip_prefix("### ") {
+            let split = SPEC_SPLITS
+                .iter()
+                .find(|(head, _)| *head == h)
+                .map(|(_, n)| *n);
+            if let Some(name) = split.or(h.starts_with("std.").then_some(h)) {
+                found.push((start, vec![name.to_string()], h.to_string()));
+            } else if let Some((_, names, title)) = found.last_mut()
+                && !names[0].starts_with(|c: char| c.is_ascii_digit())
+            {
+                title.push_str(", ");
+                title.push_str(h);
+            }
+        }
+    }
+    let ends: Vec<usize> = found
+        .iter()
+        .skip(1)
+        .map(|f| f.0)
+        .chain([SPEC.len()])
+        .collect();
+    let mut start = 0;
+    let mut out = Vec::new();
+    for ((_, names, title), end) in found.into_iter().zip(ends) {
+        out.push(SpecSection {
+            names,
+            title,
+            text: &SPEC[start..end],
+        });
+        start = end;
+    }
+    out
+}
+
+/// `aye spec`: the core sections (`SPEC_CORE`), then a list of the others;
+/// `aye spec <name>`: one section, by number or name; `aye spec all`: the
+/// whole document.
+fn spec_cmd(args: Vec<String>) -> ExitCode {
+    let sections = spec_sections();
+    let core = |s: &SpecSection| s.names.iter().any(|n| SPEC_CORE.contains(&n.as_str()));
+    match &args[..] {
+        [] => {
+            let text: String = sections
+                .iter()
+                .filter(|s| core(s))
+                .map(|s| s.text)
+                .collect();
+            println!("{}\n", text.trim_end());
+            println!("---");
+            println!(
+                "This is the core of the reference: sections {}.",
+                SPEC_CORE.join(" ")
+            );
+            println!(
+                "Other sections; `aye spec <name>` prints one, `aye spec all` the whole reference:"
+            );
+            for s in sections.iter().filter(|s| !core(s)) {
+                let names = s.names.join(" ");
+                if s.names.len() == 1 && s.title == s.names[0] {
+                    println!("  {names}");
+                } else {
+                    println!("  {names}: {}", s.title);
+                }
+            }
+        }
+        [all] if all == "all" => print!("{SPEC}"),
+        [name] => match sections.iter().find(|s| s.names.contains(name)) {
+            Some(s) => print!("{}", s.text),
+            None => {
+                eprintln!("aye: the reference has no section `{name}`; `aye spec` lists them");
+                return ExitCode::from(2);
+            }
+        },
+        _ => {
+            eprintln!("aye: `spec` takes at most one section\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// `aye fix`: apply the fix-its that `aye check` reports, in place, and
