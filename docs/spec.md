@@ -1530,6 +1530,7 @@ std.testing   the leak-checked allocator of a test                           bel
 std.log       err, info: formatted lines to stderr                           below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, exit                                                     below
+std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
 std.http      HTTP/1.1 server: listen, Server.run, Request, Response; parse  aye doc --signatures std.http
 ```
