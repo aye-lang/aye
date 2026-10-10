@@ -1535,7 +1535,8 @@ std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
 std.http      HTTP/1.1 server: listen, Server.run, Request, Response; parse  aye doc --signatures std.http
 std.json      JSON (RFC 8259) parsed into a tree in an arena; typed accessors  aye doc --signatures std.json
-std.crypto    SHA-256, SHA-1, HMAC-SHA-256 (streaming and one-shot)          aye doc --signatures std.crypto
+std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
+std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
 ```
 
 An HTTP server is `std.http`, not raw `std.net`. `http.listen(T, host,

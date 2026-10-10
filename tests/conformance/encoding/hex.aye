@@ -1,0 +1,49 @@
+import std.encoding
+import std.heap.General
+import std.mem
+import std.mem.Allocator
+
+// Encodes `s`, prints the text, decodes it again and prints "ok" when the
+// bytes come back.
+fn roundTrip(alloc: Allocator, s: []u8) !void {
+    let text = try encoding.hexEncode(alloc, s)
+    defer alloc.free(text)
+    @println(text)
+    let back = try encoding.hexDecode(alloc, text)
+    defer alloc.free(back)
+    if mem.eql(back, s) {
+        @println("ok")
+    } else {
+        @println("MISMATCH")
+    }
+}
+
+// Decodes `text` and prints the bytes as decimal numbers.
+fn decoded(alloc: Allocator, text: []u8) !void {
+    let bytes = try encoding.hexDecode(alloc, text)
+    defer alloc.free(bytes)
+    for b in bytes {
+        @print(b)
+        @print(" ")
+    }
+    @println("")
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    // RFC 4648 section 10 (base 16), lowercase.
+    try roundTrip(alloc, "")
+    try roundTrip(alloc, "f")
+    try roundTrip(alloc, "fo")
+    try roundTrip(alloc, "foo")
+    try roundTrip(alloc, "foob")
+    try roundTrip(alloc, "fooba")
+    try roundTrip(alloc, "foobar")
+    let all = [4]u8{0x00, 0x0f, 0xa5, 0xff}
+    try roundTrip(alloc, all[..])
+    // Decoding takes either case, and mixed.
+    try decoded(alloc, "666F6F626172")
+    try decoded(alloc, "00fFaA10")
+}

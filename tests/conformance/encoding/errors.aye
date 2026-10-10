@@ -1,0 +1,78 @@
+import std.encoding
+import std.encoding.InputError
+import std.heap.General
+import std.mem.Allocator
+
+// 0 when decoding succeeds, 1 for an invalid character, 2 for an invalid
+// length, 3 for anything else.
+fn code(e: encoding.DecodeError) u8 {
+    if e == InputError.InvalidCharacter {
+        return 1
+    }
+    if e == InputError.InvalidLength {
+        return 2
+    }
+    return 3
+}
+
+fn b64(alloc: Allocator, text: []u8) u8 {
+    let out = encoding.base64Decode(alloc, text) catch |e| {
+        return code(e)
+    }
+    alloc.free(out)
+    return 0
+}
+
+fn b64url(alloc: Allocator, text: []u8) u8 {
+    let out = encoding.base64UrlDecode(alloc, text) catch |e| {
+        return code(e)
+    }
+    alloc.free(out)
+    return 0
+}
+
+fn hex(alloc: Allocator, text: []u8) u8 {
+    let out = encoding.hexDecode(alloc, text) catch |e| {
+        return code(e)
+    }
+    alloc.free(out)
+    return 0
+}
+
+pub fn main() {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    // Standard base64: padded input only, standard alphabet only.
+    @println(b64(alloc, "Zm9v"))
+    @println(b64(alloc, "Zg=="))
+    @println(b64(alloc, "Zg"))
+    @println(b64(alloc, "Zg="))
+    @println(b64(alloc, "Zm9vY"))
+    @println(b64(alloc, "Zm9!"))
+    @println(b64(alloc, "Zm-v"))
+    @println(b64(alloc, "Zm_v"))
+    @println(b64(alloc, "Z==="))
+    @println(b64(alloc, "===="))
+    @println(b64(alloc, "Zg=a"))
+    @println(b64(alloc, "Z\ng="))
+    @println(b64(alloc, "Zm9 Zm9v"))
+    // URL-safe base64: with or without padding.
+    @println(b64url(alloc, "Zm9v"))
+    @println(b64url(alloc, "Zg"))
+    @println(b64url(alloc, "Zg=="))
+    @println(b64url(alloc, "Zg="))
+    @println(b64url(alloc, "Z"))
+    @println(b64url(alloc, "Zm9vY"))
+    @println(b64url(alloc, "Zm+v"))
+    @println(b64url(alloc, "Zm/v"))
+    @println(b64url(alloc, "Zg=a"))
+    @println(b64url(alloc, "Zg==="))
+    // Hex: even length, hex digits.
+    @println(hex(alloc, "00ff"))
+    @println(hex(alloc, "0"))
+    @println(hex(alloc, "abc"))
+    @println(hex(alloc, "0g"))
+    @println(hex(alloc, "0x"))
+    @println(hex(alloc, "ab c"))
+}

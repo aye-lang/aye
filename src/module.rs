@@ -52,6 +52,11 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
         "std/diag/diag.aye",
         include_str!("../std/diag/diag.aye"),
     ),
+    (
+        "std.encoding",
+        "std/encoding/encoding.aye",
+        include_str!("../std/encoding/encoding.aye"),
+    ),
     ("std.fs", "std/fs/fs.aye", include_str!("../std/fs/fs.aye")),
     (
         "std.heap",
