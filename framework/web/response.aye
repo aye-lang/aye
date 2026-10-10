@@ -1,0 +1,48 @@
+// web.Response: what a handler fills in; `web.run` writes it out.
+
+import std.http
+import std.list.List
+import std.mem.Allocator
+import std.text.Builder
+
+/// The errors a handler may return. `web.run` answers `NotFound` with
+/// 404, `MethodNotAllowed` with 405, `BadRequest` with 400 and the rest
+/// with 500.
+pub error Error { BadRequest, NotFound, MethodNotAllowed, OutOfMemory, Internal }
+
+/// The response a handler builds: 200 and an empty `text/plain` body to
+/// begin with. `html()` and `text` set the body and its `Content-Type`.
+pub struct Response {
+    status: u16
+    contentType: []u8
+    headers: List(http.Header)
+    page: Html
+
+    /// An empty response whose memory comes from `alloc`.
+    pub fn init(alloc: Allocator) Response {
+        return Response {
+            status: 200,
+            contentType: "text/plain; charset=utf-8",
+            headers: List(http.Header).init(alloc),
+            page: Html { buf: Builder.init(alloc) },
+        }
+    }
+
+    /// Adds a header (not `Content-Type` or `Content-Length`).
+    pub fn header(self: *mut Self, name: []u8, value: []u8) Error!void {
+        try self.headers.append(http.Header { name: name, value: value })
+    }
+
+    /// Sets the body to `s` as `text/plain`.
+    pub fn text(self: *mut Self, s: []u8) Error!void {
+        self.contentType = "text/plain; charset=utf-8"
+        self.page.buf.clear()
+        try self.page.raw(s)
+    }
+
+    /// Sets the type to `text/html` and returns the body to append to.
+    pub fn html(self: *mut Self) *mut Html {
+        self.contentType = "text/html; charset=utf-8"
+        return &mut self.page
+    }
+}
