@@ -1,5 +1,5 @@
-// std.crypto: hash functions (SHA-256, SHA-1) and HMAC-SHA-256, in plain
-// Aye.
+// std.crypto: hash functions (SHA-256, SHA-1), HMAC-SHA-256, OS random
+// bytes and a constant-time compare. The hashes are plain Aye.
 //
 // Each hash is a struct fed with `update` and ended with `final`; the
 // one-shot functions do both. Words are `u32`: sums wrap (`+%`) and
@@ -8,6 +8,8 @@
 // that name it (the WebSocket handshake).
 
 import std.mem
+
+pub error RandomError { RandomFailed }
 
 let K256 = [64]u32{
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
@@ -320,3 +322,35 @@ pub fn hmacSha256(key: []u8, msg: []u8) [32]u8 {
     h.update(msg)
     return h.final()
 }
+
+/// Fills `buf` with random bytes from the operating system (`getentropy`,
+/// at most 256 bytes per call, so a long buffer takes several).
+pub fn randomBytes(buf: []mut u8) RandomError!void {
+    var at: usize = 0
+    while at < buf.len {
+        var n = buf.len - at
+        if n > 256 {
+            n = 256
+        }
+        if getentropy(buf[at..].ptr, n) != 0 {
+            return RandomError.RandomFailed
+        }
+        at += n
+    }
+}
+
+/// Do `a` and `b` have the same bytes? Takes the same time for any content
+/// of two slices of one length; slices of different lengths are not equal
+/// at once (a length is not secret).
+pub fn constantTimeEqual(a: []u8, b: []u8) bool {
+    if a.len != b.len {
+        return false
+    }
+    var diff: u8 = 0
+    for i in 0..a.len {
+        diff |= a[i] ^ b[i]
+    }
+    return diff == 0
+}
+
+extern fn getentropy(buf: [*]u8, n: usize) i32

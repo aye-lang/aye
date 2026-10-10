@@ -1,0 +1,214 @@
+// std.encoding: bytes as text, the other way from std.text: base64 and
+// base16 (hex) of RFC 4648. Encoding gives new memory from the allocator
+// (free it with `alloc.free`). Decoding checks all of its input and gives
+// an error, never a partial result.
+
+import std.mem.AllocError
+import std.mem.Allocator
+
+pub error InputError { InvalidCharacter, InvalidLength }
+pub error DecodeError = InputError || AllocError
+
+let STD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+let URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+let HEX_DIGITS = "0123456789abcdef"
+
+/// The base64 text of `data` (RFC 4648 section 4: `+` and `/`), padded
+/// with `=` to a multiple of 4 bytes.
+pub fn base64Encode(alloc: Allocator, data: []u8) AllocError![]mut u8 {
+    return encode64(alloc, data, STD_ALPHABET, true)
+}
+
+/// The bytes of base64 `text` (RFC 4648 section 4). The text must be
+/// padded; a byte outside the alphabet gives `InvalidCharacter` and a
+/// length that is not a multiple of 4, `InvalidLength`.
+pub fn base64Decode(alloc: Allocator, text: []u8) DecodeError![]mut u8 {
+    return decode64(alloc, text, false)
+}
+
+/// The URL-safe base64 text of `data` (RFC 4648 section 5: `-` and `_`),
+/// without padding.
+pub fn base64UrlEncode(alloc: Allocator, data: []u8) AllocError![]mut u8 {
+    return encode64(alloc, data, URL_ALPHABET, false)
+}
+
+/// The bytes of URL-safe base64 `text` (RFC 4648 section 5), with or
+/// without its `=` padding. Errors as in `base64Decode`.
+pub fn base64UrlDecode(alloc: Allocator, text: []u8) DecodeError![]mut u8 {
+    return decode64(alloc, text, true)
+}
+
+/// The lowercase hex text of `data` (RFC 4648 section 8), two characters
+/// per byte.
+pub fn hexEncode(alloc: Allocator, data: []u8) AllocError![]mut u8 {
+    let out = try alloc.alloc(0 as u8, data.len * 2)
+    for i, b in data {
+        out[i * 2] = HEX_DIGITS[(b >> 4) as usize]
+        out[i * 2 + 1] = HEX_DIGITS[(b & 15) as usize]
+    }
+    return out
+}
+
+/// The bytes of hex `text`, in either case. An odd length gives
+/// `InvalidLength`, a character that is not a hex digit
+/// `InvalidCharacter`.
+pub fn hexDecode(alloc: Allocator, text: []u8) DecodeError![]mut u8 {
+    if text.len % 2 != 0 {
+        return InputError.InvalidLength
+    }
+    for c in text {
+        if hexValue(c) < 0 {
+            return InputError.InvalidCharacter
+        }
+    }
+    let out = try alloc.alloc(0 as u8, text.len / 2)
+    for i in 0..out.len {
+        let hi = hexValue(text[i * 2]) as u8
+        let lo = hexValue(text[i * 2 + 1]) as u8
+        out[i] = (hi << 4) | lo
+    }
+    return out
+}
+
+fn encode64(alloc: Allocator, data: []u8, alphabet: []u8, pad: bool) AllocError![]mut u8 {
+    let rest = data.len % 3
+    var n = data.len / 3 * 4
+    if rest > 0 {
+        if pad {
+            n += 4
+        } else {
+            n += rest + 1
+        }
+    }
+    let out = try alloc.alloc(0 as u8, n)
+    var o: usize = 0
+    var i: usize = 0
+    while i < data.len {
+        // Up to 3 bytes make a 24-bit group of 4 symbols.
+        let left = data.len - i
+        var group: u32 = (data[i] as u32) << 16
+        if left > 1 {
+            group |= (data[i + 1] as u32) << 8
+        }
+        if left > 2 {
+            group |= data[i + 2] as u32
+        }
+        // 1 byte gives 2 symbols, 2 bytes give 3, 3 bytes give 4.
+        var symbols: usize = 4
+        if left == 1 {
+            symbols = 2
+        } else if left == 2 {
+            symbols = 3
+        }
+        for k in 0..symbols {
+            let shift = (18 - 6 * k) as u32
+            out[o] = alphabet[((group >> shift) & 63) as usize]
+            o += 1
+        }
+        if pad {
+            for k in symbols..4 {
+                out[o] = '='
+                o += 1
+            }
+        }
+        i += 3
+    }
+    return out
+}
+
+fn decode64(alloc: Allocator, text: []u8, url: bool) DecodeError![]mut u8 {
+    var end = text.len
+    while end > 0 && text[end - 1] == '=' {
+        end -= 1
+    }
+    let pads = text.len - end
+    if pads > 2 {
+        return InputError.InvalidCharacter
+    }
+    // Standard text is always padded; URL-safe text may drop the padding,
+    // but a padded text is whole.
+    if (!url || pads > 0) && text.len % 4 != 0 {
+        return InputError.InvalidLength
+    }
+    if end % 4 == 1 {
+        return InputError.InvalidLength
+    }
+    for c in text[..end] {
+        if base64Value(c, url) < 0 {
+            return InputError.InvalidCharacter
+        }
+    }
+    let rest = end % 4
+    var n = end / 4 * 3
+    if rest > 1 {
+        n += rest - 1
+    }
+    let out = try alloc.alloc(0 as u8, n)
+    var o: usize = 0
+    var i: usize = 0
+    while i < end {
+        // Up to 4 symbols make a 24-bit group of up to 3 bytes.
+        let left = end - i
+        var group: u32 = 0
+        for k in 0..4 {
+            group <<= 6
+            if k < left {
+                group |= base64Value(text[i + k], url) as u32
+            }
+        }
+        var bytes: usize = 3
+        if left < 4 {
+            bytes = left - 1
+        }
+        for k in 0..bytes {
+            let shift = (16 - 8 * k) as u32
+            out[o] = ((group >> shift) & 255) as u8
+            o += 1
+        }
+        i += 4
+    }
+    return out
+}
+
+/// The value of the base64 symbol `c`, or -1.
+fn base64Value(c: u8, url: bool) i32 {
+    if c >= 'A' && c <= 'Z' {
+        return (c - 'A') as i32
+    }
+    if c >= 'a' && c <= 'z' {
+        return (c - 'a') as i32 + 26
+    }
+    if c >= '0' && c <= '9' {
+        return (c - '0') as i32 + 52
+    }
+    if url {
+        if c == '-' {
+            return 62
+        }
+        if c == '_' {
+            return 63
+        }
+    } else {
+        if c == '+' {
+            return 62
+        }
+        if c == '/' {
+            return 63
+        }
+    }
+    return -1
+}
+
+/// The value of the hex digit `c`, or -1.
+fn hexValue(c: u8) i32 {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as i32
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as i32 + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as i32 + 10
+    }
+    return -1
+}
