@@ -1,18 +1,23 @@
-//! Conformance harness (O1.1). `tests/conformance/<area>/X.aye` is built
-//! and run for each target; its stdout must equal `X.out`, it must exit 0
-//! and write nothing to stderr. Prints one row per area and target with
-//! passed/total, and exits 1, naming the files, if any program fails.
+//! Conformance harness (O1.1, O11). `tests/conformance/<area>/X.aye` is
+//! built and run for each target (`native`, and `wasm32-wasip1` under
+//! `node:wasi` where the WASI toolchain and `node` are there); its stdout
+//! must equal `X.out`, it must exit 0 and write nothing to stderr. Prints
+//! one row per area and target with passed/total, and exits 1, naming the
+//! files, if any program fails. A program that imports a std module the
+//! target lacks (E0118) is impossible there: it is not counted, a row
+//! without any other program shows `-`, and the programs are listed.
 //!
 //! `harness = false` in Cargo.toml: this file has its own `main`.
-//! Only the `native` target exists so far.
 
-use aye::driver::{self, Mode};
+use aye::driver::{self, Mode, Root, Target};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-const TARGETS: &[&str] = &["native"];
+const TARGETS: &[&str] = &["native", "wasm32-wasip1"];
 
-type Results = Vec<(String, Result<(), String>)>;
+/// `Ok(true)`: the program passed; `Ok(false)`: it cannot exist on the
+/// target (it imports a module the target lacks).
+type Outcome = Result<bool, String>;
+type Results = Vec<(String, Outcome)>;
 
 fn programs(area: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(area)
@@ -24,17 +29,24 @@ fn programs(area: &Path) -> Vec<PathBuf> {
     v
 }
 
-fn run_native(path: &Path, work: &Path) -> Result<(), String> {
+fn run_built(target: &'static Target, path: &Path, work: &Path) -> Outcome {
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     let src = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let want = std::fs::read_to_string(path.with_extension("out"))
         .map_err(|_| "missing .out file".to_string())?;
-    let c = driver::compile_to_c(&name, &src, Mode::Debug).map_err(|d| {
-        d.iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+    let mut root = Root::single(&name, &src);
+    root.target = target;
+    let c = match driver::compile_root(root, Mode::Debug) {
+        Ok(c) => c,
+        Err(d) if d.iter().any(|d| d.code == aye::codes::E0118) => return Ok(false),
+        Err(d) => {
+            return Err(d
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
+    };
     let area = path
         .parent()
         .unwrap()
@@ -42,11 +54,15 @@ fn run_native(path: &Path, work: &Path) -> Result<(), String> {
         .unwrap()
         .to_string_lossy();
     let exe = work.join(format!(
-        "{area}-{}",
-        path.file_stem().unwrap().to_string_lossy()
+        "{area}-{}-{}",
+        path.file_stem().unwrap().to_string_lossy(),
+        target.name
     ));
     driver::cc(&c, &exe, Mode::Debug)?;
-    let out = Command::new(&exe).output().map_err(|e| e.to_string())?;
+    let out = target
+        .run_command(&exe)
+        .output()
+        .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() || !stderr.is_empty() {
@@ -57,14 +73,22 @@ fn run_native(path: &Path, work: &Path) -> Result<(), String> {
             "stdout mismatch\n--- expected\n{want}--- got\n{stdout}"
         ));
     }
-    Ok(())
+    Ok(true)
 }
 
-fn run(target: &str, path: &Path, work: &Path) -> Result<(), String> {
+fn run(target: &str, path: &Path, work: &Path) -> Outcome {
     match target {
-        "native" => run_native(path, work),
+        "native" => run_built(driver::host_target(), path, work),
+        "wasm32-wasip1" => run_built(driver::find_target(target).unwrap(), path, work),
         _ => Err(format!("unknown target {target}")),
     }
+}
+
+/// Can programs run for `target` here?
+fn available(target: &str) -> bool {
+    target == "native"
+        || driver::find_target(target)
+            .is_ok_and(|t| t.toolchain_available() && driver::node_available())
 }
 
 fn main() {
@@ -83,7 +107,7 @@ fn main() {
         let mut pending = Vec::new();
         for area in &areas {
             let area_name = area.file_name().unwrap().to_string_lossy().into_owned();
-            for &target in TARGETS {
+            for &target in TARGETS.iter().filter(|t| available(t)) {
                 let handles: Vec<_> = programs(area)
                     .into_iter()
                     .map(|p| {
@@ -111,23 +135,38 @@ fn main() {
     });
     let _ = std::fs::remove_dir_all(&work);
 
-    println!("{:<10} {:<8} passed/total", "area", "target");
+    println!("{:<10} {:<14} passed/total", "area", "target");
     let mut failures = Vec::new();
+    let mut impossible = Vec::new();
+    let (mut total, mut passed_all) = (0, 0);
     for (area, target, results) in &rows {
-        let passed = results.iter().filter(|(_, r)| r.is_ok()).count();
-        println!("{area:<10} {target:<8} {passed}/{}", results.len());
+        let possible = results.iter().filter(|(_, r)| *r != Ok(false)).count();
+        let passed = results.iter().filter(|(_, r)| *r == Ok(true)).count();
+        if possible == 0 {
+            println!("{area:<10} {target:<14} -");
+        } else {
+            println!("{area:<10} {target:<14} {passed}/{possible}");
+        }
+        total += possible;
+        passed_all += passed;
         for (label, r) in results {
-            if let Err(e) = r {
-                failures.push(format!("{label} [{target}]\n{e}"));
+            match r {
+                Err(e) => failures.push(format!("{label} [{target}]\n{e}")),
+                Ok(false) => impossible.push(format!("{label} [{target}]")),
+                Ok(true) => {}
             }
         }
     }
-    let total: usize = rows.iter().map(|r| r.2.len()).sum();
-    println!(
-        "\nconformance: {} passed; {} failed",
-        total - failures.len(),
-        failures.len()
-    );
+    for t in TARGETS.iter().filter(|t| !available(t)) {
+        println!("{:<10} {t:<14} skipped: no toolchain or no node", "(all)");
+    }
+    println!("\nconformance: {passed_all} passed; {} failed", total - passed_all);
+    if !impossible.is_empty() {
+        println!("\nimpossible (a std module the target lacks):");
+        for i in &impossible {
+            println!("{i}");
+        }
+    }
     if !failures.is_empty() {
         println!("\nfailing:");
         for f in &failures {
