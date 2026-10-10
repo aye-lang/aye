@@ -160,7 +160,10 @@ fn main() {
     for t in TARGETS.iter().filter(|t| !available(t)) {
         println!("{:<10} {t:<14} skipped: no toolchain or no node", "(all)");
     }
-    println!("\nconformance: {passed_all} passed; {} failed", total - passed_all);
+    println!(
+        "\nconformance: {passed_all} passed; {} failed",
+        total - passed_all
+    );
     if !impossible.is_empty() {
         println!("\nimpossible (a std module the target lacks):");
         for i in &impossible {

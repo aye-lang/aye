@@ -102,11 +102,7 @@ fn wasm_skip_reason(path: &Path) -> Option<&'static str> {
 }
 
 /// `f` for a program, unless it does not run on wasm32-wasip1.
-fn wasm_job(
-    kind: &str,
-    path: &Path,
-    f: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
+fn wasm_job(kind: &str, path: &Path, f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     if let Some(why) = wasm_skip_reason(path) {
         println!("skipped wasm32-wasip1 {kind}/{}: {why}", name(path));
         WASM_SKIPPED.fetch_add(1, Ordering::Relaxed);
@@ -1438,7 +1434,10 @@ fn main() {
         results.len() - failed
     );
     if wasm.is_some() {
-        let total = results.iter().filter(|(n, _)| n.starts_with("wasm/")).count();
+        let total = results
+            .iter()
+            .filter(|(n, _)| n.starts_with("wasm/"))
+            .count();
         let bad = results
             .iter()
             .filter(|(n, r)| n.starts_with("wasm/") && r.is_err())

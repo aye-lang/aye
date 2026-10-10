@@ -292,7 +292,9 @@ fn main() -> ExitCode {
             }
         },
         Err(e) if target.is_wasm() && e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("aye: running a wasm program needs `node` (22 or later), which was not found");
+            eprintln!(
+                "aye: running a wasm program needs `node` (22 or later), which was not found"
+            );
             ExitCode::FAILURE
         }
         Err(e) => {
