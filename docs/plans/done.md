@@ -35,6 +35,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O1.13 | 2026-10-10 | `aye spec` prints a ~38.8 KB core (§1, 4, 5, conversions, 6–9, 12, 15, 18) and lists the other sections; `aye spec <name>` (number, first title word, `std.<m>`), `aye spec all`; `SPEC_SPLITS` in `src/main.rs`; four tests in `tests/spec.rs`; §15 points HTTP servers at `std.http` with a hello server | cbd7baa |
 | O1.5a | 2026-10-10 | `std.path`: `join`, `dirname`, `basename`, `extension`, `normalize`, `isUnder` (lexical, takes an allocator); golden `tests/tests/std_path.aye` (21 `test` blocks) | 2a963ad |
 | O1.5 | 2026-10-10 | `std.fs`: `stat` (lstat: size, mtime, kind), `readDir`, `mkdir`, `remove`, `rename`, `PathError`; C prelude helpers (`aye_std_lstat`, `aye_std_pathop`, dirent wrappers; ENOTEMPTY unified); golden `std_fs_dir` in a temp directory; Linux arm64 golden 269/269; gap #50 hit again | 1303780 |
+| O1.6 | 2026-10-10 | `std.process`: `spawn(alloc, argv, stdin, stdout, stderr)` (Inherit/Pipe), `Child.wait` → `Status`, `Child.kill` (SIGTERM), `closeStdin`; pipes are `std.fs.File`; `std.os.getenv`; C prelude `aye_std_spawn`, `aye_std_getenv`; golden `std_process`; Linux golden 270/270 | 94b176e |
 
 ## Browser lane
 
