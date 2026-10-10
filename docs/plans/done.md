@@ -49,6 +49,9 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O3.5 | 2026-10-10 | `https://` in the `std.http` client over libcurl connect-only (`@linkOptional("libcurl")`, private `Stream`, checks always on, `caFile`, `TlsFailed`, `HttpsUnsupported` without libcurl); golden `std_http_client_tls` against `openssl s_server` (macOS and Linux); `tests/golden.rs` learns `X.needs`/`X.tools` skip files | 53672fc |
 | O1.13a | 2026-10-10 | `aye spec` core 26847 bytes (cap 28000), order §1, 15, 18, 4 intro, enums, 5, conversions, 6, 7, arrays/slices, optionals, 8; functions, constants, structs, pointers, match, §9, §12 leave the core with a trailer hint each; eval http_hello: pass, 8 turns, 0 refused calls | 93c73ed |
 | O1.5b | 2026-10-10 | `std.fs.readDir` falls back to `lstat` for entries without a type; `statFollow(path)` follows symlinks (`stat` keeps lstat semantics; C helper takes a follow flag); golden `std_fs_dir` covers file, directory and dangling links; macOS and Linux golden 280/280 | b0399cb |
+| O3.8 | 2026-10-10 | O6 close-out: conformance areas `path` and `process` (3/3 each, 51/51 total), test goldens `tests/tests/std_net.aye` and `std_process.aye` (golden 282/282); every O6 module has `test` blocks, a conformance area and `///` docs | bf4c5d8 |
+| O6 check | 2026-10-10 | On bf4c5d8: `cargo test --release` exit 0 (browser 62/62, conformance 51/51, golden 282/282, spec 10/10), `aye spec` 26886 bytes, `aye doc --signatures std.<m>` prints for net, http, json, path, process, time, crypto, encoding: **O6 holds** | – |
+| O1.11a | 2026-10-10 | `scripts/eval.py` runs agents in `/tmp/aye-eval/<stamp>/<task>-<n>` (0700, `--keep`), table gains a std-modules column; word_freq run 0 refused calls | a4834d2 |
 
 ## Browser lane
 

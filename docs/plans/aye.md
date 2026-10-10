@@ -61,13 +61,13 @@ Not part of done: self-hosting and the native backend (later stages of
 `docs/design.md`), Windows, a package registry or version solving,
 built-in database and cloud clients (`@cimport` covers them).
 
-## Current state (2026-10-08)
+## Current state (2026-10-10)
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). O6 modules all exist; left for the O6 check: conformance areas for `path` and `process`, `test` blocks for `net` and `process` (O3.8).
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). **O6 holds** (checked 2026-10-10 on bf4c5d8, `done.md`).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
-- Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
+- Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport; `X.needs`/`X.tools` skip files), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`, `tests/framework.rs`. `tests/conformance.rs` (18 areas, 51 programs, native).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 
@@ -76,9 +76,9 @@ built-in database and cloud clients (`@cimport` covers them).
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
 | P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: P2.9 |
-| O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | current |
-| O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | next |
-| O2.x | Targets incl. wasm32 (O8) | the O8 check | backlog |
+| O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | done 2026-10-10 |
+| O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | done 2026-10-10 (O6 holds) |
+| O2.x | Targets incl. wasm32 (O8) | the O8 check | current |
 | O5.x | `aye test` maturity (O9) | `aye test browser` | backlog |
 | O4.x | Dependencies (O7) | the O7 check | backlog |
 | O6.x | LSP and HTML docs (O10) | the O10 check | backlog |
@@ -104,19 +104,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O1 server basics
 
-#### O1.11a: eval harness fixes
-- lane: aye
-- goal: `scripts/eval.py` runs each agent in a short working directory (`/tmp/aye-eval/<stamp>/<task>-<n>`) and records in `docs/aye-eval.md` which std modules each `main.aye` imports.
-- serves: AI-writability
-- files: `scripts/eval.py`, `docs/aye-eval.md` (table column)
-- verify: `python3 scripts/eval.py --self-test` → exit 0; `python3 scripts/eval.py --runs 1 --tasks word_freq` → refused calls 0
-- depends on: –
-- parallel with: all
-- where: local (needs `claude` login)
-- model: sonnet
-- time box: 30 min
-- notes: 11 of 15 refused calls on 2026-10-10 were writes to a mistyped copy of the long macOS temp path.
-
 #### O1.7: first HTTP benchmark
 - lane: aye
 - goal: hello world on `std.http` in `fast` mode against Go `net/http` and Node 22 `http`, `ab -k -c 50 -n 100000`; if Aye is below Node, propose a diagnose step.
@@ -130,20 +117,22 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
-## Cards: O3 std breadth (next)
+## Cards: O2 targets (current)
 
-#### O3.8: O6 close-out
+#### O2.1: diagnose wasm32
 - lane: aye
-- goal: every O6 module meets the criterion's three parts: conformance areas `tests/conformance/path/` and `tests/conformance/process/` (new), `test` blocks `tests/tests/std_net.aye` and `tests/tests/std_process.aye` (new); then record the O6 check in `docs/plans/aye.md` "Current state" is left to main.
-- serves: O6
-- files: `tests/conformance/path/`, `tests/conformance/process/`, `tests/tests/std_net.aye`, `tests/tests/std_process.aye` (all new)
-- verify: `cargo test --release --test conformance` → exit 0 with areas `path` and `process` in the table; `cargo test --release --test golden` → exit 0 with the two new test goldens; `for m in net http json path process time crypto encoding; do target/release/aye doc --signatures std.$m; done` → every module prints signatures
-- depends on: O3.5
-- parallel with: O1.13a, O1.5b (not with other `std/process` or `std/net` steps)
-- where: local
-- model: sonnet
+- goal: a written diagnosis of what `aye build --target wasm32-wasip1` needs: which C prelude parts (pthreads, `mmap` for coroutine stacks and the guard region, signals, `getentropy`, sockets, `posix_spawn`, `dlopen` for cimport, 32-bit `usize`) compile under wasi-libc as is, which need `#ifdef __wasm32__` stubs, and which std modules the target must lack (E-code naming the target); a target matrix in `docs/decisions.md`; the `cargo`-side plan for O2.2–O2.4 as proposed cards with verifies.
+- serves: O8
+- files: `docs/decisions.md` (new entry "Targets (O2)"), `docs/plans/aye.md` is left to main
+- verify: `grep -n 'Targets (O2)' docs/decisions.md` → the entry; the report lists, per prelude feature, "as is / stub / unsupported", from an actual `clang --target=wasm32-wasip1` compile of the emitted C of `tests/cases/hello.aye` (or the smallest case) and of a `std.coro` case, with the error lines quoted
+- depends on: –
+- parallel with: all (no std or compiler change)
+- where: local (Homebrew LLVM 23 at `$(brew --prefix llvm)/bin/clang`, wasi-libc at `$(brew --prefix wasi-libc)/share/wasi-sysroot`, `-resource-dir=$(brew --prefix wasi-runtimes)/share/wasi-runtimes`; see `done.md` O0.1; no wasm runtime installed: Node 22 `node --experimental-wasi-unstable-preview1` or `node:wasi` runs wasip1 modules)
+- model: opus
 - time box: 45 min
-- notes: process conformance: echo, pipe through cat, exit status, getenv; path: the RFC-free cases from `tests/tests/std_path.aye` (join, normalize, isUnder). `net` test blocks: loopback listen/connect/write/read in one test with port 0.
+- notes: `aye emit-c` gives the C; the prelude lives in `src/cgen.rs`. Keep the diagnosis to what the compile errors show; do not fix.
+
+## Cards: O3 std breadth (done; leftovers in the backlog)
 
 ## Backlog
 

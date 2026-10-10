@@ -20,9 +20,10 @@ and `git worktree list` (expected: main only). Next, in order:
    calls run it before merging.
 2. **Language cards**, merged one by one on `main`: F1.1, O1.12,
    O1.13, O1.5a, O1.5, O1.6, O3.1, O3.1a, O3.2, O3.3, O3.3a, O3.4a and
-   O3.4, O3.5, O1.12a, O1.13a and O1.5b are done (2026-10-10,
-   `plans/done.md`); O3.8 (O6 close-out) is in flight; then O1.11a and
-   the O6 check.
+   O3.4, O3.5, O1.12a, O1.13a, O1.5b, O3.8 and O1.11a are done
+   (2026-10-10, `plans/done.md`). **O6 holds** (checked on bf4c5d8).
+   Next phase O2.x (targets, O8): O2.1 diagnose wasm32 is in flight; its
+   report gives the O2.2–O2.4 cards.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
    15/15 and showed the spec core is still too large for Claude Code's
@@ -32,7 +33,7 @@ and `git worktree list` (expected: main only). Next, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O3.8, O1.11a, then the O6 check | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O2 targets (O6 holds; P2.9 open) | O2.1, then O2.2–O2.4 | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
