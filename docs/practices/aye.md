@@ -425,7 +425,11 @@ extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: 
 ```
 **Why:** `c_long` follows the target: it is `i64` on LP64 (macOS, Linux)
 and `i32` on wasm32, where `long` is 32 bits. An `i64` there gives the
-wrong struct layout and function signature.
+wrong struct layout and function signature. The reverse holds too:
+`time_t`, `off_t` and `int64_t` are 64 bits on every target, so they are
+`i64`, never `c_long`; `tests/conformance/fs/mtime.aye` declared
+`utimbuf` as two `c_long` and broke on wasm32 once `c_long` followed the
+target (O2.5).
 
 ### `extern union` for C unions
 **Context:** a C union such as `SDL_Event`.
