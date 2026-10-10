@@ -1,0 +1,572 @@
+// std.json: parse JSON (RFC 8259) into a tree of `Value`s.
+//
+// `parse` and `parseDiag` take an `*mut Arena` and allocate the whole tree
+// in it (strings are copies, so the text may go away), so one
+// `arena.deinit()` frees it and a failed parse leaves nothing to clean up.
+// Parsing is strict: no comments, no trailing commas, no leading zeros, no
+// NaN or Infinity, no raw control characters or invalid UTF-8 in strings,
+// no lone surrogate escapes, and nothing but whitespace (space, tab, line
+// feed, carriage return) around the value. The tree is read with the
+// methods of `Value`; each gives null for the wrong kind of value.
+//
+// An error value is only a name, so `parseDiag` also adds one `std.diag`
+// diagnostic with the byte offset and what was expected; `parse` does not.
+
+import std.diag.Diagnostics
+import std.heap.Arena
+import std.list.List
+import std.mem
+import std.mem.Allocator
+import std.text
+import std.text.Builder
+
+/// Why a parse failed. `UnexpectedEnd`: the text ended inside a value.
+/// `UnexpectedToken`: a byte that cannot come here. `TrailingData`: more
+/// than whitespace after the value. `InvalidNumber`: a malformed number,
+/// including a leading zero. `NumberOutOfRange`: a number too large for an
+/// `f64` (a tiny one rounds to 0). `InvalidEscape`: a bad `\` escape or
+/// `\u` digits. `InvalidSurrogate`: a `\u` surrogate without its partner.
+/// `ControlCharacter`: a byte below 0x20 inside a string. `InvalidUtf8`:
+/// bad UTF-8 inside a string. `TooDeep`: more than `maxDepth` arrays and
+/// objects inside each other.
+pub error ParseError {
+    UnexpectedEnd,
+    UnexpectedToken,
+    TrailingData,
+    InvalidNumber,
+    NumberOutOfRange,
+    InvalidEscape,
+    InvalidSurrogate,
+    ControlCharacter,
+    InvalidUtf8,
+    TooDeep,
+    OutOfMemory,
+}
+
+/// The deepest nesting of arrays and objects that `parse` accepts.
+pub let maxDepth: usize = 512
+
+/// A member of an object: its name and its value.
+pub struct Member {
+    key: []u8
+    value: Value
+}
+
+/// A JSON value. A string is UTF-8; an object keeps its members in the
+/// order of the text (a repeated name is kept, and `get` finds the last).
+pub enum Value {
+    Null
+    Bool { value: bool }
+    Number { value: f64 }
+    String { value: []u8 }
+    Array { items: []Value }
+    Object { members: []Member }
+
+    /// The member called `key` of an object (the last one when the name is
+    /// repeated); null for a missing name or a value that is not an object.
+    pub fn get(self: *Self, key: []u8) ?*Value {
+        match self.* {
+            .Object { members } => {
+                var i = members.len
+                while i > 0 {
+                    i -= 1
+                    if mem.eql(members[i].key, key) {
+                        return &members[i].value
+                    }
+                }
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The element `i` of an array; null when out of range or not an array.
+    pub fn at(self: *Self, i: usize) ?*Value {
+        match self.* {
+            .Array { items } => {
+                if i < items.len {
+                    return &items[i]
+                }
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The bytes of a string; null for any other value.
+    pub fn asString(self: *Self) ?[]u8 {
+        match self.* {
+            .String { value } => {
+                return value
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The number; null for any other value.
+    pub fn asNumber(self: *Self) ?f64 {
+        match self.* {
+            .Number { value } => {
+                return value
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The boolean; null for any other value.
+    pub fn asBool(self: *Self) ?bool {
+        match self.* {
+            .Bool { value } => {
+                return value
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The elements of an array; null for any other value.
+    pub fn asArray(self: *Self) ?[]Value {
+        match self.* {
+            .Array { items } => {
+                return items
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The members of an object, in text order; null for any other value.
+    pub fn asObject(self: *Self) ?[]Member {
+        match self.* {
+            .Object { members } => {
+                return members
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// Is this `null`?
+    pub fn isNull(self: *Self) bool {
+        return self is .Null
+    }
+}
+
+/// Parses one JSON text; everything lives in `arena`. On failure the error
+/// says what went wrong but not where (see `parseDiag`).
+pub fn parse(arena: *mut Arena, src: []u8) ParseError!Value {
+    var p = Parser.init(arena.allocator(), src)
+    return run(&mut p)
+}
+
+/// Like `parse`, and on failure also adds one diagnostic to `diags`: its
+/// `start` is the byte offset where the text went wrong (the length of the
+/// text for `UnexpectedEnd`), its message says what was expected, and its
+/// code is the 1-based position of the error in `ParseError`.
+pub fn parseDiag(arena: *mut Arena, src: []u8, diags: *mut Diagnostics) ParseError!Value {
+    var p = Parser.init(arena.allocator(), src)
+    let v = run(&mut p) catch |e| {
+        var end = p.at + 1
+        if end > src.len {
+            end = src.len
+        }
+        diags.add(codeOf(e), p.at, end, p.msg) catch return ParseError.OutOfMemory
+        return e
+    }
+    return v
+}
+
+fn codeOf(e: ParseError) u32 {
+    return match e {
+        .UnexpectedEnd => 1
+        .UnexpectedToken => 2
+        .TrailingData => 3
+        .InvalidNumber => 4
+        .NumberOutOfRange => 5
+        .InvalidEscape => 6
+        .InvalidSurrogate => 7
+        .ControlCharacter => 8
+        .InvalidUtf8 => 9
+        .TooDeep => 10
+        .OutOfMemory => 11
+    }
+}
+
+fn run(p: *mut Parser) ParseError!Value {
+    let v = try p.value(0)
+    p.skipWs()
+    if p.pos < p.src.len {
+        p.fail(p.pos, "expected the end of the text")
+        return ParseError.TrailingData
+    }
+    return v
+}
+
+struct Parser {
+    a: Allocator
+    src: []u8
+    pos: usize
+    /// Scratch for strings and numbers; lives in the arena.
+    scratch: Builder
+    /// Where and why the parse failed, set by `fail`.
+    at: usize
+    msg: []u8
+
+    fn init(a: Allocator, src: []u8) Parser {
+        return Parser { a: a, src: src, pos: 0, scratch: Builder.init(a), at: 0, msg: "" }
+    }
+
+    fn fail(self: *mut Self, at: usize, msg: []u8) {
+        self.at = at
+        self.msg = msg
+    }
+
+    fn skipWs(self: *mut Self) {
+        while self.pos < self.src.len {
+            let c = self.src[self.pos]
+            if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+                return
+            }
+            self.pos += 1
+        }
+    }
+
+    // `depth` is the number of arrays and objects around the value.
+    fn value(self: *mut Self, depth: usize) ParseError!Value {
+        self.skipWs()
+        if self.pos >= self.src.len {
+            self.fail(self.pos, "expected a value")
+            return ParseError.UnexpectedEnd
+        }
+        let c = self.src[self.pos]
+        if c == '{' {
+            return self.object(depth + 1)
+        }
+        if c == '[' {
+            return self.array(depth + 1)
+        }
+        if c == '"' {
+            let s = try self.string()
+            return Value.String { value: s }
+        }
+        if c == '-' || (c >= '0' && c <= '9') {
+            let n = try self.number()
+            return Value.Number { value: n }
+        }
+        if c == 't' {
+            return self.literal("true", Value.Bool { value: true })
+        }
+        if c == 'f' {
+            return self.literal("false", Value.Bool { value: false })
+        }
+        if c == 'n' {
+            return self.literal("null", Value.Null)
+        }
+        self.fail(self.pos, "expected a value")
+        return ParseError.UnexpectedToken
+    }
+
+    fn literal(self: *mut Self, word: []u8, v: Value) ParseError!Value {
+        for i in 0..word.len {
+            if self.pos + i >= self.src.len {
+                self.fail(self.src.len, "expected a value")
+                return ParseError.UnexpectedEnd
+            }
+            if self.src[self.pos + i] != word[i] {
+                self.fail(self.pos + i, "expected a value")
+                return ParseError.UnexpectedToken
+            }
+        }
+        self.pos += word.len
+        return v
+    }
+
+    fn array(self: *mut Self, depth: usize) ParseError!Value {
+        if depth > maxDepth {
+            self.fail(self.pos, "arrays and objects are nested too deeply")
+            return ParseError.TooDeep
+        }
+        self.pos += 1
+        var items = List(Value).init(self.a)
+        self.skipWs()
+        if self.pos < self.src.len && self.src[self.pos] == ']' {
+            self.pos += 1
+            return Value.Array { items: []Value{} }
+        }
+        while true {
+            let v = try self.value(depth)
+            items.append(v) catch return ParseError.OutOfMemory
+            self.skipWs()
+            if self.pos >= self.src.len {
+                self.fail(self.pos, "expected ',' or ']'")
+                return ParseError.UnexpectedEnd
+            }
+            let c = self.src[self.pos]
+            if c == ']' {
+                self.pos += 1
+                break
+            }
+            if c != ',' {
+                self.fail(self.pos, "expected ',' or ']'")
+                return ParseError.UnexpectedToken
+            }
+            self.pos += 1
+        }
+        return Value.Array { items: items.items() }
+    }
+
+    fn object(self: *mut Self, depth: usize) ParseError!Value {
+        if depth > maxDepth {
+            self.fail(self.pos, "arrays and objects are nested too deeply")
+            return ParseError.TooDeep
+        }
+        self.pos += 1
+        var members = List(Member).init(self.a)
+        self.skipWs()
+        if self.pos < self.src.len && self.src[self.pos] == '}' {
+            self.pos += 1
+            return Value.Object { members: []Member{} }
+        }
+        while true {
+            self.skipWs()
+            if self.pos >= self.src.len {
+                self.fail(self.pos, "expected a string")
+                return ParseError.UnexpectedEnd
+            }
+            if self.src[self.pos] != '"' {
+                self.fail(self.pos, "expected a string")
+                return ParseError.UnexpectedToken
+            }
+            let key = try self.string()
+            self.skipWs()
+            if self.pos >= self.src.len {
+                self.fail(self.pos, "expected ':'")
+                return ParseError.UnexpectedEnd
+            }
+            if self.src[self.pos] != ':' {
+                self.fail(self.pos, "expected ':'")
+                return ParseError.UnexpectedToken
+            }
+            self.pos += 1
+            let v = try self.value(depth)
+            members.append(Member { key: key, value: v }) catch return ParseError.OutOfMemory
+            self.skipWs()
+            if self.pos >= self.src.len {
+                self.fail(self.pos, "expected ',' or '}'")
+                return ParseError.UnexpectedEnd
+            }
+            let c = self.src[self.pos]
+            if c == '}' {
+                self.pos += 1
+                break
+            }
+            if c != ',' {
+                self.fail(self.pos, "expected ',' or '}'")
+                return ParseError.UnexpectedToken
+            }
+            self.pos += 1
+        }
+        return Value.Object { members: members.items() }
+    }
+
+    // A string, from its opening quote; the result is a copy in the arena.
+    fn string(self: *mut Self) ParseError![]u8 {
+        self.pos += 1
+        self.scratch.clear()
+        while true {
+            if self.pos >= self.src.len {
+                self.fail(self.src.len, "expected '\"' to end the string")
+                return ParseError.UnexpectedEnd
+            }
+            let c = self.src[self.pos]
+            if c == '"' {
+                self.pos += 1
+                break
+            }
+            if c < 0x20 {
+                self.fail(self.pos, "a control character in a string must be escaped")
+                return ParseError.ControlCharacter
+            }
+            if c == '\\' {
+                try self.escape()
+                continue
+            }
+            if c >= 0x80 {
+                let d = text.decode(self.src[self.pos..])
+                if d.code == 0xFFFD && d.len == 1 {
+                    self.fail(self.pos, "invalid UTF-8 in a string")
+                    return ParseError.InvalidUtf8
+                }
+                self.scratch.append(self.src[self.pos..self.pos + d.len]) catch return ParseError.OutOfMemory
+                self.pos += d.len
+                continue
+            }
+            // A run of plain ASCII.
+            var end = self.pos + 1
+            while end < self.src.len {
+                let r = self.src[end]
+                if r == '"' || r == '\\' || r < 0x20 || r >= 0x80 {
+                    break
+                }
+                end += 1
+            }
+            self.scratch.append(self.src[self.pos..end]) catch return ParseError.OutOfMemory
+            self.pos = end
+        }
+        let bytes = self.scratch.bytes()
+        if bytes.len == 0 {
+            return []u8{}
+        }
+        let out = self.a.alloc(0 as u8, bytes.len) catch return ParseError.OutOfMemory
+        mem.copy(out, bytes)
+        return out
+    }
+
+    // An escape sequence from its backslash, appended to `scratch`.
+    fn escape(self: *mut Self) ParseError!void {
+        let at = self.pos
+        self.pos += 1
+        if self.pos >= self.src.len {
+            self.fail(self.src.len, "expected an escape after '\\'")
+            return ParseError.UnexpectedEnd
+        }
+        let c = self.src[self.pos]
+        if c != 'u' {
+            var b: u8 = 0
+            if c == '"' || c == '\\' || c == '/' {
+                b = c
+            } else if c == 'b' {
+                b = 0x08
+            } else if c == 'f' {
+                b = 0x0C
+            } else if c == 'n' {
+                b = '\n'
+            } else if c == 'r' {
+                b = '\r'
+            } else if c == 't' {
+                b = '\t'
+            } else {
+                self.fail(at, "expected one of \" \\ / b f n r t u after '\\'")
+                return ParseError.InvalidEscape
+            }
+            self.scratch.appendByte(b) catch return ParseError.OutOfMemory
+            self.pos += 1
+            return
+        }
+        self.pos += 1
+        var code = try self.hex4(at)
+        if code >= 0xDC00 && code <= 0xDFFF {
+            self.fail(at, "a low surrogate needs a high surrogate before it")
+            return ParseError.InvalidSurrogate
+        }
+        if code >= 0xD800 && code <= 0xDBFF {
+            if self.pos + 1 >= self.src.len || self.src[self.pos] != '\\' || self.src[self.pos + 1] != 'u' {
+                self.fail(at, "a high surrogate needs a \\u low surrogate after it")
+                return ParseError.InvalidSurrogate
+            }
+            let second = self.pos
+            self.pos += 2
+            let low = try self.hex4(second)
+            if low < 0xDC00 || low > 0xDFFF {
+                self.fail(at, "a high surrogate needs a \\u low surrogate after it")
+                return ParseError.InvalidSurrogate
+            }
+            code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00)
+        }
+        self.scratch.appendChar(code) catch return ParseError.OutOfMemory
+    }
+
+    // Four hex digits at `pos`; `at` is the backslash of the escape.
+    fn hex4(self: *mut Self, at: usize) ParseError!u32 {
+        var code: u32 = 0
+        for _ in 0..4 {
+            if self.pos >= self.src.len {
+                self.fail(self.src.len, "expected four hex digits after \\u")
+                return ParseError.UnexpectedEnd
+            }
+            let c = self.src[self.pos]
+            var d: u32 = 0
+            if c >= '0' && c <= '9' {
+                d = (c - '0') as u32
+            } else if c >= 'a' && c <= 'f' {
+                d = (c - 'a') as u32 + 10
+            } else if c >= 'A' && c <= 'F' {
+                d = (c - 'A') as u32 + 10
+            } else {
+                self.fail(at, "expected four hex digits after \\u")
+                return ParseError.InvalidEscape
+            }
+            code = code * 16 + d
+            self.pos += 1
+        }
+        return code
+    }
+
+    fn number(self: *mut Self) ParseError!f64 {
+        let start = self.pos
+        if self.src[self.pos] == '-' {
+            self.pos += 1
+        }
+        if self.pos >= self.src.len {
+            self.fail(self.pos, "expected a digit")
+            return ParseError.InvalidNumber
+        }
+        let first = self.src[self.pos]
+        if first == '0' {
+            self.pos += 1
+            if self.pos < self.src.len && isDigit(self.src[self.pos]) {
+                self.fail(self.pos, "a number has no leading zeros")
+                return ParseError.InvalidNumber
+            }
+        } else if first >= '1' && first <= '9' {
+            self.skipDigits()
+        } else {
+            self.fail(self.pos, "expected a digit")
+            return ParseError.InvalidNumber
+        }
+        if self.pos < self.src.len && self.src[self.pos] == '.' {
+            self.pos += 1
+            try self.needDigits()
+        }
+        if self.pos < self.src.len && (self.src[self.pos] == 'e' || self.src[self.pos] == 'E') {
+            self.pos += 1
+            if self.pos < self.src.len && (self.src[self.pos] == '+' || self.src[self.pos] == '-') {
+                self.pos += 1
+            }
+            try self.needDigits()
+        }
+        // The syntax is checked; strtod needs a NUL-terminated copy.
+        self.scratch.clear()
+        self.scratch.append(self.src[start..self.pos]) catch return ParseError.OutOfMemory
+        self.scratch.appendByte(0) catch return ParseError.OutOfMemory
+        let v = strtod(self.scratch.bytes().ptr, []u8{}.ptr)
+        if v > 1.7976931348623157e308 || v < -1.7976931348623157e308 {
+            self.fail(start, "a number too large for a 64-bit float")
+            return ParseError.NumberOutOfRange
+        }
+        return v
+    }
+
+    fn skipDigits(self: *mut Self) {
+        while self.pos < self.src.len && isDigit(self.src[self.pos]) {
+            self.pos += 1
+        }
+    }
+
+    fn needDigits(self: *mut Self) ParseError!void {
+        if self.pos >= self.src.len || !isDigit(self.src[self.pos]) {
+            self.fail(self.pos, "expected a digit")
+            return ParseError.InvalidNumber
+        }
+        self.skipDigits()
+    }
+}
+
+fn isDigit(c: u8) bool {
+    return c >= '0' && c <= '9'
+}
+
+// `end` is a `char **` in C; std passes null.
+extern fn strtod(s: [*]u8, end: [*]u8) f64
