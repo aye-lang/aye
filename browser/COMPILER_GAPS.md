@@ -22,54 +22,6 @@ removed in cff3f60.
 
 ## Open
 
-### Allocator and runtime
-
-#### 3. Pointers into a growing `List` or `Pool` dangle
-
-- **Need:** keep a `*mut Node` or `*mut Box` across a call that may add
-  to the container.
-- **Repro:**
-
-  ```aye
-  var xs = List(i64).init(alloc)
-  try xs.append(1)
-  let items = xs.items()
-  for i in 0..100 {
-      try xs.append(i as i64)    // may move the elements
-  }
-  items[0] = 5                   // writes freed memory
-  ```
-
-  Since M9.7 (34e41da) debug-mode `General` poisons freed blocks and
-  keeps them in a quarantine, so this write is reported when the list
-  is freed: `panic: use after free: memory allocated at
-  std/list/list.aye:100:39 and freed here was written after it was
-  freed`. A read through the stale pointer is not reported (it reads
-  the poison bytes), and the report comes at the next check, not at the
-  write.
-- **Workaround:** refer by handle or index, not by pointer, as
-  design.md asks: nodes by `NodeId` (a `Handle(Node)`; 216 `doc.node(h)`
-  calls), layout boxes by `usize` index (333 `t.bx(i)` calls in 26
-  files, each pointer "valid until the next box is added"). Copy fields
-  out before growing (`cloneElement` in `html/parser.aye`), and fetch the
-  pointer again after any call that may grow.
-- **Hit by:** dom, html (B1), layout (B3).
-- **Status:** partly fixed (writes, in debug mode). A compile-time rule
-  and a fat pointer with a generation are declined in decisions.md
-  (P2.3). Open: a stale read is not reported, and a write is reported
-  late. AddressSanitizer would report both at the access (design.md
-  names it for this), but debug-mode `General` (and `aye test`'s
-  allocator) keep freed blocks in a quarantine that is still allocated
-  memory for AddressSanitizer. Proposed step: under
-  `__has_feature(address_sanitizer)` the runtime in `src/cgen.rs`
-  poisons a quarantined block (`ASAN_POISON_MEMORY_REGION`) and
-  unpoisons it before its poison check and `free`; a golden test in
-  `tests/golden.rs`, like the ThreadSanitizer one (skipped where clang's
-  AddressSanitizer does not run), builds the repro above with
-  `--cflags -fsanitize=address` in debug and in safe mode and expects
-  `heap-use-after-free` at the line of the read; the spec's `--cflags`
-  line names `-fsanitize=address`. Verify: `cargo test --test golden`.
-
 ### C interop
 
 #### 49. An `extern fn` cannot have an Aye name other than its C symbol
@@ -345,6 +297,50 @@ form. The commit is the one that fixed the gap.
   added stackful coroutines, `std.coro` (9bc621a), and the engine runs
   generators and async functions on them (34e46aa). Deep recursion
   runs on a thread or a coroutine with a large stack.
+
+#### 3. Pointers into a growing `List` or `Pool` dangle
+
+- **Need:** keep a `*mut Node` or `*mut Box` across a call that may add
+  to the container.
+- **Repro:**
+
+  ```aye
+  var xs = List(i64).init(alloc)
+  try xs.append(1)
+  let items = xs.items()
+  for i in 0..100 {
+      try xs.append(i as i64)    // may move the elements
+  }
+  items[0] = 5                   // writes freed memory
+  ```
+
+  Since M9.7 (34e41da) debug-mode `General` poisons freed blocks and
+  keeps them in a quarantine, so this write is reported when the list
+  is freed: `panic: use after free: memory allocated at
+  std/list/list.aye:100:39 and freed here was written after it was
+  freed`. A read through the stale pointer is not reported (it reads
+  the poison bytes), and the report comes at the next check, not at the
+  write.
+- **Workaround:** refer by handle or index, not by pointer, as
+  design.md asks: nodes by `NodeId` (a `Handle(Node)`; 216 `doc.node(h)`
+  calls), layout boxes by `usize` index (333 `t.bx(i)` calls in 26
+  files, each pointer "valid until the next box is added"). Copy fields
+  out before growing (`cloneElement` in `html/parser.aye`), and fetch the
+  pointer again after any call that may grow.
+- **Hit by:** dom, html (B1), layout (B3).
+- **Status:** fixed (P2.9) in the part that can be fixed. A compile-time
+  rule and a fat pointer with a generation are declined in decisions.md
+  (P2.3). Writes in debug mode were reported late (M9.7, 34e41da). Under
+  AddressSanitizer (`--cflags -fsanitize=address`) the runtime now
+  poisons a block that waits in debug-mode `General`'s quarantine (also
+  `aye test`'s allocator), so a read or a write through the stale
+  pointer is reported at the access: `use-after-poison` in debug mode,
+  `heap-use-after-free` in safe mode (no quarantine there; the block is
+  freed). Golden: `asan/list_stale_read.aye` and
+  `asan/pool_stale_read.aye` in `tests/golden.rs` (`tests/asan/`; skipped
+  where clang's AddressSanitizer does not run; Homebrew's LLVM is tried
+  when the clang on `PATH` has none). Without the sanitizer a stale read
+  is still not reported.
 
 #### 4. Every checked operation was a call in debug builds
 

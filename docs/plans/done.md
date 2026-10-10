@@ -53,6 +53,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O6 check | 2026-10-10 | On bf4c5d8: `cargo test --release` exit 0 (browser 62/62, conformance 51/51, golden 282/282, spec 10/10), `aye spec` 26886 bytes, `aye doc --signatures std.<m>` prints for net, http, json, path, process, time, crypto, encoding: **O6 holds** | – |
 | O1.11a | 2026-10-10 | `scripts/eval.py` runs agents in `/tmp/aye-eval/<stamp>/<task>-<n>` (0700, `--keep`), table gains a std-modules column; word_freq run 0 refused calls | a4834d2 |
 | O2.1 | 2026-10-10 | Diagnose: wasm32 targets in `docs/decisions.md` "Targets (O2)": emitted C compiles for wasm32-wasip1 with Homebrew LLVM + wasi-libc, failures are link errors and wasi constants; hello runs under Node 22 `node:wasi` after stubbing `sigaction`/`sigaltstack`/`getrlimit`; `-pthread` must go; matrix per prelude feature; cards O2.2–O2.4 | a260ccb |
+| P2.9 | 2026-10-10 | Under ASan the debug free queue poisons quarantined blocks: stale `List`/`Pool` reads report `use-after-poison` (debug) and `heap-use-after-free` (safe); `tests/asan/` goldens, `asan_clang` detection (PATH, then Homebrew LLVM); macOS and Linux golden 284/284; gap #3 fixed; TSan also runs with Homebrew clang | 194aff5 |
 
 ## Browser lane
 
