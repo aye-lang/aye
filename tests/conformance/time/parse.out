@@ -1,0 +1,38 @@
+rfc 2026-10-10T07:20:00Z -> 1791616800000
+rfc 2026-10-10T12:50:00+05:30 -> 1791616800000
+rfc 2026-10-09T23:20:00-08:00 -> 1791616800000
+rfc 2026-10-10T07:20:00.5Z -> 1791616800500
+rfc 2026-10-10T07:20:00.123456Z -> 1791616800123
+rfc 2026-10-10t07:20:00z -> 1791616800000
+rfc 1970-01-01T00:00:00+00:00 -> 0
+rfc 1970-01-01T00:00:00-00:00 -> 0
+rfc 2000-01-01T00:00:00+01:00 -> 946681200000
+rfc 1970-01-01T00:00:00+01:00 -> -3600000
+rfc 2024-02-29T00:00:00Z -> 1709164800000
+rfc 2026-02-29T00:00:00Z -> invalid
+rfc 2026-13-10T07:20:00Z -> invalid
+rfc 2026-00-10T07:20:00Z -> invalid
+rfc 2026-10-32T07:20:00Z -> invalid
+rfc 2026-10-10T24:00:00Z -> invalid
+rfc 2026-10-10T07:60:00Z -> invalid
+rfc 2026-10-10T07:20:60Z -> invalid
+rfc 2026-10-10T07:20:00 -> invalid
+rfc 2026-10-10T07:20:00Zx -> invalid
+rfc 2026-10-10 07:20:00Z -> invalid
+rfc 2026-10-10T07:20:00.Z -> invalid
+rfc 2026-10-10T07:20:00+0530 -> invalid
+rfc 2026-10-10T07:20:00+24:00 -> invalid
+rfc 2026-10-10 -> invalid
+rfc  -> invalid
+http Sat, 10 Oct 2026 07:20:00 GMT -> 1791616800000
+http Thu, 01 Jan 1970 00:00:00 GMT -> 0
+http Tue, 29 Feb 2000 23:59:59 GMT -> 951868799000
+http Fri, 10 Oct 2026 07:20:00 GMT -> invalid
+http Sat, 10 Oct 2026 07:20:00 UTC -> invalid
+http Sat, 10 Oct 2026 07:20:00 -> invalid
+http Sat, 1 Oct 2026 07:20:00 GMT -> invalid
+http Sat, 10 Foo 2026 07:20:00 GMT -> invalid
+http Sat, 10 Oct 2026 07:20:60 GMT -> invalid
+http Wed, 29 Feb 2023 00:00:00 GMT -> invalid
+http Sat 10 Oct 2026 07:20:00 GMT -> invalid
+http  -> invalid

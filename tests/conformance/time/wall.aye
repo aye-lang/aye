@@ -1,0 +1,10 @@
+import std.time
+
+pub fn main() {
+    let a = time.now()
+    time.sleep(20)
+    let b = time.now()
+    @println(a > 1700000000000)
+    @println(b >= a + 20)
+    @println(b - a < 5000)
+}
