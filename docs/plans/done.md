@@ -34,6 +34,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O1.12 | 2026-10-10 | E0022 for `@println(a, b)` and E0006 for `and`/`or`/`not` name the fix (one `@print` per value or `std.text.Builder`; `&&`, `\|\|`, `!`); explanations, two §18 pitfalls, goldens `println_two_args`, `keyword_and`, `keyword_not` | f997b88 |
 | O1.13 | 2026-10-10 | `aye spec` prints a ~38.8 KB core (§1, 4, 5, conversions, 6–9, 12, 15, 18) and lists the other sections; `aye spec <name>` (number, first title word, `std.<m>`), `aye spec all`; `SPEC_SPLITS` in `src/main.rs`; four tests in `tests/spec.rs`; §15 points HTTP servers at `std.http` with a hello server | cbd7baa |
 | O1.5a | 2026-10-10 | `std.path`: `join`, `dirname`, `basename`, `extension`, `normalize`, `isUnder` (lexical, takes an allocator); golden `tests/tests/std_path.aye` (21 `test` blocks) | 2a963ad |
+| O1.5 | 2026-10-10 | `std.fs`: `stat` (lstat: size, mtime, kind), `readDir`, `mkdir`, `remove`, `rename`, `PathError`; C prelude helpers (`aye_std_lstat`, `aye_std_pathop`, dirent wrappers; ENOTEMPTY unified); golden `std_fs_dir` in a temp directory; Linux arm64 golden 269/269; gap #50 hit again | 1303780 |
 
 ## Browser lane
 
