@@ -1,0 +1,36 @@
+import std.encoding
+import std.heap.General
+import std.mem
+import std.mem.Allocator
+
+// Encodes `s`, prints the text, decodes it again and prints "ok" when the
+// bytes come back.
+fn roundTrip(alloc: Allocator, s: []u8) !void {
+    let text = try encoding.base64Encode(alloc, s)
+    defer alloc.free(text)
+    @println(text)
+    let back = try encoding.base64Decode(alloc, text)
+    defer alloc.free(back)
+    if mem.eql(back, s) {
+        @println("ok")
+    } else {
+        @println("MISMATCH")
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    // RFC 4648 section 10.
+    try roundTrip(alloc, "")
+    try roundTrip(alloc, "f")
+    try roundTrip(alloc, "fo")
+    try roundTrip(alloc, "foo")
+    try roundTrip(alloc, "foob")
+    try roundTrip(alloc, "fooba")
+    try roundTrip(alloc, "foobar")
+    // The symbols + and /, a zero byte, bytes outside ASCII.
+    let odd = [6]u8{0xfb, 0xff, 0xbf, 0x00, 0x10, 0x83}
+    try roundTrip(alloc, odd[..])
+}

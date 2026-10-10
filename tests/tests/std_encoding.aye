@@ -1,0 +1,115 @@
+// O3.3a: std.encoding: base64, base64url and hex. Every allocation goes
+// through the leak-checked test allocator; the RFC 4648 vectors are in
+// tests/conformance/encoding.
+
+import std.encoding
+import std.encoding.InputError
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+import std.testing
+
+/// Encoding `data` with `f` must give `want`.
+fn encodes(alloc: Allocator, f: fn(Allocator, []u8) AllocError![]mut u8, data: []u8, want: []u8) {
+    let got = f(alloc, data) catch {
+        @expect(false)
+        return
+    }
+    defer alloc.free(got)
+    @expect(mem.eql(got, want))
+}
+
+/// Decoding `text` with `f` must give `want`.
+fn decodes(alloc: Allocator, f: fn(Allocator, []u8) encoding.DecodeError![]mut u8, text: []u8, want: []u8) {
+    let got = f(alloc, text) catch {
+        @expect(false)
+        return
+    }
+    defer alloc.free(got)
+    @expect(mem.eql(got, want))
+}
+
+/// Decoding `text` with `f` must fail with `want`.
+fn rejects(alloc: Allocator, f: fn(Allocator, []u8) encoding.DecodeError![]mut u8, text: []u8, want: InputError) {
+    let got = f(alloc, text) catch |e| {
+        @expect(e == want)
+        return
+    }
+    alloc.free(got)
+    @expect(false)
+}
+
+test "base64 vectors, both ways" {
+    let alloc = @testAllocator()
+    encodes(alloc, encoding.base64Encode, "foobar", "Zm9vYmFy")
+    encodes(alloc, encoding.base64Encode, "fooba", "Zm9vYmE=")
+    encodes(alloc, encoding.base64Encode, "foob", "Zm9vYg==")
+    encodes(alloc, encoding.base64Encode, "", "")
+    decodes(alloc, encoding.base64Decode, "Zm9vYmFy", "foobar")
+    decodes(alloc, encoding.base64Decode, "Zm9vYmE=", "fooba")
+    decodes(alloc, encoding.base64Decode, "Zm9vYg==", "foob")
+    decodes(alloc, encoding.base64Decode, "", "")
+}
+
+test "base64 keeps all byte values" {
+    let alloc = @testAllocator()
+    var all = [256]u8{0, ..}
+    for i in 0..256 {
+        all[i] = i as u8
+    }
+    let text = encoding.base64Encode(alloc, all[..]) catch {
+        @expect(false)
+        return
+    }
+    defer alloc.free(text)
+    @expect(text.len == 344)
+    let back = encoding.base64Decode(alloc, text) catch {
+        @expect(false)
+        return
+    }
+    defer alloc.free(back)
+    @expect(mem.eql(back, all[..]))
+}
+
+test "base64 url alphabet and padding" {
+    let alloc = @testAllocator()
+    let data = [3]u8{0xfb, 0xff, 0xbf}
+    encodes(alloc, encoding.base64Encode, data[..], "+/+/")
+    encodes(alloc, encoding.base64UrlEncode, data[..], "-_-_")
+    decodes(alloc, encoding.base64UrlDecode, "-_-_", data[..])
+    encodes(alloc, encoding.base64UrlEncode, "fo", "Zm8")
+    decodes(alloc, encoding.base64UrlDecode, "Zm8", "fo")
+    decodes(alloc, encoding.base64UrlDecode, "Zm8=", "fo")
+    rejects(alloc, encoding.base64UrlDecode, "+/+/", InputError.InvalidCharacter)
+    rejects(alloc, encoding.base64Decode, "-_-_", InputError.InvalidCharacter)
+}
+
+test "base64 rejects bad characters and lengths" {
+    let alloc = @testAllocator()
+    rejects(alloc, encoding.base64Decode, "Zm9", InputError.InvalidLength)
+    rejects(alloc, encoding.base64Decode, "Zg", InputError.InvalidLength)
+    rejects(alloc, encoding.base64Decode, "Zm9!", InputError.InvalidCharacter)
+    rejects(alloc, encoding.base64Decode, "Z===", InputError.InvalidCharacter)
+    rejects(alloc, encoding.base64Decode, "Zg=a", InputError.InvalidCharacter)
+    rejects(alloc, encoding.base64UrlDecode, "Z", InputError.InvalidLength)
+    rejects(alloc, encoding.base64UrlDecode, "Zg=", InputError.InvalidLength)
+}
+
+test "hex lowercase out, both cases in" {
+    let alloc = @testAllocator()
+    let data = [4]u8{0x00, 0x0f, 0xa5, 0xff}
+    encodes(alloc, encoding.hexEncode, data[..], "000fa5ff")
+    encodes(alloc, encoding.hexEncode, "", "")
+    decodes(alloc, encoding.hexDecode, "000fa5ff", data[..])
+    decodes(alloc, encoding.hexDecode, "000FA5FF", data[..])
+    decodes(alloc, encoding.hexDecode, "000fA5Ff", data[..])
+    decodes(alloc, encoding.hexDecode, "", "")
+}
+
+test "hex rejects odd length and non-hex" {
+    let alloc = @testAllocator()
+    rejects(alloc, encoding.hexDecode, "abc", InputError.InvalidLength)
+    rejects(alloc, encoding.hexDecode, "0g", InputError.InvalidCharacter)
+    rejects(alloc, encoding.hexDecode, "0x", InputError.InvalidCharacter)
+    rejects(alloc, encoding.hexDecode, "ab c", InputError.InvalidCharacter)
+}

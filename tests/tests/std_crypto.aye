@@ -3,7 +3,9 @@
 import std.crypto.HmacSha256
 import std.crypto.Sha1
 import std.crypto.Sha256
+import std.crypto.constantTimeEqual
 import std.crypto.hmacSha256
+import std.crypto.randomBytes
 import std.crypto.sha1
 import std.crypto.sha256
 import std.mem
@@ -103,4 +105,48 @@ test "hmac streaming equals one shot" {
     h.update("def")
     let d = h.final()
     @expect(mem.eql(d[..], want[..]))
+}
+
+test "randomBytes fills a long buffer and writes only the slice" {
+    var buf = [600]u8{0, ..}
+    randomBytes(buf[10..590]) catch {
+        @expect(false)
+        return
+    }
+    var head: u8 = 0
+    var tail: u8 = 0
+    for i in 0..10 {
+        head |= buf[i]
+        tail |= buf[590 + i]
+    }
+    @expect(head == 0 && tail == 0)
+    // 580 random bytes in a row are not all zero, nor equal to the first
+    // 290 repeated.
+    var any: u8 = 0
+    for b in buf[10..590] {
+        any |= b
+    }
+    @expect(any != 0)
+    @expect(!mem.eql(buf[10..300], buf[300..590]))
+}
+
+test "randomBytes of nothing" {
+    var buf = [1]u8{7}
+    randomBytes(buf[..0]) catch {
+        @expect(false)
+        return
+    }
+    @expect(buf[0] == 7)
+}
+
+test "constantTimeEqual compares length and every byte" {
+    let a = [4]u8{1, 2, 3, 4}
+    let b = [4]u8{1, 2, 3, 4}
+    let c = [4]u8{1, 2, 3, 5}
+    let d = [4]u8{0, 2, 3, 4}
+    @expect(constantTimeEqual(a[..], b[..]))
+    @expect(!constantTimeEqual(a[..], c[..]))
+    @expect(!constantTimeEqual(a[..], d[..]))
+    @expect(!constantTimeEqual(a[..3], a[..]))
+    @expect(constantTimeEqual(a[..0], c[..0]))
 }

@@ -65,12 +65,11 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). Missing for O6: random bytes, base64/hex (O3.3a), json writer (O3.1a), http client (O3.4, O3.5).
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a). Missing for O6: http client (O3.4, O3.5).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
-- Stale: `README.md:405-410` says `aye fmt`, `aye doc` and `Pool` are missing (O6.4).
 
 ## Phases
 
@@ -120,32 +119,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O3 std breadth (next)
 
-#### O3.1a: std.json writer
-- lane: aye
-- goal: write JSON (escaping, numbers, nesting) into a `text.Builder`.
-- serves: O6
-- files: `std/json/`
-- verify: `cargo test --release --test conformance` → exit 0; round trip parse → write → parse equal on the json area
-- depends on: O3.1
-- parallel with: O3.2, O3.3
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
-#### O3.3a: random bytes, constant-time compare, base64, hex
-- lane: aye
-- goal: OS random bytes (`getentropy`), constant-time compare, base64 and hex encode/decode.
-- serves: O6
-- files: `std/crypto/`, `std/text/` or a new module (the step decides, says why)
-- verify: `cargo test --release --test conformance` → exit 0, with the RFC 4648 vectors
-- depends on: O3.3
-- parallel with: O3.1, O3.2
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
 #### O3.4: std.http client (plain HTTP)
 - lane: aye
 - goal: request, response, chunked bodies over `std.net`; redirects off by default.
@@ -158,19 +131,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - model: sonnet
 - time box: 45 min
 - notes: –
-
-#### O3.4a: decide HTTPS for the client
-- lane: aye
-- goal: decide how HTTPS comes (libcurl through `@link` as `browser/net/http.aye` does, or the system TLS library on macOS and Linux) and write it down.
-- serves: O6
-- files: `docs/decisions.md`
-- verify: `grep -n 'HTTPS' docs/decisions.md` → the new entry with options, decision, and the O3.5 scope
-- depends on: –
-- parallel with: all (docs only)
-- where: cloud
-- model: opus
-- time box: 30 min
-- notes: `docs/framework.md` "Decisions taken before F0": the client keeps libcurl until O3.4/O3.5 decide; servers end TLS at a reverse proxy.
 
 #### O3.5: HTTPS for the client
 - lane: aye
@@ -191,6 +151,8 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O3.3b `std.encoding` strict base64 (reject non-zero trailing bits) if tokens or signatures need it; the crypto conformance programs use `std.encoding.hexEncode` instead of private `hex` helpers (O3.3a report). Verify: `cargo test --release --test conformance`.
+- O3.1c `std.text.Builder.appendFloatExact` (shortest round-trip float formatting, lifted from `std.json.writeNumber`); `tests/conformance/json/valid.aye` prints through `json.write` instead of its private `render` (O3.1a report). Verify: `cargo test --release --test conformance`.
 - O3.2a `std.time.parseHttp` lenient forms (RFC 850, asctime) if the HTTP client needs them; a `Date` header helper in `std.http` from `now()` (O3.2 report).
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
@@ -213,7 +175,6 @@ brackets.
 - O6.1 `aye lsp` diagnostics and formatting over JSON-RPC (old O6 table).
 - O6.2 `aye lsp` hover with `///` and go to definition (old O6 table).
 - O6.3 `aye doc --html <path>` (old O6 table; the website X3 uses it).
-- O6.4 `README.md:405-410` "Not yet supported" is stale; docs only, tiny (old O6 table).
 - O7.1 `docs/aye-bench.md` complete: req/s rerun, `browser/` build times, binary sizes (old O7 table).
 - O7.2 server gate O13, recorded in `docs/milestones.md` (old O7 table).
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).

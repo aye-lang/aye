@@ -1,0 +1,63 @@
+import std.encoding
+import std.heap.General
+import std.mem
+import std.mem.Allocator
+
+// Encodes `s` URL-safe, prints the text, then decodes it, with the
+// padding added back as well, and prints "ok" when both give `s`.
+fn roundTrip(alloc: Allocator, s: []u8) !void {
+    let text = try encoding.base64UrlEncode(alloc, s)
+    defer alloc.free(text)
+    @println(text)
+    let back = try encoding.base64UrlDecode(alloc, text)
+    defer alloc.free(back)
+    let plain = try encoding.base64Encode(alloc, s)
+    defer alloc.free(plain)
+    var padded = true
+    if plain.len == 0 || plain[plain.len - 1] != '=' {
+        padded = false
+    }
+    if mem.eql(back, s) {
+        @println("ok")
+    } else {
+        @println("MISMATCH")
+    }
+    if padded {
+        // The same text with its "=" padding is accepted too.
+        var buf = [8]u8{0, ..}
+        mem.copy(buf[..text.len], text)
+        var n = text.len
+        while n % 4 != 0 {
+            buf[n] = '='
+            n += 1
+        }
+        let again = try encoding.base64UrlDecode(alloc, buf[..n])
+        defer alloc.free(again)
+        if mem.eql(again, s) {
+            @println("padded ok")
+        } else {
+            @println("MISMATCH")
+        }
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    // RFC 4648 section 10: the same vectors, with no padding.
+    try roundTrip(alloc, "")
+    try roundTrip(alloc, "f")
+    try roundTrip(alloc, "fo")
+    try roundTrip(alloc, "foo")
+    try roundTrip(alloc, "foob")
+    try roundTrip(alloc, "fooba")
+    try roundTrip(alloc, "foobar")
+    // Symbols 62 and 63 are - and _ (+ and / in the standard alphabet).
+    let a = [3]u8{0xfb, 0xff, 0xbf}
+    try roundTrip(alloc, a[..])
+    let b = [2]u8{0xfb, 0xef}
+    try roundTrip(alloc, b[..])
+    let c = [3]u8{0xff, 0xff, 0xff}
+    try roundTrip(alloc, c[..])
+}
