@@ -46,6 +46,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O3.4 | 2026-10-10 | `std.http` client: `request`/`requestWith`/`get`/`post`, `parseUrl`, `ClientOptions` (timeout per wait, body limit, redirects off by default), `ClientError`, `Response.header`; Content-Length, chunked and read-until-close bodies; `https://` is `HttpsUnsupported` until O3.5; golden `std_http_client` (O1.4a server + hand-written server), 7 unit tests | d649ec8 |
 | O1.12a | 2026-10-10 | E0006 hint goldens for `or` and `and` outside `if`; the `not` hint fires only when an operand follows `not` (`keyword_not_var` has none) | 8e5e383 |
 | O1.11 rerun | 2026-10-10 | `scripts/eval.py --runs 3` on c96dc27: 15/15 pass, median 12 turns and 1 check; `std.json` used 3/3, `std.http` 1/3; the 38.6 KB spec core exceeded Claude Code's inline output limit (→ O1.13a, O1.11a); findings in `docs/aye-eval.md` | (docs) |
+| O3.5 | 2026-10-10 | `https://` in the `std.http` client over libcurl connect-only (`@linkOptional("libcurl")`, private `Stream`, checks always on, `caFile`, `TlsFailed`, `HttpsUnsupported` without libcurl); golden `std_http_client_tls` against `openssl s_server` (macOS and Linux); `tests/golden.rs` learns `X.needs`/`X.tools` skip files | 53672fc |
 
 ## Browser lane
 
