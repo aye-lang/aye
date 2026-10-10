@@ -18,10 +18,10 @@ and `git worktree list` (expected: main only). Next, in order:
    on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
    `container`). Steps touching the C prelude, `@cimport` or platform
    calls run it before merging.
-2. **Language cards**, merged one by one on `main`: F1.1 (framework
-   hello world on `std.http`), O1.12 and O1.13 (eval findings:
-   diagnostics, spec size), O1.5/O1.5a/O1.6 (fs, path, process), then
-   O3.x (O3.1 json first). O1.9 and O1.11 are done (`plans/done.md`).
+2. **Language cards**, merged one by one on `main`: F1.1 and O1.12
+   are done (2026-10-10, `plans/done.md`); O1.13 (spec size) and
+   O1.5a (path) are in flight; then O1.5/O1.6 (fs, process), then
+   O3.x (O3.1 json first).
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); rerun with `--runs 3` after O1.12/O1.13 and
    before ranking O3.x.
@@ -30,14 +30,14 @@ and `git worktree list` (expected: main only). Next, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | F1.1, O1.12, O1.13 | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.13, O1.5a, O1.5, O1.6 | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
-| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
+| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
 (X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are
 done, and so is Linux development (X1); next, lane cards in lane
-priority (F1.1 first, it builds on O1.4a). Project steps go when their condition
+priority (F1.1 merged 2026-10-10; Aye-lane cards next). Project steps go when their condition
 holds. The browser resumes when Aye criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
 

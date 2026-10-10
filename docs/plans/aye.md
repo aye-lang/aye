@@ -157,19 +157,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
-#### O1.12: diagnostics that name the fix
-- lane: aye
-- goal: two errors that cost rounds in the O1.11 eval say what to write instead: E0022 for `@println(a, b)` names one `@print` per value (or `std.text.Builder`); E0006 on `and`/`or`/`not` where an operator is expected suggests `&&`/`||`/`!`; both appear in `docs/spec.md` §18 Pitfalls.
-- serves: AI-writability; O4, O13
-- files: `src/sema.rs` or wherever E0022 is raised, `src/parser.rs` (E0006 message), `src/codes.rs` (explanations), `docs/spec.md` §18, `tests/errors/` (new goldens)
-- verify: `cargo test --release` → exit 0, with new `tests/errors` goldens for `@println(1, 2)` and `if a and b {`, whose expected output contains the suggestion
-- depends on: –
-- parallel with: F1.1; not with O1.13 (both edit `docs/spec.md`)
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: from `docs/aye-eval.md` (cli_grep, file_lines). `tests/spec.rs` caps `docs/spec.md` at 30k tokens: keep the pitfall lines short. `codes::tests::examples_are_accurate` checks the examples in `src/codes.rs`.
-
 #### O1.13: `aye spec` that fits one tool output
 - lane: aye
 - goal: `aye spec` prints a core of at most ~40 KB (syntax, types, errors, memory, modules, the §15 std index, pitfalls) plus a list of the other sections, and `aye spec <section>` prints one section; §15 lists `std.http`'s main calls (`listen`, `Server.run`, request and response) so agents use it instead of raw `std.net`.
@@ -295,6 +282,7 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O1.12a E0006 hint follow-ups: goldens for `or` and for `a and b` outside `if` (other E0006 sites in `src/parser.rs` may skip `Parser::unexpected`); the `not` hint fires on any syntax error after an identifier named `not`, guard it (O1.12 report).
 - O1.11 rerun with `--runs 3` before ranking O3.x (O3.1 json stays first, O1.6 process next).
 - O2.1 diagnose wasm32: toolchain and what the C prelude needs (pthreads, `mmap`, `std.coro` stacks, 32-bit `usize`); target matrix in `docs/decisions.md` (old O2 table; flags in done.md O0.1).
 - O2.2 `--target <arch-os>` on build, run, test, emit-c, unknown target = error with code (old O2 table).
@@ -314,7 +302,7 @@ brackets.
 - O7.1 `docs/aye-bench.md` complete: req/s rerun, `browser/` build times, binary sizes (old O7 table).
 - O7.2 server gate O13, recorded in `docs/milestones.md` (old O7 table).
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).
-- `Arena.reset` keeping its first block (framework F1.1, need 5).
+- `Arena.reset` keeping its first block (framework need 5; F1.1 did not need it, later phases may).
 - Signals for graceful stop (framework F3, need 10).
 
 ## Reference
