@@ -100,6 +100,11 @@ pub const STD_FILES: &[(&str, &str, &str)] = &[
         include_str!("../std/pool/pool.aye"),
     ),
     (
+        "std.process",
+        "std/process/process.aye",
+        include_str!("../std/process/process.aye"),
+    ),
+    (
         "std.sort",
         "std/sort/sort.aye",
         include_str!("../std/sort/sort.aye"),

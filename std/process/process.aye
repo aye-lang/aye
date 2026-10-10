@@ -1,0 +1,168 @@
+// std.process: child processes. `spawn` starts a program (found through
+// `PATH` when its name has no `/`) with its standard streams inherited or
+// piped; `Child.wait` gives the exit status, `Child.kill` sends SIGTERM.
+// The child runs in a copy of this process's environment. A pipe is a
+// `std.fs.File`: read the child's output with `readAll` or `read`, write
+// its input with `write`.
+
+import std.fs.File
+import std.mem.Allocator
+import std.text
+
+pub error SpawnError { EmptyArgv, NotFound, AccessDenied, OutOfMemory, SpawnFailed }
+pub error WaitError { WaitFailed }
+pub error KillError { NoSuchProcess, KillFailed }
+
+/// What a child's standard stream is connected to.
+pub enum Stdio {
+    /// The same as this process's stream.
+    Inherit
+    /// A pipe to this process: `Child.stdin` (written by the parent),
+    /// `Child.stdout` or `Child.stderr` (read by the parent).
+    Pipe
+}
+
+/// How a child ended: it exited with `code` (and `signal` is 0), or a
+/// signal ended it (`signal` is the number, `code` is 0).
+pub struct Status {
+    code: i32
+    signal: i32
+
+    /// Did the child exit with status 0?
+    pub fn success(self: Self) bool {
+        return self.signal == 0 && self.code == 0
+    }
+}
+
+/// A started child process. The pipes that `spawn` was asked for are set
+/// (`stdin`, `stdout`, `stderr`); the others are null. Close each pipe you
+/// use (`close`); `wait` and `closeStdin` close `stdin`.
+pub struct Child {
+    pid: i32
+    stdin: ?File
+    stdout: ?File
+    stderr: ?File
+    waited: bool = false
+
+    /// Closes the pipe to the child's stdin, so that the child reads the
+    /// end of its input. Does nothing when stdin is not piped or is closed.
+    pub fn closeStdin(self: *mut Self) {
+        if self.stdin |f| {
+            f.close()
+            self.stdin = null
+        }
+    }
+
+    /// Closes stdin, then waits until the child has ended and gives how.
+    /// Call it once; it gives `WaitFailed` after that.
+    pub fn wait(self: *mut Self) WaitError!Status {
+        self.closeStdin()
+        if self.waited {
+            return WaitError.WaitFailed
+        }
+        var raw: i32 = 0
+        while true {
+            let r = waitpid(self.pid, &mut raw, 0)
+            if r == self.pid {
+                break
+            }
+            if r < 0 && aye_std_errno() != EINTR {
+                return WaitError.WaitFailed
+            }
+        }
+        self.waited = true
+        // The status word is the same on macOS and Linux: low 7 bits the
+        // signal (0 for a normal exit), bits 8 to 15 the exit status.
+        let signal = raw & 0x7f
+        if signal != 0 {
+            return Status { code: 0, signal: signal }
+        }
+        return Status { code: (raw >> 8) & 0xff, signal: 0 }
+    }
+
+    /// Asks the child to end (SIGTERM). It gives `NoSuchProcess` after
+    /// `wait`.
+    pub fn kill(self: *mut Self) KillError!void {
+        if self.waited {
+            return KillError.NoSuchProcess
+        }
+        if kill(self.pid, SIGTERM) != 0 {
+            if aye_std_errno() == ESRCH {
+                return KillError.NoSuchProcess
+            }
+            return KillError.KillFailed
+        }
+    }
+}
+
+/// Starts the program `argv[0]` with the arguments `argv` (the first is the
+/// program's own name). The three streams are `Inherit` (this process's)
+/// or `Pipe` (see `Child`). `alloc` is used only during the call. An
+/// argument must not contain a NUL byte. Output of `@print` is flushed
+/// first, so the child's output follows it.
+pub fn spawn(alloc: Allocator, argv: [][]u8, stdin: Stdio, stdout: Stdio, stderr: Stdio) SpawnError!Child {
+    if argv.len == 0 {
+        return SpawnError.EmptyArgv
+    }
+    var buf = text.Builder.init(alloc)
+    defer buf.deinit()
+    for arg in argv {
+        buf.append(arg) catch return SpawnError.OutOfMemory
+        buf.appendByte(0) catch return SpawnError.OutOfMemory
+    }
+    var modes: i32 = 0
+    if stdin is .Pipe {
+        modes |= 1
+    }
+    if stdout is .Pipe {
+        modes |= 4
+    }
+    if stderr is .Pipe {
+        modes |= 16
+    }
+    // The process id, then the parent's end of each pipe (-1: not piped).
+    var out = [4]i32{0, -1, -1, -1}
+    let e = aye_std_spawn(buf.bytes().ptr, argv.len as i32, modes, out[..].ptr)
+    if e != 0 {
+        return spawnError(e)
+    }
+    return Child {
+        pid: out[0],
+        stdin: pipeEnd(out[1]),
+        stdout: pipeEnd(out[2]),
+        stderr: pipeEnd(out[3]),
+    }
+}
+
+fn pipeEnd(fd: i32) ?File {
+    if fd < 0 {
+        return null
+    }
+    return File { fd: fd }
+}
+
+fn spawnError(e: i32) SpawnError {
+    if e == ENOENT {
+        return SpawnError.NotFound
+    }
+    if e == EACCES {
+        return SpawnError.AccessDenied
+    }
+    if e == ENOMEM {
+        return SpawnError.OutOfMemory
+    }
+    return SpawnError.SpawnFailed
+}
+
+// Values that are the same on macOS and Linux.
+let EINTR: i32 = 4
+let ENOENT: i32 = 2
+let ESRCH: i32 = 3
+let EACCES: i32 = 13
+let ENOMEM: i32 = 12
+let SIGTERM: i32 = 15
+
+extern fn aye_std_errno() i32
+extern fn aye_std_spawn(args: [*]u8, argc: i32, modes: i32, out: [*]i32) i32
+extern fn waitpid(pid: i32, status: *mut i32, options: i32) i32
+extern fn kill(pid: i32, sig: i32) i32
