@@ -254,7 +254,9 @@ pub fn stat(path: []u8) PathError!Stat {
 
 /// The entries of the directory at `path`, in no particular order, without
 /// `.` and `..`. Free the result with `deinit`. A symbolic link is a
-/// `Symlink`, and the kind is `Other` where the file system does not say.
+/// `Symlink`. Where the file system does not give an entry's kind, it is
+/// found as `stat` finds it; it is `Other` only for a socket, pipe or
+/// device, or if that fails.
 pub fn readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries {
     var err: i32 = 0
     let dir = aye_std_opendir(path.ptr, path.len, &mut err) orelse return pathError(err)
@@ -297,7 +299,12 @@ pub fn readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries {
             break
         }
         memcpy(names[used..].ptr, name, len)
-        store[n] = DirEntry { name: names[used..used + len], kind: kindOfType(kind) }
+        let entry = names[used..used + len]
+        var k = kindOfType(kind)
+        if kind == 0 {
+            k = kindOfEntry(alloc, path, entry)
+        }
+        store[n] = DirEntry { name: entry, kind: k }
         used += len
         n += 1
     }
@@ -372,6 +379,23 @@ fn kindOfType(t: i32) Kind {
         return Kind.Symlink
     }
     return Kind.Other
+}
+
+// The kind of `dir/name` by `lstat`, for an entry whose `d_type` is
+// DT_UNKNOWN; `Other` if that fails.
+fn kindOfEntry(alloc: Allocator, dir: []u8, name: []u8) Kind {
+    let buf = alloc.alloc(0 as u8, dir.len + 1 + name.len) catch |_| {
+        return Kind.Other
+    }
+    defer alloc.free(buf)
+    memcpy(buf.ptr, dir.ptr, dir.len)
+    buf[dir.len] = '/'
+    memcpy(buf[dir.len + 1..].ptr, name.ptr, name.len)
+    var out = @zeroed([3]i64)
+    if aye_std_lstat(buf.ptr, buf.len, &mut out[0]) != 0 {
+        return Kind.Other
+    }
+    return kindOfMode(out[2])
 }
 
 fn isDots(name: []u8) bool {

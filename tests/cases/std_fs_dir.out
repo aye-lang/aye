@@ -3,15 +3,21 @@ true
 mkdir: exists
 mkdir: not found
 0
+0
+0
 6 file
 true
 true
 0 file
 dir
 symlink
+symlink
+symlink
 stat: not found
 a.txt file
 b.txt file
+dangling symlink
+dlink symlink
 empty file
 link symlink
 sub dir
