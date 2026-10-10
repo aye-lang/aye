@@ -127,7 +127,7 @@ E0005 = 5 {
 }
 E0006 = 6 {
     "syntax error",
-    "The parser found a token it did not expect. The message says what was expected. A common cause is a missing `)`, `}` or `,` (a multi-line call or literal needs a trailing comma).",
+    "The parser found a token it did not expect. The message says what was expected. A common cause is a missing `)`, `}` or `,` (a multi-line call or literal needs a trailing comma). Another language's `and`, `or` or `not` also ends here; write `&&`, `||` or `!`.",
     r#"pub fn main() {
     let x = (1 + 2
 }
@@ -386,7 +386,7 @@ E0021 = 21 {
 }
 E0022 = 22 {
     "wrong builtin arguments",
-    "Each builtin takes fixed arguments. `@print(x)` takes one argument and `@println(x)` at most one; they print integers, floats, `bool` and `[]u8` strings (print the fields of a struct one by one). `@sizeOf(T)` and `@zeroed(T)` take a type, and `@ptrCast(T, p)` a type and a pointer.",
+    "Each builtin takes fixed arguments. `@print(x)` takes one argument and `@println(x)` at most one (print several values with one `@print` each, or build the line with `std.text.Builder`); they print integers, floats, `bool` and `[]u8` strings (print the fields of a struct one by one). `@sizeOf(T)` and `@zeroed(T)` take a type, and `@ptrCast(T, p)` a type and a pointer.",
     r#"struct P { x: i32 }
 
 pub fn main() {
