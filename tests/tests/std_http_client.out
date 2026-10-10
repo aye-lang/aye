@@ -1,0 +1,9 @@
+test "host, port and path" ... ok
+test "default port and no path" ... ok
+test "a fragment is dropped" ... ok
+test "IPv6 hosts" ... ok
+test "https parses with port 443" ... ok
+test "bad URLs" ... ok
+test "header lookup ignores case and takes the first" ... ok
+
+7 passed; 0 failed

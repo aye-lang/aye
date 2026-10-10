@@ -1,0 +1,83 @@
+// O3.4: std.http client, the parts that need no socket: URL parsing and
+// header lookup on a response.
+
+import std.http
+import std.http.ClientError
+import std.http.Header
+import std.http.Response
+import std.text
+
+fn urlFails(s: []u8, want: ClientError) bool {
+    if http.parseUrl(s) |u| {
+        return false
+    } else |e| {
+        return e == want
+    }
+}
+
+test "host, port and path" {
+    let u = try http.parseUrl("http://example.com:8080/a/b?x=1&y=2")
+    @expect(!u.https)
+    @expect(text.eql(u.host, "example.com"))
+    @expect(u.port == 8080)
+    @expect(text.eql(u.authority, "example.com:8080"))
+    @expect(text.eql(u.target, "/a/b?x=1&y=2"))
+}
+
+test "default port and no path" {
+    let u = try http.parseUrl("HTTP://Example.com")
+    @expect(text.eql(u.host, "Example.com"))
+    @expect(u.port == 80)
+    @expect(u.target.len == 0)
+    let q = try http.parseUrl("http://example.com?a=b")
+    @expect(text.eql(q.target, "?a=b"))
+}
+
+test "a fragment is dropped" {
+    let u = try http.parseUrl("http://h/p?q#frag")
+    @expect(text.eql(u.target, "/p?q"))
+    let v = try http.parseUrl("http://h#frag")
+    @expect(v.target.len == 0)
+}
+
+test "IPv6 hosts" {
+    let u = try http.parseUrl("http://[::1]:9000/x")
+    @expect(text.eql(u.host, "::1"))
+    @expect(u.port == 9000)
+    @expect(text.eql(u.authority, "[::1]:9000"))
+    let v = try http.parseUrl("http://[2001:db8::2]/")
+    @expect(text.eql(v.host, "2001:db8::2"))
+    @expect(v.port == 80)
+}
+
+test "https parses with port 443" {
+    let u = try http.parseUrl("https://example.com/")
+    @expect(u.https)
+    @expect(u.port == 443)
+}
+
+test "bad URLs" {
+    @expect(urlFails("example.com/x", ClientError.InvalidUrl))
+    @expect(urlFails("ftp://example.com/", ClientError.UnsupportedScheme))
+    @expect(urlFails("http:///x", ClientError.InvalidUrl))
+    @expect(urlFails("http://h:/x", ClientError.InvalidUrl))
+    @expect(urlFails("http://h:0/x", ClientError.InvalidUrl))
+    @expect(urlFails("http://h:65536/x", ClientError.InvalidUrl))
+    @expect(urlFails("http://h:8a/x", ClientError.InvalidUrl))
+    @expect(urlFails("http://user@h/x", ClientError.InvalidUrl))
+    @expect(urlFails("http://h/a b", ClientError.InvalidUrl))
+    @expect(urlFails("http://[::1/x", ClientError.InvalidUrl))
+    @expect(urlFails("http://[::1]x/", ClientError.InvalidUrl))
+}
+
+test "header lookup ignores case and takes the first" {
+    let hs = [3]Header{
+        Header { name: "Content-Type", value: "text/html" },
+        Header { name: "X-Dup", value: "one" },
+        Header { name: "x-dup", value: "two" },
+    }
+    var r = Response { status: 200, headers: hs[..], body: "" }
+    @expect(text.eql(r.header("content-TYPE").?, "text/html"))
+    @expect(text.eql(r.header("X-DUP").?, "one"))
+    @expect(r.header("Location") == null)
+}

@@ -1,0 +1,311 @@
+// std.http client (O3.4): plain HTTP over std.net, against the O1.4a server
+// (GET, POST, 404, a 301 returned as-is and followed on request, Connection:
+// close, Content-Length, a HEAD) and against a hand-written server that
+// speaks what `Server` never does (chunked bodies, a body until close, a
+// short body, a garbage status line, silence). Also URL errors, an unknown
+// host and a refused connection.
+
+import std.heap.Arena
+import std.heap.General
+import std.http
+import std.http.ClientOptions
+import std.http.Header
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.mem.AllocError
+import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.net.Listener
+import std.sync.Atomic
+import std.text
+import std.text.Builder
+import std.thread
+import std.time
+
+struct App {
+    hits: Atomic(u32)
+}
+
+// The parts, joined in `alloc`.
+fn join(alloc: Allocator, a: []u8, b: []u8, c: []u8, d: []u8, e: []u8) AllocError![]u8 {
+    var out = Builder.init(alloc)
+    try out.append(a)
+    try out.append(b)
+    try out.append(c)
+    try out.append(d)
+    try out.append(e)
+    return out.bytes()
+}
+
+fn one(alloc: Allocator, name: []u8, value: []u8) []Header {
+    let hs = alloc.alloc(Header { name: name, value: value }, 1) catch return []Header{}
+    return hs
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    _ = app.hits.add(1)
+    let t = req.target
+    if text.eql(t, "/hello") {
+        res.body = "hello"
+        res.headers = one(alloc, "Content-Type", "text/plain")
+    } else if text.eql(t, "/echo") {
+        var len = Builder.init(alloc)
+        len.appendUint(req.body.len as u64) catch return
+        let ct = req.header("content-type") orelse "-"
+        res.body = join(alloc, req.method, " ", len.bytes(), " ", join(alloc, ct, ":", req.body, "", "") catch return) catch return
+    } else if text.eql(t, "/old") {
+        res.status = 301
+        res.body = "moved"
+        res.headers = one(alloc, "Location", "/hello")
+    } else if text.eql(t, "/old-rel") {
+        res.status = 302
+        res.headers = one(alloc, "Location", "hello")
+    } else if text.eql(t, "/see") {
+        res.status = 303
+        res.headers = one(alloc, "Location", "/echo")
+    } else if text.eql(t, "/again") {
+        res.status = 307
+        res.headers = one(alloc, "Location", "/echo")
+    } else if text.eql(t, "/loop") {
+        res.status = 302
+        res.headers = one(alloc, "Location", "/loop")
+    } else if text.eql(t, "/none") {
+        res.status = 204
+    } else if text.eql(t, "/big") {
+        res.body = "0123456789012345678901234567890123456789012345678901234567890123456789"
+    } else if text.startsWith(t, "/show") {
+        let x = req.header("x-test") orelse "-"
+        var host = req.header("host") orelse "-"
+        if text.startsWith(host, "127.0.0.1:") {
+            host = "127.0.0.1:port"
+        }
+        let conn = req.header("connection") orelse "-"
+        res.body = join(alloc, t, " host=", host, " x=", join(alloc, x, " conn=", conn, "", "") catch return) catch return
+    } else {
+        res.status = 404
+        res.body = join(alloc, "not found: ", t, "", "", "") catch return
+    }
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+// A server that answers `count` connections, one at a time, by hand.
+struct Raw {
+    listener: Listener
+    count: usize
+}
+
+fn put(c: Conn, s: []u8) {
+    c.write(s) catch return
+}
+
+// Reads the request head; returns the request target.
+fn readTarget(c: Conn, buf: []mut u8) []u8 {
+    var got: usize = 0
+    while got < buf.len {
+        let n = c.readTimeout(buf[got..], 2000) catch return ""
+        if n == 0 {
+            break
+        }
+        got += n
+        if text.indexOf(buf[..got], "\r\n\r\n") != null {
+            break
+        }
+    }
+    let line = buf[..got]
+    let a = text.indexOf(line, " ") orelse return ""
+    let rest = line[a + 1..]
+    let b = text.indexOf(rest, " ") orelse return ""
+    return rest[..b]
+}
+
+fn rawServe(c: Conn) {
+    var buf = @zeroed([2048]u8)
+    let t = readTarget(c, buf[..])
+    if text.eql(t, "/chunked") {
+        put(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n7;ext=1\r\n, world\r\n0\r\nX-Trailer: t\r\n\r\n")
+    } else if text.eql(t, "/split") {
+        put(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhe")
+        time.sleep(40)
+        put(c, "llo\r\n6\r\n wor")
+        time.sleep(40)
+        put(c, "ld\r\n0\r\n")
+        time.sleep(40)
+        put(c, "\r\n")
+    } else if text.eql(t, "/untilclose") {
+        put(c, "HTTP/1.0 200 OK\r\nServer: raw\r\n\r\nto the end")
+    } else if text.eql(t, "/short") {
+        put(c, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc")
+    } else if text.eql(t, "/bad") {
+        put(c, "garbage\r\n\r\n")
+    } else if text.eql(t, "/badchunk") {
+        put(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n")
+    } else if text.eql(t, "/interim") {
+        put(c, "HTTP/1.1 103 Early Hints\r\nLink: </a.css>\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+    } else if text.eql(t, "/slow") {
+        time.sleep(400)
+    }
+    c.close()
+}
+
+fn rawMain(raw: *mut Raw) {
+    var i: usize = 0
+    while i < raw.count {
+        i += 1
+        let c = raw.listener.accept() catch continue
+        rawServe(c)
+    }
+    raw.listener.close()
+}
+
+fn url(alloc: Allocator, port: u16, path: []u8) []u8 {
+    var b = Builder.init(alloc)
+    b.append("http://127.0.0.1:") catch return ""
+    b.appendUint(port as u64) catch return ""
+    b.append(path) catch return ""
+    return b.bytes()
+}
+
+fn show(label: []u8, r: Response) {
+    @print(label)
+    @print(": ")
+    @print(r.status)
+    @print(" [")
+    @print(r.body)
+    @print("] ")
+    @print(r.body.len)
+    @println()
+}
+
+fn attempt(alloc: Allocator, label: []u8, opts: ClientOptions, method: []u8, u: []u8, headers: []Header, body: []u8) {
+    if http.requestWith(alloc, opts, method, u, headers, body) |r| {
+        show(label, r)
+    } else |e| {
+        @print(label)
+        @print(": error ")
+        @print(@tagName(e))
+        @println()
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+
+    var app = App { hits: Atomic(u32).init(0) }
+    var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
+    let port = s.port()
+    let t = try thread.spawn(Server, run, &mut s)
+    let raw = try net.listen("127.0.0.1", 0)
+    var rawServer = Raw { listener: raw, count: 8 }
+    let rt = try thread.spawn(Raw, rawMain, &mut rawServer)
+    let rport = raw.port()
+
+    let plain = ClientOptions {}
+
+    // GET with a small body; header lookup ignores case.
+    if http.get(a, url(a, port, "/hello")) |r| {
+        show("get", r)
+        @print("  type=")
+        @print(r.header("CONTENT-type").?)
+        @print(" length=")
+        @print(r.header("Content-Length").?)
+        @print(" missing=")
+        @print(r.header("X-Nope") == null)
+        @println()
+    } else |e| {
+        @println(@tagName(e))
+    }
+
+    // POST with a body; the server echoes method, length, type and body.
+    if http.post(a, url(a, port, "/echo"), "text/plain", "some data") |r| {
+        show("post", r)
+    } else |e| {
+        @println(@tagName(e))
+    }
+    attempt(a, "post empty", plain, "POST", url(a, port, "/echo"), []Header{}, "")
+
+    // 404, an empty 204, and a HEAD (the server sends a body; the client
+    // does not read one).
+    attempt(a, "404", plain, "GET", url(a, port, "/missing"), []Header{}, "")
+    attempt(a, "204", plain, "GET", url(a, port, "/none"), []Header{}, "")
+    attempt(a, "head", plain, "HEAD", url(a, port, "/hello"), []Header{}, "")
+
+    // A 301 comes back as it is; with followRedirects it is followed.
+    if http.get(a, url(a, port, "/old")) |r| {
+        show("301", r)
+        @print("  location=")
+        @println(r.header("location").?)
+    } else |e| {
+        @println(@tagName(e))
+    }
+    let follow = ClientOptions { followRedirects: true }
+    attempt(a, "follow 301", follow, "GET", url(a, port, "/old"), []Header{}, "")
+    attempt(a, "follow relative", follow, "GET", url(a, port, "/old-rel"), []Header{}, "")
+    attempt(a, "follow 303", follow, "POST", url(a, port, "/see"), []Header{}, "dropped")
+    attempt(a, "follow 307", follow, "POST", url(a, port, "/again"), []Header{}, "kept")
+    attempt(a, "follow loop", follow, "GET", url(a, port, "/loop"), []Header{}, "")
+
+    // Request line, Host, user headers and Connection: close.
+    let xh = [1]Header{Header { name: "X-Test", value: "yes" }}
+    attempt(a, "headers", plain, "GET", url(a, port, "/show?q=1#frag"), xh[..], "")
+    if http.get(a, url(a, port, "/hello")) |r| {
+        @print("connection=")
+        @println(r.header("connection") orelse "none")
+    } else |e| {
+        @println(@tagName(e))
+    }
+    let own = [1]Header{Header { name: "host", value: "example.test" }}
+    attempt(a, "own host", plain, "GET", url(a, port, "/show"), own[..], "")
+    attempt(a, "no path", plain, "GET", url(a, port, ""), []Header{}, "")
+    attempt(a, "query only", plain, "GET", url(a, port, "?a=b"), []Header{}, "")
+    let bad = [1]Header{Header { name: "X-Bad", value: "a\r\nInjected: 1" }}
+    attempt(a, "header injection", plain, "GET", url(a, port, "/hello"), bad[..], "")
+    let framing = [1]Header{Header { name: "Content-Length", value: "5" }}
+    attempt(a, "own framing", plain, "POST", url(a, port, "/echo"), framing[..], "x")
+    attempt(a, "bad method", plain, "G ET", url(a, port, "/hello"), []Header{}, "")
+
+    // Limits: the body is over maxBodyBytes (Content-Length is known).
+    let small = ClientOptions { maxBodyBytes: 50 }
+    attempt(a, "too big", small, "GET", url(a, port, "/big"), []Header{}, "")
+    attempt(a, "fits", small, "GET", url(a, port, "/hello"), []Header{}, "")
+
+    // The hand-written server.
+    attempt(a, "chunked", plain, "GET", url(a, rport, "/chunked"), []Header{}, "")
+    attempt(a, "split chunks", plain, "GET", url(a, rport, "/split"), []Header{}, "")
+    attempt(a, "until close", plain, "GET", url(a, rport, "/untilclose"), []Header{}, "")
+    attempt(a, "short body", plain, "GET", url(a, rport, "/short"), []Header{}, "")
+    attempt(a, "garbage", plain, "GET", url(a, rport, "/bad"), []Header{}, "")
+    attempt(a, "bad chunk", plain, "GET", url(a, rport, "/badchunk"), []Header{}, "")
+    attempt(a, "interim", plain, "GET", url(a, rport, "/interim"), []Header{}, "")
+    attempt(a, "silence", ClientOptions { timeoutMs: 100 }, "GET", url(a, rport, "/slow"), []Header{}, "")
+
+    // URL and connection errors.
+    attempt(a, "https", plain, "GET", "https://127.0.0.1/", []Header{}, "")
+    attempt(a, "ftp", plain, "GET", "ftp://127.0.0.1/", []Header{}, "")
+    attempt(a, "no scheme", plain, "GET", "127.0.0.1/", []Header{}, "")
+    attempt(a, "empty host", plain, "GET", "http:///x", []Header{}, "")
+    attempt(a, "bad port", plain, "GET", "http://127.0.0.1:99999/", []Header{}, "")
+    attempt(a, "unknown host", plain, "GET", "http://no-such-host.invalid/", []Header{}, "")
+    let gone = try net.listen("127.0.0.1", 0)
+    let gonePort = gone.port()
+    gone.close()
+    attempt(a, "refused", plain, "GET", url(a, gonePort, "/"), []Header{}, "")
+
+    s.stop()
+    t.join()
+    rt.join()
+    @print("handled ")
+    @println(app.hits.load())
+}
