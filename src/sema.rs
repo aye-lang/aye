@@ -43,29 +43,30 @@ impl IntTy {
         )
     }
 
-    /// Bit width. `isize`/`usize` are 64 bits (LP64 targets only for now).
-    pub fn bits(self) -> u32 {
+    /// Bit width. `isize`/`usize` have the target's pointer width.
+    pub fn bits(self, l: Layout) -> u32 {
         match self {
             IntTy::I8 | IntTy::U8 => 8,
             IntTy::I16 | IntTy::U16 => 16,
             IntTy::I32 | IntTy::U32 => 32,
-            _ => 64,
+            IntTy::I64 | IntTy::U64 => 64,
+            IntTy::Isize | IntTy::Usize => l.ptr_bits as u32,
         }
     }
 
-    pub fn min(self) -> i128 {
+    pub fn min(self, l: Layout) -> i128 {
         if self.signed() {
-            -(1i128 << (self.bits() - 1))
+            -(1i128 << (self.bits(l) - 1))
         } else {
             0
         }
     }
 
-    pub fn max(self) -> i128 {
+    pub fn max(self, l: Layout) -> i128 {
         if self.signed() {
-            (1i128 << (self.bits() - 1)) - 1
+            (1i128 << (self.bits(l) - 1)) - 1
         } else {
-            (1i128 << self.bits()) - 1
+            (1i128 << self.bits(l)) - 1
         }
     }
 
@@ -83,6 +84,28 @@ impl IntTy {
             IntTy::Usize => "usize",
         }
     }
+}
+
+/// The integer widths of a target that the language leaves to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// The width of a pointer, `usize` and `isize`.
+    pub ptr_bits: u8,
+    /// The width of C's `long` (`c_long`, `c_ulong`).
+    pub c_long_bits: u8,
+}
+
+impl Layout {
+    /// macOS and Linux on 64-bit machines.
+    pub const LP64: Layout = Layout {
+        ptr_bits: 64,
+        c_long_bits: 64,
+    };
+    /// wasm32: 32-bit pointers and `long`.
+    pub const WASM32: Layout = Layout {
+        ptr_bits: 32,
+        c_long_bits: 32,
+    };
 }
 
 /// The allocator types of std (`std.mem.Allocator`, `std.heap.General`,
@@ -231,7 +254,7 @@ impl Type {
         matches!(self, Type::Int(_) | Type::Float(_))
     }
 
-    fn from_name(name: &str) -> Option<Type> {
+    fn from_name(name: &str, l: Layout) -> Option<Type> {
         Some(match name {
             "i8" => Type::Int(IntTy::I8),
             "i16" => Type::Int(IntTy::I16),
@@ -246,11 +269,13 @@ impl Type {
             "f32" => Type::Float(FloatTy::F32),
             "f64" => Type::Float(FloatTy::F64),
             "bool" => Type::Bool,
-            // C's integer types, as on LP64 systems (macOS and Linux).
+            // C's integer types; `long` has the target's width.
             "c_short" => Type::Int(IntTy::I16),
             "c_ushort" => Type::Int(IntTy::U16),
             "c_int" => Type::Int(IntTy::I32),
             "c_uint" => Type::Int(IntTy::U32),
+            "c_long" if l.c_long_bits == 32 => Type::Int(IntTy::I32),
+            "c_ulong" if l.c_long_bits == 32 => Type::Int(IntTy::U32),
             "c_long" | "c_longlong" => Type::Int(IntTy::I64),
             "c_ulong" | "c_ulonglong" => Type::Int(IntTy::U64),
             "std::mem::Allocator" => Type::Builtin(BuiltinTy::Allocator),
@@ -325,6 +350,8 @@ pub struct Program {
     /// The libraries of `@linkOptional` that no `@link` names: linked only
     /// where they are installed.
     pub optional_links: Vec<String>,
+    /// The target's integer widths.
+    pub layout: Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -960,15 +987,19 @@ struct Checker<'a> {
     optional_links: Vec<String>,
     /// The program's files, indexed by `Span::file`.
     files: Vec<String>,
+    /// The target's integer widths.
+    layout: Layout,
 }
 
 /// Check a file. Without `require_main` (`aye test`, or `aye check` of a
 /// file with tests) the file does not need `pub fn main()`.
-/// `files` are the names of the program's files, indexed by `Span::file`.
+/// `files` are the names of the program's files, indexed by `Span::file`;
+/// `layout` gives the target's integer widths.
 pub fn check(
     file: &ast::File,
     require_main: bool,
     files: &[String],
+    layout: Layout,
 ) -> std::result::Result<Program, Vec<Error>> {
     let mut c = Checker {
         files: files.to_vec(),
@@ -1024,6 +1055,7 @@ pub fn check(
         extern_structs: HashSet::new(),
         links: Vec::new(),
         optional_links: Vec::new(),
+        layout,
     };
     let p = c.program(file, require_main);
     if c.errors.is_empty() {
@@ -1168,8 +1200,8 @@ fn module_of(name: &str) -> &str {
 }
 
 /// `v` as a value of `it`, or an overflow error in a constant at `span`.
-fn fits(v: i128, it: IntTy, span: Span) -> Result<i128> {
-    if v < it.min() || v > it.max() {
+fn fits(v: i128, it: IntTy, l: Layout, span: Span) -> Result<i128> {
+    if v < it.min(l) || v > it.max(l) {
         return err(
             E0089,
             span,
@@ -1194,8 +1226,8 @@ fn zero_of(t: &Type) -> ConstVal {
 }
 
 /// `v` wrapped around to a value of `it`.
-fn wrap(v: i128, it: IntTy) -> i128 {
-    let bits = it.bits();
+fn wrap(v: i128, it: IntTy, l: Layout) -> i128 {
+    let bits = it.bits(l);
     let m = v & ((1i128 << bits) - 1);
     if it.signed() && m >= 1i128 << (bits - 1) {
         m - (1i128 << bits)
@@ -1215,19 +1247,19 @@ fn round_float(v: f64, t: &Type) -> f64 {
 
 /// `a op b` on integers of type `it` in a constant, with the checks that
 /// the program makes at run time.
-fn fold_int(op: BinOp, a: i128, b: i128, it: IntTy, span: Span) -> Result<i128> {
-    let bits = it.bits() as i128;
+fn fold_int(op: BinOp, a: i128, b: i128, it: IntTy, l: Layout, span: Span) -> Result<i128> {
+    let bits = it.bits(l) as i128;
     match op {
-        BinOp::Add => fits(a + b, it, span),
-        BinOp::Sub => fits(a - b, it, span),
-        BinOp::Mul => fits(a.checked_mul(b).unwrap_or(i128::MAX), it, span),
+        BinOp::Add => fits(a + b, it, l, span),
+        BinOp::Sub => fits(a - b, it, l, span),
+        BinOp::Mul => fits(a.checked_mul(b).unwrap_or(i128::MAX), it, l, span),
         BinOp::Div | BinOp::Rem if b == 0 => err(E0089, span, "division by zero in a constant"),
-        BinOp::Div => fits(a / b, it, span),
+        BinOp::Div => fits(a / b, it, l, span),
         // `MIN % -1` overflows like `MIN / -1`.
-        BinOp::Rem => fits(a / b, it, span).map(|_| a % b),
-        BinOp::AddWrap => Ok(wrap(a + b, it)),
-        BinOp::SubWrap => Ok(wrap(a - b, it)),
-        BinOp::MulWrap => Ok(wrap(a.wrapping_mul(b), it)),
+        BinOp::Rem => fits(a / b, it, l, span).map(|_| a % b),
+        BinOp::AddWrap => Ok(wrap(a + b, it, l)),
+        BinOp::SubWrap => Ok(wrap(a - b, it, l)),
+        BinOp::MulWrap => Ok(wrap(a.wrapping_mul(b), it, l)),
         BinOp::BitAnd => Ok(a & b),
         BinOp::BitOr => Ok(a | b),
         BinOp::BitXor => Ok(a ^ b),
@@ -1240,7 +1272,7 @@ fn fold_int(op: BinOp, a: i128, b: i128, it: IntTy, span: Span) -> Result<i128> 
                 bits - 1
             ),
         ),
-        BinOp::Shl => Ok(wrap(a << b, it)),
+        BinOp::Shl => Ok(wrap(a << b, it, l)),
         _ => Ok(a >> b),
     }
 }
@@ -1478,7 +1510,7 @@ impl<'a> Checker<'a> {
                 }
             };
             let bare = name.rsplit("::").next().unwrap();
-            if Type::from_name(bare).is_some()
+            if Type::from_name(bare, self.layout).is_some()
                 || matches!(
                     bare,
                     "true" | "false" | "null" | "Self" | "type" | "simd" | INTEGER | HASH
@@ -1945,6 +1977,7 @@ impl<'a> Checker<'a> {
                 .cloned()
                 .collect(),
             links: std::mem::take(&mut self.links),
+            layout: self.layout,
         }
     }
 
@@ -2142,8 +2175,12 @@ impl<'a> Checker<'a> {
             TExprKind::Unary { op, expr } => match (op, self.fold(expr)?, &e.ty) {
                 (UnOp::Not, ConstVal::Bool(b), _) => ConstVal::Bool(!b),
                 (UnOp::Neg, ConstVal::Float(f), _) => ConstVal::Float(-f),
-                (UnOp::Neg, ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(fits(-v, *it, span)?),
-                (UnOp::BitNot, ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(wrap(!v, *it)),
+                (UnOp::Neg, ConstVal::Int(v), Type::Int(it)) => {
+                    ConstVal::Int(fits(-v, *it, self.layout, span)?)
+                }
+                (UnOp::BitNot, ConstVal::Int(v), Type::Int(it)) => {
+                    ConstVal::Int(wrap(!v, *it, self.layout))
+                }
                 _ => unreachable!(),
             },
             TExprKind::Binary { op, lhs, rhs } => {
@@ -2162,7 +2199,7 @@ impl<'a> Checker<'a> {
                         ConstVal::Bool(cmp(a.cmp(&b)))
                     }
                     (ConstVal::Int(a), ConstVal::Int(b), Type::Int(it)) => {
-                        ConstVal::Int(fold_int(op, a, b, *it, span)?)
+                        ConstVal::Int(fold_int(op, a, b, *it, self.layout, span)?)
                     }
                     (ConstVal::Float(a), ConstVal::Float(b), _) if op.is_comparison() => {
                         ConstVal::Bool(
@@ -2208,10 +2245,14 @@ impl<'a> Checker<'a> {
             }
             TExprKind::Cast(x) => match (self.fold(x)?, &e.ty) {
                 (ConstVal::Bool(b), _) => ConstVal::Int(b as i128),
-                (ConstVal::Int(v), Type::Int(it)) => ConstVal::Int(fits(v, *it, span)?),
+                (ConstVal::Int(v), Type::Int(it)) => {
+                    ConstVal::Int(fits(v, *it, self.layout, span)?)
+                }
                 (ConstVal::Int(v), t) => ConstVal::Float(round_float(v as f64, t)),
                 (ConstVal::Float(f), Type::Int(it)) => {
-                    if !(f > it.min() as f64 - 1.0 && f < it.max() as f64 + 1.0) {
+                    if !(f > it.min(self.layout) as f64 - 1.0
+                        && f < it.max(self.layout) as f64 + 1.0)
+                    {
                         return err(
                             E0089,
                             span,
@@ -3009,7 +3050,8 @@ impl<'a> Checker<'a> {
     fn set_name(&self, name: &str, span: Span) -> Result<String> {
         if self.sets.contains_key(name) {
             Ok(name.to_string())
-        } else if self.top_spans.contains_key(name) || Type::from_name(name).is_some() {
+        } else if self.top_spans.contains_key(name) || Type::from_name(name, self.layout).is_some()
+        {
             err(E0070, span, format!("`{name}` is not an error set"))
         } else {
             err(E0017, span, format!("unknown error set `{name}`"))
@@ -3121,7 +3163,7 @@ impl<'a> Checker<'a> {
 
     fn resolve_type(&mut self, t: &ast::TypeExpr) -> Result<Type> {
         Ok(match &t.kind {
-            TypeExprKind::Named(n) => match Type::from_name(n) {
+            TypeExprKind::Named(n) => match Type::from_name(n, self.layout) {
                 Some(ty) => ty,
                 None if let Some((_, ty, _)) = self.env.iter().find(|(p, ..)| p == n) => ty.clone(),
                 None if self.alias_decls.contains_key(n) => self.alias(n, t.span)?,
@@ -3166,7 +3208,9 @@ impl<'a> Checker<'a> {
             },
             TypeExprKind::Dyn(n) => {
                 if !self.ifaces.contains_key(n) {
-                    let what = if self.top_spans.contains_key(n) || Type::from_name(n).is_some() {
+                    let what = if self.top_spans.contains_key(n)
+                        || Type::from_name(n, self.layout).is_some()
+                    {
                         "is not an interface"
                     } else {
                         "is not defined"
@@ -3179,7 +3223,7 @@ impl<'a> Checker<'a> {
                 if !self.generics.get(g).is_some_and(|f| is_type_fn(f)) {
                     if self.generics.contains_key(g)
                         || self.top_spans.contains_key(g)
-                        || Type::from_name(g).is_some()
+                        || Type::from_name(g, self.layout).is_some()
                     {
                         return err(
                             E0080,
@@ -4773,7 +4817,7 @@ impl<'a> Checker<'a> {
             None => I64,
         };
         let Type::Int(it) = ty else { unreachable!() };
-        if v < it.min() || v > it.max() {
+        if v < it.min(self.layout) || v > it.max(self.layout) {
             return err(
                 E0024,
                 span,
@@ -6212,7 +6256,7 @@ impl<'a> Checker<'a> {
 
     /// Does `name` name a type (not a value)?
     fn is_type_name(&self, name: &str) -> bool {
-        Type::from_name(name).is_some()
+        Type::from_name(name, self.layout).is_some()
             || name == "Self"
             || self.env.iter().any(|(n, ..)| n == name)
             || self.alias_decls.contains_key(name)
@@ -6305,7 +6349,7 @@ impl<'a> Checker<'a> {
         // A type: a type name, a `comptime` parameter, or `F(T)`.
         let static_ty = match &base.kind {
             ExprKind::Ident(tn) if self.lookup(tn).is_none() && self.is_type_name(tn) => {
-                if let Some(Type::Builtin(b)) = Type::from_name(tn) {
+                if let Some(Type::Builtin(b)) = Type::from_name(tn, self.layout) {
                     return self.builtin_static(b, name, args, span);
                 }
                 match (
@@ -7584,7 +7628,7 @@ impl<'a> Checker<'a> {
             }
             Type::ErrorSet(set) => (None, Some(set.clone()), self.sets[set].clone()),
             Type::Int(it) => {
-                let pats = Self::int_patterns(arms, *it, e.span)?
+                let pats = Self::int_patterns(arms, *it, self.layout, e.span)?
                     .into_iter()
                     .map(|r| (Vec::new(), r))
                     .collect();
@@ -7710,6 +7754,7 @@ impl<'a> Checker<'a> {
     fn int_patterns(
         arms: &[ast::MatchArm],
         it: IntTy,
+        l: Layout,
         span: Span,
     ) -> Result<Vec<Vec<(i128, i128)>>> {
         let ty = Type::Int(it);
@@ -7753,8 +7798,8 @@ impl<'a> Checker<'a> {
                         format!("the range {shown} is empty: its start is larger than its end"),
                     );
                 }
-                if p.lo < it.min() || p.hi > it.max() {
-                    let v = if p.lo < it.min() { p.lo } else { p.hi };
+                if p.lo < it.min(l) || p.hi > it.max(l) {
+                    let v = if p.lo < it.min(l) { p.lo } else { p.hi };
                     return err(
                         E0024,
                         p.span,
@@ -7778,15 +7823,15 @@ impl<'a> Checker<'a> {
         if !wildcard {
             seen.sort();
             let mut gaps = Vec::new();
-            let mut next = it.min();
+            let mut next = it.min(l);
             for (a, b) in seen {
                 if a > next {
                     gaps.push((next, a - 1));
                 }
                 next = next.max(b + 1);
             }
-            if next <= it.max() {
-                gaps.push((next, it.max()));
+            if next <= it.max(l) {
+                gaps.push((next, it.max(l)));
             }
             if !gaps.is_empty() {
                 let shown: Vec<String> = gaps

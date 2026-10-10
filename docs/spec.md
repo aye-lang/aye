@@ -453,8 +453,9 @@ pub fn main() {
   name `name` (not on a function with a body; an empty name is E0115).
 - C-compatible types, the only ones allowed in an `extern fn`: integers
   (`i32` is C `int`, `usize` is `size_t`; `c_int`, `c_long`, `c_ulong`,
-  ... name C's types: other names for `i32`, `i64`, `u64`, ..., the sizes
-  on 64-bit macOS and Linux), floats, `bool`, pointers to
+  ... name C's types: other names for `i32`, `i64`, `u64`, ...; `c_long`
+  and `c_ulong` follow the target, 64-bit on macOS and Linux, 32-bit on
+  wasm32), floats, `bool`, pointers to
   C-compatible types (`*T`, `*mut T`, `[*]T`), optional pointers (`?*T`,
   `?[*]T`, `?fn(...)`: C pointers that may be null), `extern struct`s by
   value, and `fn(A) R` of C-compatible types (a callback). C's `void *` is
@@ -582,8 +583,8 @@ pub fn main() {
 
 | Type | Meaning |
 | --- | --- |
-| `i8 i16 i32 i64 isize` | signed integers (`isize` is 64-bit) |
-| `u8 u16 u32 u64 usize` | unsigned integers (`usize` is 64-bit) |
+| `i8 i16 i32 i64 isize` | signed integers (`isize` has the target's pointer width: 64-bit, 32-bit on wasm32) |
+| `u8 u16 u32 u64 usize` | unsigned integers (`usize` likewise) |
 | `f32 f64` | floats |
 | `bool` | `true`, `false` |
 | `[N]T` | array of N elements, a value (copied on assignment) |

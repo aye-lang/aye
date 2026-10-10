@@ -119,7 +119,7 @@ pub fn StrMap(comptime V: type) type {
                     if !self.slots[j].used {
                         break
                     }
-                    let home = hashBytes(self.slots[j].key) as usize & mask
+                    let home = (hashBytes(self.slots[j].key) & mask as u64) as usize
                     // The entry at `j` may move back to `hole` unless its
                     // home is cyclically in (hole, j].
                     var stays = home > hole && home <= j
@@ -148,7 +148,7 @@ pub fn StrMap(comptime V: type) type {
                 return null
             }
             let mask = self.slots.len - 1
-            var i = hashBytes(key) as usize & mask
+            var i = (hashBytes(key) & mask as u64) as usize
             while self.slots[i].used {
                 if mem.eql(self.slots[i].key, key) {
                     return i
@@ -161,7 +161,7 @@ pub fn StrMap(comptime V: type) type {
         // Stores a new entry in the first free slot from its home.
         fn place(self: *mut Self, key: []u8, value: V) {
             let mask = self.slots.len - 1
-            var i = hashBytes(key) as usize & mask
+            var i = (hashBytes(key) & mask as u64) as usize
             while self.slots[i].used {
                 i = (i + 1) & mask
             }
@@ -295,7 +295,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
                     if !self.slots[j].used {
                         break
                     }
-                    let home = mix(self.slots[j].id) as usize & mask
+                    let home = (mix(self.slots[j].id) & mask as u64) as usize
                     var stays = home > hole && home <= j
                     if j < hole {
                         stays = home > hole || home <= j
@@ -322,7 +322,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
                 return null
             }
             let mask = self.slots.len - 1
-            var i = mix(id) as usize & mask
+            var i = (mix(id) & mask as u64) as usize
             while self.slots[i].used {
                 if self.slots[i].id == id {
                     return i
@@ -334,7 +334,7 @@ pub fn IntMap(comptime K: type, comptime V: type) type where K: Integer {
 
         fn place(self: *mut Self, slot: IntSlot(K, V)) {
             let mask = self.slots.len - 1
-            var i = mix(slot.id) as usize & mask
+            var i = (mix(slot.id) & mask as u64) as usize
             while self.slots[i].used {
                 i = (i + 1) & mask
             }
@@ -467,7 +467,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
                     if !self.slots[j].used {
                         break
                     }
-                    let home = self.slots[j].hash as usize & mask
+                    let home = (self.slots[j].hash & mask as u64) as usize
                     var stays = home > hole && home <= j
                     if j < hole {
                         stays = home > hole || home <= j
@@ -494,7 +494,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
                 return null
             }
             let mask = self.slots.len - 1
-            var i = h as usize & mask
+            var i = (h & mask as u64) as usize
             while self.slots[i].used {
                 if self.slots[i].hash == h && self.slots[i].key == key {
                     return i
@@ -506,7 +506,7 @@ pub fn HashMap(comptime K: type, comptime V: type) type where K: Hash {
 
         fn place(self: *mut Self, slot: HashSlot(K, V)) {
             let mask = self.slots.len - 1
-            var i = slot.hash as usize & mask
+            var i = (slot.hash & mask as u64) as usize
             while self.slots[i].used {
                 i = (i + 1) & mask
             }

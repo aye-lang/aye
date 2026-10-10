@@ -423,9 +423,9 @@ and `:143`:
 
 extern fn FT_Get_Advance(face: *mut FTFaceRec, glyph: u32, flags: i32, advance: *mut c_long) i32
 ```
-**Why:** `c_long` is the same type as `i64` on LP64 today, so nothing
-changes at run time; it records what the header says, and it is the one
-place to change on a target where `long` is 32 bits.
+**Why:** `c_long` follows the target: it is `i64` on LP64 (macOS, Linux)
+and `i32` on wasm32, where `long` is 32 bits. An `i64` there gives the
+wrong struct layout and function signature.
 
 ### `extern union` for C unions
 **Context:** a C union such as `SDL_Event`.

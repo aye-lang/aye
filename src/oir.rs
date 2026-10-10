@@ -45,6 +45,8 @@ pub struct Program {
     pub tests: Vec<sema::TestDef>,
     /// Globals and their values.
     pub globals: Vec<sema::GlobalDef>,
+    /// The target's integer widths.
+    pub layout: sema::Layout,
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +384,7 @@ pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
         alloc_impls: p.alloc_impls.clone(),
         tests: p.tests.clone(),
         globals: p.globals.clone(),
+        layout: p.layout,
     }
 }
 
