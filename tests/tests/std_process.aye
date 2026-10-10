@@ -1,0 +1,40 @@
+// O3.8: std.process: spawn, wait, exit status, kill.
+
+import std.process
+import std.process.Stdio
+import std.testing
+
+test "spawn /bin/echo, wait, status" {
+    let alloc = testing.allocator()
+    let argv = [_][]u8{"/bin/echo", "hi"}
+    var child = try process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit)
+    let out = try child.stdout.?.readAll(alloc)
+    defer alloc.free(out)
+    child.stdout.?.close()
+    @expectEqual(3, out.len)
+    let st = try child.wait()
+    @expectEqual(0, st.code)
+    @expectEqual(0, st.signal)
+    @expect(st.success())
+}
+
+test "a non-zero exit status is not success" {
+    let alloc = testing.allocator()
+    let argv = [_][]u8{"/bin/sh", "-c", "exit 3"}
+    var child = try process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    let st = try child.wait()
+    @expectEqual(3, st.code)
+    @expectEqual(0, st.signal)
+    @expect(!st.success())
+}
+
+test "kill a sleeping child, then wait gives the signal" {
+    let alloc = testing.allocator()
+    let argv = [_][]u8{"/bin/sleep", "10"}
+    var child = try process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    try child.kill()
+    let st = try child.wait()
+    @expect(st.signal != 0)
+    @expectEqual(0, st.code)
+    @expect(!st.success())
+}

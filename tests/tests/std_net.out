@@ -1,0 +1,4 @@
+test "listen on port 0, connect, write, read back, close" ... ok
+test "an unknown host" ... ok
+
+2 passed; 0 failed
