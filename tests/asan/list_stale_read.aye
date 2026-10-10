@@ -1,0 +1,19 @@
+// P2.9 (gap #3): a read through a pointer into a `List` that has moved to a
+// larger allocation. Debug mode keeps the freed block in its quarantine;
+// under AddressSanitizer the read is still reported.
+
+import std.heap.General
+import std.list.List
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var xs = List(i64).init(gpa.allocator())
+    defer xs.deinit()
+    try xs.append(1)
+    let items = xs.items()
+    for i in 0..100 {
+        try xs.append(i as i64)
+    }
+    @println(items[0])
+}

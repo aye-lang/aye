@@ -1,0 +1,3 @@
+READ of size 8
+debug: ERROR: AddressSanitizer: use-after-poison
+safe: ERROR: AddressSanitizer: heap-use-after-free

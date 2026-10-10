@@ -1,0 +1,25 @@
+// P2.9 (gap #3): a read through a pointer into a `Pool` that has moved to
+// larger slots. Debug mode keeps the freed block in its quarantine; under
+// AddressSanitizer the read is still reported.
+
+import std.heap.General
+import std.pool.Pool
+
+struct Node {
+    id: i64
+}
+
+let NodePool = Pool(Node)
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var nodes = NodePool.init(gpa.allocator(), 1)
+    defer nodes.deinit()
+    let first = try nodes.insert(Node { id: 1 })
+    let node = nodes.get(first).?
+    // The second node moves the slots to a larger allocation.
+    let second = try nodes.insert(Node { id: 2 })
+    @println(node.id)
+    @println(second.index)
+}

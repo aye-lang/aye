@@ -41,6 +41,12 @@
 //!   `app.toml`, or none); `aye test app` runs its tests.
 //! - `aye run`, `aye build -o`, `aye check`, `aye test --filter` and `aye
 //!   test --module` are also run through the built binary.
+//! - `tests/asan/X.aye`: built with `--cflags -fsanitize=address` in debug
+//!   and safe mode, the program reads freed memory and must die with a
+//!   report that contains each line of `X.asan` (`debug: ` and `safe: `
+//!   lines count in that mode only), printing nothing. Skipped
+//!   where AddressSanitizer does not run (Homebrew's LLVM is tried when the
+//!   clang on `PATH` has none).
 //! - `perf`: the debug build of `tests/cases/general_churn.aye` finishes
 //!   within 10 s (`General` allocates and frees in constant time).
 //! - `aye build --cflags -fsanitize=thread`: the M10 fan-out program runs
@@ -814,6 +820,107 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The `clang` whose AddressSanitizer works here, as the directory to put
+/// first on `PATH` (`None` for the clang already on it): a C program that
+/// reads freed memory, built with `-fsanitize=address`, must die with a
+/// `heap-use-after-free` report. The clang on `PATH` is tried first, then
+/// Homebrew's LLVM (Apple's AddressSanitizer hangs on some Macs).
+fn asan_clang(work: &Path, tag: &str) -> Option<Option<PathBuf>> {
+    let src = work.join(format!("{tag}_asan_probe.c"));
+    let c = "#include <stdlib.h>\nint main(void) { volatile char *p = malloc(16); free((void *)p); return p[0]; }\n";
+    std::fs::write(&src, c).ok()?;
+    let brew = Command::new("brew")
+        .args(["--prefix", "llvm"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| Path::new(String::from_utf8_lossy(&o.stdout).trim()).join("bin"));
+    for dir in [None, brew] {
+        let exe = work.join(format!("{tag}_asan_probe"));
+        let clang = dir.as_ref().map_or("clang".into(), |d| d.join("clang"));
+        let built = Command::new(clang)
+            .args(["-fsanitize=address", "-g"])
+            .arg(&src)
+            .arg("-o")
+            .arg(&exe)
+            .status();
+        if !built.is_ok_and(|s| s.success()) {
+            continue;
+        }
+        let reported = output_within(&mut Command::new(&exe), 30).is_some_and(|o| {
+            !o.status.success()
+                && String::from_utf8_lossy(&o.stderr).contains("heap-use-after-free")
+        });
+        if reported {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+/// P2.9 (gap #3): `tests/asan/X.aye` reads memory that a `List` or `Pool`
+/// freed when it grew. Built with `--cflags -fsanitize=address` in debug
+/// mode (where the freed block waits in the quarantine) and in safe mode,
+/// it must die with AddressSanitizer's report, which contains every line of
+/// `X.asan` (a line starting `debug: ` or `safe: ` only counts in that
+/// mode), and print nothing. Debug mode reports `use-after-poison`, since
+/// the runtime poisons the quarantined block; safe mode has no quarantine,
+/// so the block really is freed: `heap-use-after-free`. Skipped where
+/// AddressSanitizer does not run.
+fn asan_case(p: &Path, work: &Path) -> Result<(), String> {
+    let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(dir) = asan_clang(work, &stem) else {
+        println!("skipped asan/{stem}: clang's AddressSanitizer does not run here");
+        return Ok(());
+    };
+    let want = read(&p.with_extension("asan")).ok_or("missing .asan file")?;
+    for mode in ["debug", "safe"] {
+        let exe = work.join(format!("{stem}_asan_{mode}"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_aye"));
+        cmd.current_dir(root)
+            .args(["build", p.to_str().unwrap(), "--mode", mode])
+            .args(["--cflags", "-fsanitize=address", "-o"])
+            .arg(&exe);
+        if let Some(d) = &dir {
+            let old = std::env::var_os("PATH").unwrap_or_default();
+            let path =
+                std::env::join_paths(std::iter::once(d.clone()).chain(std::env::split_paths(&old)))
+                    .map_err(|e| e.to_string())?;
+            cmd.env("PATH", path);
+        }
+        let built = cmd.output().map_err(|e| e.to_string())?;
+        if !built.status.success() {
+            return Err(format!(
+                "{stem} ({mode}): build failed\n{}",
+                String::from_utf8_lossy(&built.stderr)
+            ));
+        }
+        let out = output_within(&mut Command::new(&exe), 120)
+            .ok_or(format!("{stem} ({mode}): did not finish within 120 s"))?;
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let prefix = format!("{mode}: ");
+        let missing: Vec<&str> = want
+            .lines()
+            .filter(|l| {
+                !l.starts_with("debug: ") && !l.starts_with("safe: ") || l.starts_with(&prefix)
+            })
+            .map(|l| l.strip_prefix(&prefix).unwrap_or(l))
+            .filter(|l| !stderr.contains(l))
+            .collect();
+        if out.status.success() || !stdout.is_empty() || !missing.is_empty() {
+            return Err(format!(
+                "{stem} ({mode}): {}, missing {missing:?}\n--- stdout\n{stdout}--- stderr\n{stderr}",
+                out.status
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// M9.7: `General` in debug mode allocates and frees in constant time:
 /// `tests/cases/general_churn.aye` (a million allocation and free pairs,
 /// and a recursion that allocates per call), built in debug mode, uses at
@@ -985,6 +1092,7 @@ fn main() {
     let fix_cases = cases("fix");
     let ffi_cases = cases("ffi");
     let cimport_cases = cases("cimport");
+    let asan_cases = cases("asan");
     let mod_cases = module_dirs();
     type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
     fn add<'a>(
@@ -1047,6 +1155,12 @@ fn main() {
             "cli/aye build --cflags -fsanitize=thread".to_string(),
             move || cli_tsan(w),
         );
+        for p in &asan_cases {
+            let w = &work;
+            add(&mut jobs, format!("asan/{}", name(p)), move || {
+                asan_case(p, w)
+            });
+        }
         add(&mut jobs, "cli/aye explain".to_string(), cli_explain);
         add(
             &mut jobs,

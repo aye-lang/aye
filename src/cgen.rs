@@ -35,6 +35,25 @@ const PRELUDE: &str = r#"#include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
+/* Under AddressSanitizer a block in the debug free queue is poisoned, so
+   that a read or write through a stale pointer to it is reported at once. */
+#if defined(__SANITIZE_ADDRESS__)
+#define AYE_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define AYE_ASAN 1
+#endif
+#endif
+#ifdef AYE_ASAN
+void __asan_poison_memory_region(void const volatile *, size_t);
+void __asan_unpoison_memory_region(void const volatile *, size_t);
+#define AYE_ASAN_POISON(p, n) __asan_poison_memory_region(p, n)
+#define AYE_ASAN_UNPOISON(p, n) __asan_unpoison_memory_region(p, n)
+#else
+#define AYE_ASAN_POISON(p, n) ((void)0)
+#define AYE_ASAN_UNPOISON(p, n) ((void)0)
+#endif
+
 #define AYE_RT static __attribute__((unused))
 #define AYE_STR_(x) #x
 #define AYE_STR(x) AYE_STR_(x)
@@ -166,7 +185,10 @@ AYE_RT void aye_free_n(aye_Allocator a, void *p, size_t n, size_t size, int line
    AYE_QUARANTINE bytes before libc gets it back, so its address is not
    reused soon: a second free of it panics, and when it leaves the
    quarantine (or at `deinit`) a byte that is no longer AYE_POISON means it
-   was written after it was freed. Allocation and free take constant time. */
+   was written after it was freed. Under AddressSanitizer the body of a
+   quarantined block is also poisoned (unpoisoned before that check), so
+   a read or write through a stale pointer is reported where it happens.
+   Allocation and free take constant time. */
 #define AYE_LIVE 0x4f52454c49564521ull
 #define AYE_FREED 0x4f52454652454544ull
 #define AYE_POISON 0xdd
@@ -201,6 +223,7 @@ AYE_RT void *aye_general_alloc(void *self, size_t size, size_t align, int line, 
 AYE_RT void aye_general_release(aye_alloc_hdr *h) {
     const unsigned char *b = (const unsigned char *)(h + 1);
     size_t i = 0;
+    AYE_ASAN_UNPOISON(b, h->size);
     for (; i + 8 <= h->size; i += 8) {
         uint64_t w;
         __builtin_memcpy(&w, b + i, 8);
@@ -241,6 +264,7 @@ AYE_RT void aye_general_free(void *self, void *p, size_t size, int line, int col
     h->free_line = line;
     h->free_col = col;
     __builtin_memset(h + 1, AYE_POISON, h->size);
+    AYE_ASAN_POISON(h + 1, h->size);
     h->prev = h->next = 0;
     if (g->qtail) g->qtail->next = h; else g->qhead = h;
     g->qtail = h;
