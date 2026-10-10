@@ -1,0 +1,5 @@
+test "fast" ... ok (N ms)
+test "spins the CPU" ... FAILED (time limit: N s CPU of 1 s)
+test "also fast" ... ok (N ms)
+
+2 passed; 1 failed; 1 modules; N ms

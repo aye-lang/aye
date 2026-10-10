@@ -63,7 +63,7 @@ aye build <path> [-o out] [--mode m]                  build an executable (defau
     [--target t]                                      (build, run, test, emit-c, check) t: aarch64-macos x86_64-macos aarch64-linux x86_64-linux wasm32-wasip1 wasm32-freestanding; unknown E0117, std module the target lacks E0118; wasm32-wasip1 programs run under Node's `node:wasi`; wasm32-freestanding has no libc and no `main` is needed: `pub extern fn` is exported to JS, `main` is exported as `aye_main`, output and abort are the imports `env.aye_write(fd, ptr, len)` and `env.aye_abort()`
 aye check <path> [--json]                             report all compile errors; no C, no clang
 aye fix <path>                                        apply the fix-its of `aye check` in place, repeat (at most 10 rounds)
-aye test <path> [--filter text] [--json] [--mode m]   run the `test` blocks of the root module (a directory: every module under it), each in its own process
+aye test <path> [--filter text] [--json] [--time-limit s] [-j n] [--mode m]   run the `test` blocks of the root module (a directory: every module under it), each in its own process
 aye emit-c <path> [--mode m]                          print the generated C
 aye fmt [--check] <path>                              format in place (a directory: every .aye file under it); --check lists files that would change, exit 1
 aye doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
@@ -453,8 +453,9 @@ pub fn main() {
   name `name` (not on a function with a body; an empty name is E0115).
 - C-compatible types, the only ones allowed in an `extern fn`: integers
   (`i32` is C `int`, `usize` is `size_t`; `c_int`, `c_long`, `c_ulong`,
-  ... name C's types: other names for `i32`, `i64`, `u64`, ..., the sizes
-  on 64-bit macOS and Linux), floats, `bool`, pointers to
+  ... name C's types: other names for `i32`, `i64`, `u64`, ...; `c_long`
+  and `c_ulong` follow the target, 64-bit on macOS and Linux, 32-bit on
+  wasm32), floats, `bool`, pointers to
   C-compatible types (`*T`, `*mut T`, `[*]T`), optional pointers (`?*T`,
   `?[*]T`, `?fn(...)`: C pointers that may be null), `extern struct`s by
   value, and `fn(A) R` of C-compatible types (a callback). C's `void *` is
@@ -582,8 +583,8 @@ pub fn main() {
 
 | Type | Meaning |
 | --- | --- |
-| `i8 i16 i32 i64 isize` | signed integers (`isize` is 64-bit) |
-| `u8 u16 u32 u64 usize` | unsigned integers (`usize` is 64-bit) |
+| `i8 i16 i32 i64 isize` | signed integers (`isize` has the target's pointer width: 64-bit, 32-bit on wasm32) |
+| `u8 u16 u32 u64 usize` | unsigned integers (`usize` likewise) |
 | `f32 f64` | floats |
 | `bool` | `true`, `false` |
 | `[N]T` | array of N elements, a value (copied on assignment) |
@@ -1476,9 +1477,13 @@ Output: `test "name" ... ok (12 ms)` or `... FAILED (12 ms)`, the wall time
 of the test's process, followed by the test's indented stdout and stderr,
 then `N passed; M failed; K modules; T ms` (K modules ran a test; T is the
 whole run, compiling included). `--filter text` runs tests
-whose name contains `text`. `--json` prints one line:
+whose name contains `text`. `--time-limit s` (default 10; 0: none) kills a
+test that uses more than `s` seconds of CPU time and fails it (`FAILED (time
+limit: 10.4 s CPU of 10 s)`; `"timed_out":true` in JSON); `-j n` (default:
+the CPUs) runs up to `n` tests at once, printed in test order. `--json`
+prints one line:
 `{"file":F,"diagnostics":[...],"tests":[{"name":N,"status":"pass"|"fail",
-"ms":T,"failures":[...],"stdout":S,"stderr":S}],"passed":P,"failed":Q}`, where a
+"ms":T,"cpu_ms":T,"failures":[...],"stdout":S,"stderr":S}],"passed":P,"failed":Q}`, where a
 failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 `{"kind":"error","error":"Name","trace":[{"line":L,"col":C}]}` or
 `{"kind":"crash","message":M}`.

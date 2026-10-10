@@ -9,7 +9,7 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
   aye emit-c <path> [--mode debug|safe|fast] [--target <target>]
   aye check <path> [--json] [--target <target>]
   aye fix <path>
-  aye test <path> [--filter <text>] [--module <module>] [--json] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
+  aye test <path> [--filter <text>] [--module <module>] [--json] [--time-limit <seconds>] [-j <n>] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
   (--target: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding; default: this machine)
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
@@ -83,6 +83,10 @@ struct Args {
     cflags: Vec<String>,
     /// `--target name`.
     target: Option<String>,
+    /// `aye test --time-limit s`: CPU seconds per test; 0: no limit.
+    time_limit: u64,
+    /// `aye test -j n`: test processes at once.
+    jobs: usize,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -93,12 +97,27 @@ fn parse_args() -> Result<Args, String> {
     let mut prog_args = Vec::new();
     let mut cflags = Vec::new();
     let mut target = None;
+    let mut time_limit = 10;
+    let mut jobs = std::thread::available_parallelism().map_or(1, |n| n.get());
     while let Some(a) = it.next() {
         match a.as_str() {
             "--" if cmd == "run" => prog_args.extend(it.by_ref()),
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
             "--json" if cmd == "check" || cmd == "test" => json = true,
             "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
+            "--time-limit" if cmd == "test" => {
+                time_limit = it
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("`--time-limit` needs a whole number of seconds (0: no limit)")?
+            }
+            "-j" if cmd == "test" => {
+                jobs = it
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or("`-j` needs a number of test processes, such as 4")?
+            }
             "--module" if cmd == "test" => {
                 module = Some(
                     it.next()
@@ -136,6 +155,8 @@ fn parse_args() -> Result<Args, String> {
         prog_args,
         cflags,
         target,
+        time_limit,
+        jobs,
     })
 }
 
@@ -599,8 +620,8 @@ fn fix(path: &str) -> ExitCode {
     }
 }
 
-/// `aye test`: one line per test, and for a failed test its output (stdout,
-/// then stderr) indented; or with `--json` one JSON document. The exit
+/// `aye test`: one line per test (in test order, whatever `-j` is), and for a
+/// failed test its output (stdout, then stderr) indented; or with `--json` one JSON document. The exit
 /// status is 1 if a test failed or the file does not compile.
 fn test(args: &Args, target: &'static driver::Target) -> ExitCode {
     let run = match driver::run_tests(
@@ -610,6 +631,8 @@ fn test(args: &Args, target: &'static driver::Target) -> ExitCode {
         &args.filter,
         args.module.as_deref(),
         &args.cflags,
+        args.jobs,
+        args.time_limit,
     ) {
         Ok(r) => r,
         Err(driver::TestError::Compile(ds)) => {
@@ -644,12 +667,15 @@ fn test(args: &Args, target: &'static driver::Target) -> ExitCode {
         );
     } else {
         for r in results {
-            println!(
-                "test \"{}\" ... {} ({} ms)",
-                r.name,
-                if r.passed { "ok" } else { "FAILED" },
-                r.ms
-            );
+            match r.time_limit_note() {
+                Some(note) => println!("test \"{}\" ... FAILED ({note})", r.name),
+                None => println!(
+                    "test \"{}\" ... {} ({} ms)",
+                    r.name,
+                    if r.passed { "ok" } else { "FAILED" },
+                    r.ms
+                ),
+            }
             if !r.passed {
                 for l in r.stdout.lines().chain(r.stderr.lines()) {
                     println!("    {l}");

@@ -1,0 +1,26 @@
+// `usize`, `isize`, pointers and C's `long` have the target's width:
+// 64 bits on macOS and Linux, 32 on wasm32 (`X.wasm32-wasip1.out`).
+extern struct Node {
+    tag: u8
+    next: ?*Node
+}
+
+// Folded at compile time, with the target's width.
+let BIG: usize = 4294967295
+let NEXT: usize = BIG +% 1
+let MAX: usize = ~(0 as usize)
+
+pub fn main() {
+    @println(@sizeOf(usize))
+    @println(@sizeOf(isize))
+    @println(@sizeOf(c_long))
+    @println(@sizeOf(c_ulong))
+    @println(@sizeOf(*u8))
+    @println(@sizeOf(Node))
+    @println(MAX)
+    @println(NEXT)
+    var m: usize = 0
+    m = ~m
+    @println(m == MAX)
+    @println(m +% 1)
+}
