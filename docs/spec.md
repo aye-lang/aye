@@ -1529,7 +1529,8 @@ std.coro      coroutines: create, resume, yield                              bel
 std.testing   the leak-checked allocator of a test                           below
 std.log       err, info: formatted lines to stderr                           below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
-std.os        args, exit                                                     below
+std.os        args, getenv, exit                                             below
+std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
 std.http      HTTP/1.1 server: listen, Server.run, Request, Response; parse  aye doc --signatures std.http
@@ -2049,6 +2050,7 @@ pub fn main() !void {
 
 ```
 std.os.args(alloc: Allocator) AllocError![][]u8   the arguments; [0] is the program; free the slice with alloc.free
+std.os.getenv(name: []u8) ?[]u8                   the variable's value (points into the environment; do not free); null if unset
 std.os.exit(code: i32)                            exit now with this status (flushes @print output; deferred statements do not run)
 ```
 
