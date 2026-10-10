@@ -16,7 +16,7 @@
 | M9.7 Ergonomics and runtime, round 3 | done | 2026-10-06 | nothing |
 | M9.8 Round 4 and design leftovers | done | 2026-10-06 | nothing |
 | M9.9 Round 5 | done | 2026-10-06 | nothing |
-| M10 Threads | partial | 2026-10-06 | ThreadSanitizer run: not possible on this Mac |
+| M10 Threads | done | 2026-10-10 | nothing; the TSan golden runs with Homebrew clang (P2.9a) |
 | M11 cimport | done | 2026-10-07 | nothing |
 | M12 Coroutines | done | 2026-10-07 | nothing |
 

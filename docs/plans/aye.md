@@ -63,7 +63,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 ## Current state (2026-10-10)
 
-- Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
+- Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); `--target` (O2.2): the host, the other native triples, wasm32-wasip1 (links and runs hello under `node:wasi`; std prelude branch is O2.3), wasm32-freestanding (O2.4).
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
 - std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). **O6 holds** (checked 2026-10-10 on bf4c5d8, `done.md`).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
@@ -75,7 +75,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
-| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: O3 (gaps #50, #52, #53), P2.9a |
+| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: O3 (gaps #50, #52, #53) |
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | done 2026-10-10 |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | done 2026-10-10 (O6 holds) |
 | O2.x | Targets incl. wasm32 (O8) | the O8 check | current |
@@ -88,19 +88,6 @@ Steps that add std functions touch `docs/spec.md` §15 and the std
 sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: P2 leftovers
-
-#### P2.9a: the TSan golden tries Homebrew clang
-- lane: aye
-- goal: `tsan_works` in `tests/golden.rs` tries `clang` on PATH and then `$(brew --prefix llvm)/bin/clang`, as `asan_clang` does, so the ThreadSanitizer golden runs on this Mac; M10's last item becomes done (`docs/milestones.md` row, left to main).
-- serves: O1 (M10 complete)
-- files: `tests/golden.rs`
-- verify: `cargo test --release --test golden` → exit 0 with the TSan case `ok` (not skipped) on this Mac
-- depends on: P2.9
-- parallel with: all
-- where: local
-- model: sonnet
-- time box: 20 min
-- notes: P2.9 found the fan-out program passes under Homebrew clang's `-fsanitize=thread`; generalise `asan_clang` into a `sanitizer_clang(kind)`.
 
 ## Cards: O1 server basics
 
@@ -118,19 +105,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - notes: three runs each, report the median.
 
 ## Cards: O2 targets (current)
-
-#### O2.2: `--target` on build, run, test, emit-c, check
-- lane: aye
-- goal: a target table in the driver (`aarch64-macos`, `x86_64-macos`, `aarch64-linux`, `x86_64-linux`, `wasm32-wasip1`, `wasm32-freestanding`; host default) with clang triple, flags (wasm: sysroot, resource dir, no `-pthread`, `-lm`; env overrides), output extension and the std modules the target lacks; E0117 unknown target, E0118 std module not on this target.
-- serves: O8
-- files: `src/driver.rs`, `src/main.rs`, `src/codes.rs`, `src/module.rs` (per-target std check), `src/cgen.rs` (only `#ifndef __wasm32__` around the three signal calls), `tests/golden.rs` (`X.args`), `tests/cases/`, `tests/errors/`, `docs/spec.md` (one line), `README.md`
-- verify: `cargo test --release` → exit 0 with an x86_64-macos build golden (`file` says x86_64; skipped without Rosetta), a wasm32-wasip1 hello link golden (`\0asm`; skipped without the toolchain), E0117 and E0118 goldens
-- depends on: O2.1
-- parallel with: P2.9 (both touch `src/cgen.rs`, different regions)
-- where: local
-- model: sonnet
-- time box: 60 min
-- notes: details in `docs/decisions.md` "Targets (O2)". `aye run`/`aye test` on a wasm target print "needs a wasm runtime (O2.3)" unless running through `node:wasi` is trivial.
 
 #### O2.3: wasm32-wasip1 prelude and runner
 - lane: aye
