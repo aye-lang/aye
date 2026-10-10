@@ -78,6 +78,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod common;
+
 /// How many wasm32-wasip1 jobs skipped themselves.
 static WASM_SKIPPED: AtomicUsize = AtomicUsize::new(0);
 
@@ -1601,10 +1603,10 @@ fn main() {
             "cli/aye test --module".to_string(),
             cli_test_module,
         );
-        // At most `available_parallelism()` cases run at once.
+        // At most `common::jobs()` cases run at once.
         let queue = std::sync::Mutex::new(jobs.into_iter().enumerate());
         let done = std::sync::Mutex::new(Vec::new());
-        let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let workers = common::jobs();
         std::thread::scope(|s| {
             for _ in 0..workers {
                 s.spawn(|| {

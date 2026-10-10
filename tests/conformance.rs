@@ -12,6 +12,8 @@
 use aye::driver::{self, Mode, Root, Target};
 use std::path::{Path, PathBuf};
 
+mod common;
+
 const TARGETS: &[&str] = &["native", "wasm32-wasip1"];
 
 /// `Ok(true)`: the program passed; `Ok(false)`: it cannot exist on the
@@ -102,37 +104,37 @@ fn main() {
         .collect();
     areas.sort();
 
-    // One row per (area, target).
-    let rows: Vec<(String, &str, Results)> = std::thread::scope(|s| {
-        let mut pending = Vec::new();
-        for area in &areas {
-            let area_name = area.file_name().unwrap().to_string_lossy().into_owned();
-            for &target in TARGETS.iter().filter(|t| available(t)) {
-                let handles: Vec<_> = programs(area)
-                    .into_iter()
-                    .map(|p| {
-                        let w = &work;
-                        let label =
-                            format!("{area_name}/{}", p.file_name().unwrap().to_string_lossy());
-                        (label, s.spawn(move || run(target, &p, w)))
-                    })
-                    .collect();
-                pending.push((area_name.clone(), target, handles));
-            }
+    // One row per (area, target); at most `common::jobs()` programs run at
+    // once.
+    let mut cells = Vec::new();
+    for area in &areas {
+        let area_name = area.file_name().unwrap().to_string_lossy().into_owned();
+        for &target in TARGETS.iter().filter(|t| available(t)) {
+            let ps: Vec<(String, PathBuf)> = programs(area)
+                .into_iter()
+                .map(|p| {
+                    let label = format!("{area_name}/{}", p.file_name().unwrap().to_string_lossy());
+                    (label, p)
+                })
+                .collect();
+            cells.push((area_name.clone(), target, ps));
         }
-        pending
-            .into_iter()
-            .map(|(a, t, hs)| {
-                (
-                    a,
-                    t,
-                    hs.into_iter()
-                        .map(|(l, h)| (l, h.join().unwrap()))
-                        .collect(),
-                )
-            })
-            .collect()
-    });
+    }
+    let all: Vec<(&str, &Path)> = cells
+        .iter()
+        .flat_map(|(_, t, ps)| ps.iter().map(move |(_, p)| (*t, p.as_path())))
+        .collect();
+    let mut outcomes = common::run_queue(&all, |&(t, p)| run(t, p, &work)).into_iter();
+    let rows: Vec<(String, &str, Results)> = cells
+        .into_iter()
+        .map(|(a, t, ps)| {
+            let results = ps
+                .into_iter()
+                .map(|(l, _)| (l, outcomes.next().unwrap()))
+                .collect();
+            (a, t, results)
+        })
+        .collect();
     let _ = std::fs::remove_dir_all(&work);
 
     println!("{:<10} {:<14} passed/total", "area", "target");
