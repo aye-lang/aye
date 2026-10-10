@@ -65,7 +65,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2). Missing for O6: crypto (O3.3), base64/hex (O3.3a), json writer (O3.1a).
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). Missing for O6: random bytes, base64/hex (O3.3a), json writer (O3.1a), http client (O3.4, O3.5).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
@@ -128,19 +128,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - verify: `cargo test --release --test conformance` → exit 0; round trip parse → write → parse equal on the json area
 - depends on: O3.1
 - parallel with: O3.2, O3.3
-- where: cloud
-- model: sonnet
-- time box: 45 min
-- notes: –
-
-#### O3.3: std.crypto hashes
-- lane: aye
-- goal: SHA-256, SHA-1 (WebSocket handshake) and HMAC-SHA-256.
-- serves: O6
-- files: `std/crypto/` (new), `docs/spec.md` §15
-- verify: `cargo test --release --test conformance` → exit 0, area `crypto` with the FIPS 180-4 and RFC 4231 vectors
-- depends on: –
-- parallel with: O3.1, O3.2
 - where: cloud
 - model: sonnet
 - time box: 45 min

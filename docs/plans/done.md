@@ -38,6 +38,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O1.6 | 2026-10-10 | `std.process`: `spawn(alloc, argv, stdin, stdout, stderr)` (Inherit/Pipe), `Child.wait` → `Status`, `Child.kill` (SIGTERM), `closeStdin`; pipes are `std.fs.File`; `std.os.getenv`; C prelude `aye_std_spawn`, `aye_std_getenv`; golden `std_process`; Linux golden 270/270 | 94b176e |
 | O3.1 | 2026-10-10 | `std.json`: RFC 8259 parser into an `Arena` (`Value` enum, accessors `get`/`at`/`as*`/`isNull`, `ParseError` tags, `parseDiag` with a `std.diag` diagnostic, `maxDepth` 512; numbers are `f64`); conformance area `json` 3/3 (33/33 total), golden `tests/tests/std_json.aye` | c967ebe |
 | O3.2 | 2026-10-10 | `std.time`: `now()` (Unix ms), `DateTime` (UTC, weekday 0 = Sunday), `fromUnixMs`/`toUnixMs`, RFC 3339 format/parse (offsets normalized, fractional seconds), IMF-fixdate format/parse; conformance area `time` 5/5 (36/36 total), golden `tests/tests/std_time.aye` | 516b6bd |
+| O3.3 | 2026-10-10 | `std.crypto`: streaming `Sha256`/`Sha1`/`HmacSha256` and one-shot `sha256`/`sha1`/`hmacSha256`, pure Aye, fixed-size array results; conformance area `crypto` 3/3 (FIPS 180-4, RFC 4231; 39/39 total), golden `tests/tests/std_crypto.aye`; 1M "a" in 0.01 s fast | 461f44a |
 
 ## Browser lane
 
