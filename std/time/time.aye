@@ -23,10 +23,9 @@ pub fn monotonicMs() u64 {
 /// counted), from the system's real-time clock. It can jump when the
 /// system clock is set; measure durations with `monotonicMs`.
 pub fn now() i64 {
-    // A C `struct timespec`: seconds and nanoseconds. CLOCK_REALTIME is 0
-    // on Linux and macOS.
+    // A C `struct timespec`: seconds and nanoseconds.
     var ts = [2]i64{0, 0}
-    clock_gettime(0, ts[..].ptr)
+    aye_std_realtime(ts[..].ptr)
     return ts[0] * 1000 + ts[1] / 1000000
 }
 
@@ -360,5 +359,5 @@ fn appendClock(b: *mut Builder, d: DateTime) AllocError!void {
 }
 
 extern fn aye_std_monotonic_ns() u64
-extern fn clock_gettime(clock: i32, ts: [*]i64) i32
+extern fn aye_std_realtime(ts: [*]i64) i32
 extern fn nanosleep(req: [*]i64, rem: [*]i64) i32

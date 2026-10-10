@@ -1,7 +1,7 @@
 use aye::driver::{self, Mode, Root};
 use aye::{codes, diag, doc, fmt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
 const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files):
   aye build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
@@ -281,11 +281,7 @@ fn main() -> ExitCode {
     if args.cmd == "build" {
         return ExitCode::SUCCESS;
     }
-    let status = if target.is_wasm() {
-        run_wasm(&exe, &args.prog_args)
-    } else {
-        Command::new(&exe).args(&args.prog_args).status()
-    };
+    let status = target.run_command(&exe).args(&args.prog_args).status();
     let _ = std::fs::remove_file(&exe);
     match status {
         Ok(s) => match s.code() {
@@ -296,7 +292,9 @@ fn main() -> ExitCode {
             }
         },
         Err(e) if target.is_wasm() && e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("aye: run needs a wasm runtime (O2.3): `node` was not found");
+            eprintln!(
+                "aye: running a wasm program needs `node` (22 or later), which was not found"
+            );
             ExitCode::FAILURE
         }
         Err(e) => {
@@ -304,23 +302,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// Run the WASI module `wasm` under Node (`node:wasi`), which preopens the
-/// working directory.
-fn run_wasm(wasm: &Path, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
-    const RUNNER: &str = "import { readFile } from 'node:fs/promises';
-import { WASI } from 'node:wasi';
-const [file, ...args] = process.argv.slice(1);
-const wasi = new WASI({ version: 'preview1', args: [file, ...args], env: process.env, preopens: { '.': '.' }, returnOnExit: true });
-const { instance } = await WebAssembly.instantiate(await readFile(file), wasi.getImportObject());
-process.exitCode = wasi.start(instance);
-";
-    Command::new("node")
-        .args(["--no-warnings", "--input-type=module", "-e", RUNNER])
-        .arg(wasm)
-        .args(args)
-        .status()
 }
 
 /// `aye fmt [--check] <path>`: format a `.aye` file, or every `.aye` file

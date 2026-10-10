@@ -8,6 +8,12 @@
 //!   error return trace, so there stderr must be the first line only.
 //!   A case with `X.needs` (`pkg-config` packages) or `X.tools` (programs on
 //!   `PATH`) is skipped when one is missing.
+//!   With the WASI toolchain and `node` there, each case also runs built for
+//!   wasm32-wasip1 under `node:wasi` (`scripts/wasi-run.mjs`), `tests/tests`
+//!   too, against the same goldens; the line `golden (wasm32-wasip1): N
+//!   passed; M skipped` counts them. Skipped: a program that imports a std
+//!   module the target lacks (E0118), and one with `X.native` (an empty
+//!   marker file), `X.needs` or `X.tools`.
 //! - `tests/ffi/X.aye`: like `tests/cases`, for programs that link C
 //!   libraries with `@link`; skipped when `pkg-config` does not know a
 //!   package listed in `X.needs`. Programs run with `SDL_VIDEODRIVER=dummy`,
@@ -57,9 +63,53 @@
 //!   none).
 
 use aye::diag::Diag;
-use aye::driver::{self, Mode};
+use aye::driver::{self, Mode, Root, Target};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// How many wasm32-wasip1 jobs skipped themselves.
+static WASM_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+
+/// The wasm32-wasip1 target, if programs can be built and run for it here
+/// (the WASI toolchain and `node`).
+fn wasm_target() -> Option<&'static Target> {
+    let t = driver::find_target("wasm32-wasip1").unwrap();
+    (t.toolchain_available() && driver::node_available()).then_some(t)
+}
+
+/// Does the program import a std module that wasm32-wasip1 lacks (E0118)?
+fn lacks_module(path: &Path) -> bool {
+    let Some(src) = read(path) else { return false };
+    let mut root = Root::single(&name(path), &src);
+    root.target = driver::find_target("wasm32-wasip1").unwrap();
+    driver::front_end(root, None)
+        .result
+        .is_err_and(|ds| ds.iter().any(|d| d.code == aye::codes::E0118))
+}
+
+/// Why `path` does not run on wasm32-wasip1, if it does not.
+fn wasm_skip_reason(path: &Path) -> Option<&'static str> {
+    if path.with_extension("native").exists() {
+        Some("X.native")
+    } else if path.with_extension("needs").exists() || path.with_extension("tools").exists() {
+        Some("X.needs or X.tools")
+    } else if lacks_module(path) {
+        Some("imports a std module the target lacks")
+    } else {
+        None
+    }
+}
+
+/// `f` for a program, unless it does not run on wasm32-wasip1.
+fn wasm_job(kind: &str, path: &Path, f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    if let Some(why) = wasm_skip_reason(path) {
+        println!("skipped wasm32-wasip1 {kind}/{}: {why}", name(path));
+        WASM_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return Ok(());
+    }
+    f()
+}
 
 fn read(p: &Path) -> Option<String> {
     std::fs::read_to_string(p).ok()
@@ -119,6 +169,11 @@ fn name(p: &Path) -> String {
 }
 
 fn run_case(path: &Path, work: &Path) -> Result<(), String> {
+    run_case_for(path, work, driver::host_target())
+}
+
+/// `run_case` for a program built for `target`.
+fn run_case_for(path: &Path, work: &Path, target: &'static Target) -> Result<(), String> {
     let src = read(path).unwrap();
     let expected_out = read(&path.with_extension("out")).ok_or("missing .out file")?;
     let expected_panic = read(&path.with_extension("panic"));
@@ -129,13 +184,17 @@ fn run_case(path: &Path, work: &Path) -> Result<(), String> {
         &[Mode::Debug, Mode::Safe, Mode::Fast]
     };
     for &mode in modes {
-        let c = driver::compile_to_c(&name(path), &src, mode).map_err(|d| join(&d))?;
+        let mut root = Root::single(&name(path), &src);
+        root.target = target;
+        let c = driver::compile_root(root, mode).map_err(|d| join(&d))?;
         let exe = work.join(format!(
-            "{}-{mode:?}",
-            path.file_stem().unwrap().to_string_lossy()
+            "{}-{mode:?}-{}",
+            path.file_stem().unwrap().to_string_lossy(),
+            target.name
         ));
         driver::cc(&c, &exe, mode)?;
-        let out = Command::new(&exe)
+        let out = target
+            .run_command(&exe)
             .env("SDL_VIDEODRIVER", "dummy")
             .output()
             .map_err(|e| e.to_string())?;
@@ -360,6 +419,11 @@ fn aye_test(args: &[&str]) -> Result<(String, Option<i32>), String> {
 }
 
 fn test_case(path: &Path) -> Result<(), String> {
+    test_case_for(path, &[])
+}
+
+/// `test_case` with more arguments for `aye test` (`--target`).
+fn test_case_for(path: &Path, extra: &[&str]) -> Result<(), String> {
     let rel = format!("tests/tests/{}", name(path));
     let expected = read(&path.with_extension("out")).ok_or("missing .out file")?;
     let status = if expected.ends_with("; 0 failed\n") {
@@ -371,7 +435,8 @@ fn test_case(path: &Path) -> Result<(), String> {
     if let Some(json) = read(&path.with_extension("json")) {
         runs.push((vec!["--json", rel.as_str()], json));
     }
-    for (args, want) in runs {
+    for (mut args, want) in runs {
+        args.splice(0..0, extra.iter().copied());
         let (got, code) = aye_test(&args)?;
         if got != want {
             return Err(format!(
@@ -1216,6 +1281,7 @@ fn main() {
     let cimport_cases = cases("cimport");
     let asan_cases = cases("asan");
     let mod_cases = module_dirs();
+    let wasm = wasm_target();
     type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
     fn add<'a>(
         jobs: &mut Vec<(String, Job<'a>)>,
@@ -1264,6 +1330,23 @@ fn main() {
             add(&mut jobs, format!("modules/{}", name(p)), move || {
                 module_case(p)
             });
+        }
+        if let Some(t) = wasm {
+            for p in &run_cases {
+                let w = &work;
+                add(&mut jobs, format!("wasm/cases/{}", name(p)), move || {
+                    wasm_job("cases", p, || run_case_for(p, w, t))
+                });
+            }
+            for p in &test_cases {
+                add(&mut jobs, format!("wasm/tests/{}", name(p)), move || {
+                    wasm_job("tests", p, || {
+                        test_case_for(p, &["--target", "wasm32-wasip1"])
+                    })
+                });
+            }
+        } else {
+            println!("skipped wasm32-wasip1 goldens: no WASI toolchain or no node");
         }
         add(&mut jobs, "example1".to_string(), example1);
         let w = &work;
@@ -1350,6 +1433,21 @@ fn main() {
         "\ngolden: {} passed; {failed} failed",
         results.len() - failed
     );
+    if wasm.is_some() {
+        let total = results
+            .iter()
+            .filter(|(n, _)| n.starts_with("wasm/"))
+            .count();
+        let bad = results
+            .iter()
+            .filter(|(n, r)| n.starts_with("wasm/") && r.is_err())
+            .count();
+        let skipped = WASM_SKIPPED.load(Ordering::Relaxed);
+        println!(
+            "golden (wasm32-wasip1): {} passed; {skipped} skipped; {bad} failed",
+            total - bad - skipped
+        );
+    }
     if failed > 0 {
         std::process::exit(1);
     }

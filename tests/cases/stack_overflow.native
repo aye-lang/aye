@@ -1,0 +1,1 @@
+wasm32 has no guard page: a stack overflow is a memory trap, not the panic message
