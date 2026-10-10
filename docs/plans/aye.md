@@ -65,7 +65,7 @@ built-in database and cloud clients (`@cimport` covers them).
 
 - Rust stage0: `src/lexer.rs` → `parser.rs` → `module.rs` → `sema.rs` → `oir.rs` → `cgen.rs` → clang (`src/driver.rs`); native target only.
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
-- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client (O3.4). Missing for O6: HTTPS in the client (O3.5).
+- std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). O6 modules all exist; left for the O6 check: conformance areas for `path` and `process`, `test` blocks for `net` and `process` (O3.8).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
@@ -145,18 +145,18 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O3 std breadth (next)
 
-#### O3.5: HTTPS for the client
+#### O3.8: O6 close-out
 - lane: aye
-- goal: HTTPS as O3.4a decided.
+- goal: every O6 module meets the criterion's three parts: conformance areas `tests/conformance/path/` and `tests/conformance/process/` (new), `test` blocks `tests/tests/std_net.aye` and `tests/tests/std_process.aye` (new); then record the O6 check in `docs/plans/aye.md` "Current state" is left to main.
 - serves: O6
-- files: `std/http/`
-- verify: `cargo test --release --test golden` → exit 0, with a fetch from a local TLS test server
-- depends on: O3.4, O3.4a
-- parallel with: O3.1–O3.3
-- where: cloud
+- files: `tests/conformance/path/`, `tests/conformance/process/`, `tests/tests/std_net.aye`, `tests/tests/std_process.aye` (all new)
+- verify: `cargo test --release --test conformance` → exit 0 with areas `path` and `process` in the table; `cargo test --release --test golden` → exit 0 with the two new test goldens; `for m in net http json path process time crypto encoding; do target/release/aye doc --signatures std.$m; done` → every module prints signatures
+- depends on: O3.5
+- parallel with: O1.13a, O1.5b (not with other `std/process` or `std/net` steps)
+- where: local
 - model: sonnet
 - time box: 45 min
-- notes: –
+- notes: process conformance: echo, pipe through cat, exit status, getenv; path: the RFC-free cases from `tests/tests/std_path.aye` (join, normalize, isUnder). `net` test blocks: loopback listen/connect/write/read in one test with port 0.
 
 ## Backlog
 
@@ -164,6 +164,7 @@ Unordered; a card is written when its phase becomes next. Source in
 brackets.
 
 - O1.14 (gap #50, from X1.1) a target-OS constant the checker uses to skip the other OS's code, so per-OS declarations live in Aye; then remove `aye_std_errno`, `aye_std_mtime` offsets and the `isDarwin` checks in `std/net`, `browser/ui/socket.aye`, and the hand-written `clock() u64` in `browser/js/interp.aye:107` (`clock_t` is unsigned on macOS, signed on glibc). Needed by O8. Verify: `cargo test --release --test golden` and `aye check browser` on macOS and via `scripts/linux.sh`.
+- O3.5a `std.net` exports `poll`/`PollFd` or a `Conn` wait method so the TLS transport can wait on `CURLINFO_ACTIVESOCKET` instead of a sleep backoff; a `std.log.debug` level or `std.http` `lastError` instead of `AYE_HTTP_DEBUG` (O3.5 report).
 - O3.4b `std.net.connect` timeout (a golden against an unroutable address); the http client golden against an IPv6 (`::1`) server (O3.4 report).
 - O3.3b `std.encoding` strict base64 (reject non-zero trailing bits) if tokens or signatures need it; the crypto conformance programs use `std.encoding.hexEncode` instead of private `hex` helpers (O3.3a report). Verify: `cargo test --release --test conformance`.
 - O3.1c `std.text.Builder.appendFloatExact` (shortest round-trip float formatting, lifted from `std.json.writeNumber`); `tests/conformance/json/valid.aye` prints through `json.write` instead of its private `render` (O3.1a report). Verify: `cargo test --release --test conformance`.
