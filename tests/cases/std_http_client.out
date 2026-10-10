@@ -1,0 +1,40 @@
+get: 200 [hello] 5
+  type=text/plain length=5 missing=true
+post: 200 [POST 9 text/plain:some data] 27
+post empty: 200 [POST 0 -:] 9
+404: 404 [not found: /missing] 19
+204: 204 [] 0
+head: 200 [] 0
+301: 301 [moved] 5
+  location=/hello
+follow 301: 200 [hello] 5
+follow relative: 200 [hello] 5
+follow 303: 200 [GET 0 -:] 8
+follow 307: 200 [POST 4 -:kept] 13
+follow loop: error TooManyRedirects
+headers: 200 [/show?q=1 host=127.0.0.1:port x=yes conn=close] 46
+connection=close
+own host: 200 [/show host=example.test x=- conn=close] 38
+no path: 404 [not found: /] 12
+query only: 404 [not found: /?a=b] 16
+header injection: error InvalidRequest
+own framing: error InvalidRequest
+bad method: error InvalidRequest
+too big: error BodyTooLarge
+fits: 200 [hello] 5
+chunked: 200 [hello, world] 12
+split chunks: 200 [hello world] 11
+until close: 200 [to the end] 10
+short body: error ConnectionClosed
+garbage: error BadResponse
+bad chunk: error BadResponse
+interim: 200 [ok] 2
+silence: error TimedOut
+https: error HttpsUnsupported
+ftp: error UnsupportedScheme
+no scheme: error InvalidUrl
+empty host: error InvalidUrl
+bad port: error InvalidUrl
+unknown host: error UnknownHost
+refused: error ConnectionRefused
+handled 33

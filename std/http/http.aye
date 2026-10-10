@@ -1,4 +1,5 @@
-// std.http: the HTTP/1.1 wire format, and `Server`, a thread per connection.
+// std.http: the HTTP/1.1 wire format, `Server`, a thread per connection, and
+// a plain-HTTP client (`get`, `post`, `request`; `https://` is not built yet).
 // `parse` reads one request from a byte buffer and says how many bytes it used,
 // so a server can parse pipelined requests by parsing again from the rest.
 // `writeResponse` builds a response. A handler takes a context pointer and
@@ -116,12 +117,29 @@ pub struct Parsed {
     consumed: usize
 }
 
-/// A response for `writeResponse`. Do not put Content-Length or
-/// Transfer-Encoding in `headers`: the writer sets the length itself.
+/// A response: the one a server handler fills for `writeResponse` (do not
+/// put Content-Length or Transfer-Encoding in `headers`: the writer sets
+/// the length itself), and the one a client call returns.
 pub struct Response {
     status: u16
     headers: []Header
     body: []u8
+
+    /// The value of the first header called `name`, compared without
+    /// regard to ASCII case; null when there is none.
+    pub fn header(self: *Self, name: []u8) ?[]u8 {
+        return findHeader(self.headers, name)
+    }
+}
+
+// The value of the first header of `hs` called `name`, ignoring ASCII case.
+fn findHeader(hs: []Header, name: []u8) ?[]u8 {
+    for h in hs {
+        if text.eqlIgnoreCase(h.name, name) {
+            return h.value
+        }
+    }
+    return null
 }
 
 /// The HTTP status that answers a `ParseError`: 400, 413, 414, 431, 500 or
@@ -653,4 +671,500 @@ fn send(a: Allocator, conn: Conn, res: Response, how: []u8) {
     conn.write(out.bytes()) catch |e| {
         return
     }
+}
+
+// The client: HTTP/1.1 over `std.net`, one request per connection
+// (`Connection: close`). `https://` URLs are refused with `HttpsUnsupported`
+// at one place (`exchange`), so a TLS transport can fill it in later.
+
+/// Why a client call gave no response. `InvalidUrl`, `UnsupportedScheme`
+/// (not http or https) and `HttpsUnsupported` come from the URL;
+/// `InvalidRequest` is a method or header that cannot be sent; the connect
+/// tags are `UnknownHost`, `ConnectionRefused`, `ConnectFailed` and
+/// `TimedOut`. `ConnectionClosed` is a connection that failed or ended
+/// before the response was complete; `BadResponse` is malformed input.
+/// `HeadersTooLarge`, `BodyTooLarge` and `TooManyRedirects` are limits.
+pub error ClientError {
+    InvalidUrl,
+    UnsupportedScheme,
+    HttpsUnsupported,
+    InvalidRequest,
+    UnknownHost,
+    ConnectionRefused,
+    ConnectFailed,
+    TimedOut,
+    ConnectionClosed,
+    BadResponse,
+    HeadersTooLarge,
+    BodyTooLarge,
+    TooManyRedirects,
+    OutOfMemory,
+}
+
+/// Options of `requestWith`.
+pub struct ClientOptions {
+    /// How long one wait for data may take, in milliseconds (10000 to
+    /// begin with). It is not a limit on the whole call.
+    timeoutMs: u32 = 10000
+    /// The longest response body, after any chunked decoding (16 MiB to
+    /// begin with).
+    maxBodyBytes: usize = 16777216
+    /// Follow 301, 302, 303, 307 and 308 with a `Location` (at most 10
+    /// times). Off to begin with: the redirect is returned as it is.
+    followRedirects: bool = false
+}
+
+/// A URL split by `parseUrl`; the slices point into the string given.
+pub struct Url {
+    https: bool
+    /// The host name or address, without the brackets of an IPv6 address.
+    host: []u8
+    /// The port written, else 80 (443 for https).
+    port: u16
+    /// `host[:port]` as written, for the `Host` header.
+    authority: []u8
+    /// The path and query as written, without any fragment. It is empty or
+    /// starts with `?` when the URL has no path; the request line then
+    /// gives `/`.
+    target: []u8
+}
+
+// The most redirects a call follows.
+let maxRedirects: u32 = 10
+
+fn hasPrefixNoCase(s: []u8, prefix: []u8) bool {
+    return s.len >= prefix.len && text.eqlIgnoreCase(s[..prefix.len], prefix)
+}
+
+/// Splits `http://host[:port][/path][?query]`; `[::1]` is an IPv6 host and
+/// a `#fragment` is dropped. `https://` parses (default port 443) and is
+/// refused later, by the request. Other schemes are `UnsupportedScheme`; a
+/// missing scheme, an empty host, user info, a bad port or a space or
+/// control character is `InvalidUrl`.
+pub fn parseUrl(url: []u8) ClientError!Url {
+    var https = false
+    var rest: []u8 = []u8{}
+    if hasPrefixNoCase(url, "http://") {
+        rest = url[7..]
+    } else if hasPrefixNoCase(url, "https://") {
+        https = true
+        rest = url[8..]
+    } else if text.indexOf(url, "://") != null {
+        return ClientError.UnsupportedScheme
+    } else {
+        return ClientError.InvalidUrl
+    }
+    for c in rest {
+        if c <= 32 || c == 127 {
+            return ClientError.InvalidUrl
+        }
+    }
+    var end: usize = 0
+    while end < rest.len && rest[end] != '/' && rest[end] != '?' && rest[end] != '#' {
+        end += 1
+    }
+    let authority = rest[..end]
+    var target = rest[end..]
+    if mem.indexOf(target, '#') |h| {
+        target = target[..h]
+    }
+    if mem.indexOf(authority, '@') != null {
+        return ClientError.InvalidUrl
+    }
+    var host = authority
+    var portText: []u8 = []u8{}
+    var hasPort = false
+    if authority.len > 0 && authority[0] == '[' {
+        let close = mem.indexOf(authority, ']') orelse return ClientError.InvalidUrl
+        host = authority[1..close]
+        let after = authority[close + 1..]
+        if after.len > 0 {
+            if after[0] != ':' {
+                return ClientError.InvalidUrl
+            }
+            portText = after[1..]
+            hasPort = true
+        }
+    } else if mem.indexOf(authority, ':') |colon| {
+        host = authority[..colon]
+        portText = authority[colon + 1..]
+        hasPort = true
+    }
+    if host.len == 0 {
+        return ClientError.InvalidUrl
+    }
+    var port: u16 = 80
+    if https {
+        port = 443
+    }
+    if hasPort {
+        if portText.len == 0 {
+            return ClientError.InvalidUrl
+        }
+        var n: u32 = 0
+        for c in portText {
+            if c < '0' || c > '9' {
+                return ClientError.InvalidUrl
+            }
+            n = n * 10 + (c - '0') as u32
+            if n > 65535 {
+                return ClientError.InvalidUrl
+            }
+        }
+        if n == 0 {
+            return ClientError.InvalidUrl
+        }
+        port = n as u16
+    }
+    return Url { https: https, host: host, port: port, authority: authority, target: target }
+}
+
+/// `requestWith` with the default `ClientOptions`: sends `method` to `url`
+/// with the extra `headers` and the `body`, and returns the response. The
+/// response (its headers and body) is allocated from `alloc`, which should
+/// be an `Arena` that the caller frees as a whole. The request is HTTP/1.1
+/// with `Host`, `Content-Length` (for a body, and for POST, PUT and PATCH)
+/// and `Connection: close`; `headers` must not name Content-Length,
+/// Transfer-Encoding or Connection, and a `Host` among them replaces the
+/// automatic one. A status of 3xx or 4xx is a response, not an error.
+pub fn request(alloc: Allocator, method: []u8, url: []u8, headers: []Header, body: []u8) ClientError!Response {
+    return requestWith(alloc, ClientOptions {}, method, url, headers, body)
+}
+
+/// `request` with a GET and no body.
+pub fn get(alloc: Allocator, url: []u8) ClientError!Response {
+    return request(alloc, "GET", url, []Header{}, "")
+}
+
+/// `request` with a POST of `body`, sent with the `Content-Type`
+/// `contentType`.
+pub fn post(alloc: Allocator, url: []u8, contentType: []u8, body: []u8) ClientError!Response {
+    let hs = alloc.alloc(Header { name: "Content-Type", value: contentType }, 1) catch return ClientError.OutOfMemory
+    return request(alloc, "POST", url, hs, body)
+}
+
+/// `request` with `opts`. With `followRedirects`, a 301, 302 or 303 turns a
+/// request other than GET or HEAD into a GET without a body, a 307 or 308
+/// repeats it, and the extra `headers` go only to the same host and port.
+/// Every response on the way stays allocated in `alloc`.
+pub fn requestWith(alloc: Allocator, opts: ClientOptions, method: []u8, url: []u8, headers: []Header, body: []u8) ClientError!Response {
+    var cur = url
+    var m = method
+    var hs = headers
+    var b = body
+    var hops: u32 = 0
+    while true {
+        let u = try parseUrl(cur)
+        let r = try exchange(alloc, opts, u, m, hs, b)
+        if !opts.followRedirects || !isRedirect(r.status) {
+            return r
+        }
+        let loc = r.header("location") orelse return r
+        if hops >= maxRedirects {
+            return ClientError.TooManyRedirects
+        }
+        hops += 1
+        if loc.len == 0 || text.startsWith(loc, "//") {
+            return ClientError.BadResponse
+        }
+        let next = resolveLocation(alloc, u, loc) catch return ClientError.OutOfMemory
+        let nu = try parseUrl(next)
+        if nu.port != u.port || !text.eqlIgnoreCase(nu.host, u.host) {
+            hs = []Header{}
+        }
+        if r.status != 307 && r.status != 308 && !text.eql(m, "GET") && !text.eql(m, "HEAD") {
+            m = "GET"
+            b = ""
+        }
+        cur = next
+    }
+    unreachable
+}
+
+fn isRedirect(status: u16) bool {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308
+}
+
+// The absolute URL that `loc` names when it comes from a response to `u`:
+// an absolute URL, an absolute path, or a path relative to `u`'s.
+fn resolveLocation(alloc: Allocator, u: Url, loc: []u8) AllocError![]u8 {
+    if hasPrefixNoCase(loc, "http://") || hasPrefixNoCase(loc, "https://") {
+        return loc
+    }
+    var out = Builder.init(alloc)
+    if u.https {
+        try out.append("https://")
+    } else {
+        try out.append("http://")
+    }
+    try out.append(u.authority)
+    if loc[0] == '/' {
+        try out.append(loc)
+        return out.bytes()
+    }
+    var path: []u8 = "/"
+    if u.target.len > 0 && u.target[0] == '/' {
+        path = u.target
+        if mem.indexOf(path, '?') |q| {
+            path = path[..q]
+        }
+    }
+    if loc[0] != '?' {
+        var dir = path.len
+        while dir > 0 && path[dir - 1] != '/' {
+            dir -= 1
+        }
+        path = path[..dir]
+    }
+    try out.append(path)
+    try out.append(loc)
+    return out.bytes()
+}
+
+// Checks the parts of a request that are written to the wire as they are.
+fn checkRequest(method: []u8, headers: []Header) ClientError!void {
+    if method.len == 0 {
+        return ClientError.InvalidRequest
+    }
+    for c in method {
+        if !isToken(c) {
+            return ClientError.InvalidRequest
+        }
+    }
+    for h in headers {
+        if h.name.len == 0 {
+            return ClientError.InvalidRequest
+        }
+        for c in h.name {
+            if !isToken(c) {
+                return ClientError.InvalidRequest
+            }
+        }
+        for c in h.value {
+            if c == '\r' || c == '\n' || c == 0 {
+                return ClientError.InvalidRequest
+            }
+        }
+        if text.eqlIgnoreCase(h.name, "content-length") || text.eqlIgnoreCase(h.name, "transfer-encoding") || text.eqlIgnoreCase(h.name, "connection") {
+            return ClientError.InvalidRequest
+        }
+    }
+}
+
+// Appends the request head and body to `out`.
+fn writeRequest(out: *mut Builder, u: Url, method: []u8, headers: []Header, body: []u8) AllocError!void {
+    try out.append(method)
+    try out.append(" ")
+    if u.target.len == 0 || u.target[0] != '/' {
+        try out.append("/")
+    }
+    try out.append(u.target)
+    try out.append(" HTTP/1.1\r\nHost: ")
+    try out.append(findHeader(headers, "host") orelse u.authority)
+    try out.append("\r\n")
+    for h in headers {
+        if !text.eqlIgnoreCase(h.name, "host") {
+            try out.append(h.name)
+            try out.append(": ")
+            try out.append(h.value)
+            try out.append("\r\n")
+        }
+    }
+    if body.len > 0 || text.eql(method, "POST") || text.eql(method, "PUT") || text.eql(method, "PATCH") {
+        try out.append("Content-Length: ")
+        try out.appendUint(body.len as u64)
+        try out.append("\r\n")
+    }
+    try out.append("Connection: close\r\n\r\n")
+    try out.append(body)
+}
+
+// One request on its own connection. The transport (a TCP `Conn` for
+// http) is chosen here.
+fn exchange(alloc: Allocator, opts: ClientOptions, u: Url, method: []u8, headers: []Header, body: []u8) ClientError!Response {
+    if u.https {
+        return ClientError.HttpsUnsupported
+    }
+    try checkRequest(method, headers)
+    var out = Builder.init(alloc)
+    defer out.deinit()
+    writeRequest(&mut out, u, method, headers, body) catch return ClientError.OutOfMemory
+    let conn = net.connect(u.host, u.port) catch |e| {
+        return match e {
+            .InvalidAddress => ClientError.InvalidUrl
+            .UnknownHost => ClientError.UnknownHost
+            .ConnectionRefused => ClientError.ConnectionRefused
+            .Unreachable => ClientError.ConnectFailed
+            .TimedOut => ClientError.TimedOut
+            .ConnectFailed => ClientError.ConnectFailed
+        }
+    }
+    defer conn.close()
+    conn.write(out.bytes()) catch return ClientError.ConnectionClosed
+    return readResponse(alloc, opts, conn, method)
+}
+
+// Waits for data: the number of bytes read, 0 when the peer has closed.
+fn readSome(conn: Conn, buf: []mut u8, ms: u32) ClientError!usize {
+    return conn.readTimeout(buf, ms) catch |e| {
+        return match e {
+            .TimedOut => ClientError.TimedOut
+            .ConnectionReset => ClientError.ConnectionClosed
+            .ReadFailed => ClientError.ConnectionClosed
+        }
+    }
+}
+
+// The status and headers of the response head `head` (the status line and
+// the header lines, each with its CRLF): a Response without a body, all in
+// `alloc`.
+fn parseHead(alloc: Allocator, head: []u8) ClientError!Response {
+    let hb = alloc.alloc(0 as u8, head.len) catch return ClientError.OutOfMemory
+    mem.copy(hb, head)
+    let lineEnd = crlf(hb, 0) orelse return ClientError.BadResponse
+    let line = hb[..lineEnd]
+    if line.len < 12 || !text.startsWith(line, "HTTP/1.") || (line[7] != '0' && line[7] != '1') || line[8] != ' ' {
+        return ClientError.BadResponse
+    }
+    var status: u16 = 0
+    for i in 9..12 {
+        if line[i] < '0' || line[i] > '9' {
+            return ClientError.BadResponse
+        }
+        status = status * 10 + (line[i] - '0') as u16
+    }
+    if line.len > 12 && line[12] != ' ' {
+        return ClientError.BadResponse
+    }
+    var list = List(Header).init(alloc)
+    defer list.deinit()
+    var pos = lineEnd + 2
+    while pos < hb.len {
+        let end = crlf(hb, pos) orelse return ClientError.BadResponse
+        let h = parseHeader(hb[pos..end]) orelse return ClientError.BadResponse
+        list.append(h) catch return ClientError.OutOfMemory
+        pos = end + 2
+    }
+    var hs = []Header{}
+    if list.len() > 0 {
+        let owned = alloc.alloc(Header { name: "", value: "" }, list.len()) catch return ClientError.OutOfMemory
+        for i in 0..list.len() {
+            owned[i] = list.items()[i]
+        }
+        hs = owned
+    }
+    return Response { status: status, headers: hs, body: []u8{} }
+}
+
+// Reads the response to a request with `method` from `conn`: the head, then
+// the body by Transfer-Encoding: chunked, Content-Length, or until the peer
+// closes. An interim 1xx response is skipped.
+fn readResponse(alloc: Allocator, opts: ClientOptions, conn: Conn, method: []u8) ClientError!Response {
+    let limits = Limits { maxRequestLine: 8192, maxHeaders: 16384, maxBody: opts.maxBodyBytes }
+    var wire = Builder.init(alloc)
+    defer wire.deinit()
+    var chunk = @zeroed([4096]u8)
+    var off: usize = 0
+    var res = Response { status: 0, headers: []Header{}, body: []u8{} }
+    var bodyStart: usize = 0
+    while true {
+        if text.indexOf(wire.bytes()[off..], "\r\n\r\n") |i| {
+            if i + 4 > limits.maxHeaders {
+                return ClientError.HeadersTooLarge
+            }
+            res = try parseHead(alloc, wire.bytes()[off..off + i + 2])
+            bodyStart = off + i + 4
+            if res.status >= 100 && res.status < 200 && res.status != 101 {
+                off = bodyStart
+                continue
+            }
+            break
+        }
+        if wire.len() - off > limits.maxHeaders {
+            return ClientError.HeadersTooLarge
+        }
+        let n = try readSome(conn, chunk[..], opts.timeoutMs)
+        if n == 0 {
+            return ClientError.ConnectionClosed
+        }
+        wire.append(chunk[0..n]) catch return ClientError.OutOfMemory
+    }
+    if text.eql(method, "HEAD") || res.status == 204 || res.status == 304 {
+        return res
+    }
+    if findHeader(res.headers, "transfer-encoding") |te| {
+        if !text.eqlIgnoreCase(text.trim(te), "chunked") {
+            return ClientError.BadResponse
+        }
+        var chunks = Builder.init(alloc)
+        errdefer chunks.deinit()
+        while true {
+            chunks.clear()
+            if readChunked(wire.bytes(), bodyStart, limits, &mut chunks) |end| {
+                break
+            } else |e| {
+                if e != ParseError.Incomplete {
+                    return match e {
+                        .BodyTooLarge => ClientError.BodyTooLarge
+                        .HeadersTooLarge => ClientError.HeadersTooLarge
+                        .OutOfMemory => ClientError.OutOfMemory
+                        _ => ClientError.BadResponse
+                    }
+                }
+            }
+            let n = try readSome(conn, chunk[..], opts.timeoutMs)
+            if n == 0 {
+                return ClientError.ConnectionClosed
+            }
+            wire.append(chunk[0..n]) catch return ClientError.OutOfMemory
+        }
+        res.body = chunks.toOwned() catch return ClientError.OutOfMemory
+        return res
+    }
+    if findHeader(res.headers, "content-length") |cl| {
+        for h in res.headers {
+            if text.eqlIgnoreCase(h.name, "content-length") && !text.eql(h.value, cl) {
+                return ClientError.BadResponse
+            }
+        }
+        let n = contentLength(cl, limits.maxBody) catch |e| {
+            return match e {
+                .BodyTooLarge => ClientError.BodyTooLarge
+                _ => ClientError.BadResponse
+            }
+        }
+        if n == 0 {
+            return res
+        }
+        let buf = alloc.alloc(0 as u8, n) catch return ClientError.OutOfMemory
+        var got = wire.len() - bodyStart
+        if got > n {
+            got = n
+        }
+        mem.copy(buf, wire.bytes()[bodyStart..bodyStart + got])
+        while got < n {
+            let r = try readSome(conn, buf[got..], opts.timeoutMs)
+            if r == 0 {
+                return ClientError.ConnectionClosed
+            }
+            got += r
+        }
+        res.body = buf
+        return res
+    }
+    var rest = Builder.init(alloc)
+    errdefer rest.deinit()
+    rest.append(wire.bytes()[bodyStart..]) catch return ClientError.OutOfMemory
+    while true {
+        if rest.len() > limits.maxBody {
+            return ClientError.BodyTooLarge
+        }
+        let n = try readSome(conn, chunk[..], opts.timeoutMs)
+        if n == 0 {
+            break
+        }
+        rest.append(chunk[0..n]) catch return ClientError.OutOfMemory
+    }
+    res.body = rest.toOwned() catch return ClientError.OutOfMemory
+    return res
 }

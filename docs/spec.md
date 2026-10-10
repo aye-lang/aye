@@ -1533,7 +1533,7 @@ std.os        args, getenv, exit                                             bel
 std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
-std.http      HTTP/1.1 server: listen, Server.run, Request, Response; parse  aye doc --signatures std.http
+std.http      HTTP/1.1 server and client: listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON (RFC 8259): parse into an arena tree; write, stringify    aye doc --signatures std.json
 std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
 std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
@@ -1544,7 +1544,11 @@ port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves, a thread per
 connection, until `s.stop()`. The handler reads `req.method`,
 `req.target`, `req.body` and `req.header(name)`, and fills `res.status`
 (200), `res.headers` and `res.body`; its `alloc` is an arena that lives
-until the response is written.
+until the response is written. The client is `http.get(arena,
+"http://host:8080/path")` (also `post`, `request`, `requestWith`): a
+`Response` with `status`, `headers`, `body` and `header(name)`, allocated
+in the arena; redirects are followed only on request, and `https://` is
+`HttpsUnsupported`.
 
 ```aye
 import std.heap.General
