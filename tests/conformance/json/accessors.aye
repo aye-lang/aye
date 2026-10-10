@@ -1,0 +1,70 @@
+// The typed accessors: a wrong type or a missing key or index is null.
+
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.json.Value
+import std.text
+
+let DOC =
+    \\{"name":"aye","n":3.5,"ok":true,"none":null,
+    \\ "tags":["a","b"],"nested":{"x":[10,20]},"dup":1,"dup":2,"zero":0.1}
+
+fn str(v: ?*Value) []u8 {
+    let p = v orelse return "(missing)"
+    return p.asString() orelse "(not a string)"
+}
+
+fn num(v: ?*Value) f64 {
+    let p = v orelse return -1.0
+    return p.asNumber() orelse -2.0
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let root = json.parse(&mut arena, DOC) catch |e| {
+        @println(@tagName(e))
+        return
+    }
+    @println(str(root.get("name")))
+    @println(str(root.get("n")))
+    @println(str(root.get("missing")))
+    @println(num(root.get("n")))
+    @println(num(root.get("name")))
+    @println(num(root.get("dup")))
+    @println(num(root.get("zero")) == 0.1)
+
+    let ok = root.get("ok") orelse return
+    @println(ok.asBool() orelse false)
+    @println(ok.asNumber() == null)
+    @println(ok.isNull())
+    let none = root.get("none") orelse return
+    @println(none.isNull())
+    @println(none.asBool() == null)
+
+    let tags = root.get("tags") orelse return
+    let items = tags.asArray() orelse return
+    @println(items.len)
+    @println(str(tags.at(0)))
+    @println(str(tags.at(1)))
+    @println(str(tags.at(2)))
+    @println(tags.get("a") == null)
+    @println(root.at(0) == null)
+    @println(tags.asObject() == null)
+
+    let nested = root.get("nested") orelse return
+    let xs = nested.get("x") orelse return
+    @println(num(xs.at(1)))
+
+    let members = root.asObject() orelse return
+    @println(members.len)
+    for m in members {
+        @println(m.key)
+    }
+    @println(root.asArray() == null)
+    @println(root.asString() == null)
+    @println(items[0].isNull())
+}
