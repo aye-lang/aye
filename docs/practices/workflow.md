@@ -210,6 +210,33 @@ instead of hand-written prototypes with a 128-byte guess) do.
 **Why:** a workaround left behind keeps the cost the fix removed and
 teaches the next agent the old idiom.
 
+## Test on Linux
+
+### Run the suite in the Ubuntu container
+**Context:** a change touches C interop, `@cimport`, file system or
+socket code, or anything else that differs between macOS and Linux; the
+target is Ubuntu 24.04 (the cloud VM).
+**Bad:** `cargo test --release` on the Mac only. `browser/net/archive.aye`
+used `d_namlen` and `st_mtimespec`, which exist on macOS only, and
+nothing noticed until a Linux machine came.
+**Good:** `scripts/linux.sh` runs any command in an Ubuntu 24.04
+container (Apple `container` CLI) with the checkout mounted at `/work`:
+```
+scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser'
+scripts/linux.sh cargo test --release > target/linux-test.log 2>&1
+```
+The image `aye-dev:ubuntu24-<hash>` builds on first use (about 4 minutes)
+from `scripts/linux/Containerfile`, which runs `scripts/setup-ubuntu.sh`,
+the same script a plain Ubuntu VM uses. `<hash>` covers both files, so an
+edit to either builds a new image and nobody runs a stale one. It works
+from a git worktree too: the main checkout's git dir is mounted read-only,
+so `git` runs inside. Linux build output lives in the volume
+`aye-linux-<checkout>-<arch>-target` over `/work/target`, so it never mixes with
+the macOS `target/`. It runs 4 CPUs (`LINUX_CPUS`) and 8G (`LINUX_MEMORY`);
+`LINUX_ARCH=amd64` is emulated and only for a build check.
+**Why:** one command, no host cargo, and the container does not touch
+other agents' builds on the Mac.
+
 ## Checklist before finishing a branch
 
 - Everything is committed; `git status` is clean.

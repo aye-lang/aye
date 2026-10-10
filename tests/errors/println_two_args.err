@@ -1,0 +1,1 @@
+println_two_args.aye:2:5: error[E0022]: `@println` takes at most one argument; print each value with its own `@print`, or build the line with `std.text.Builder`

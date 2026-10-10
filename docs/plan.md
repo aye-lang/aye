@@ -14,35 +14,30 @@ A new session starts in `~/Documents/ayelang/aye` (moved by X5.2; full suite gre
 The state is this file's lane table, [`plans/done.md`](plans/done.md)
 and `git worktree list` (expected: main only). Next, in order:
 
-1. **Cloud (X1).** The user enables it first: install the Claude GitHub
-   App on the `aye-lang` org and create a Claude Code cloud environment
-   for `aye-lang/aye` whose setup installs the packages listed in the
-   X1.2 card (until `scripts/setup-ubuntu.sh` exists, paste that list
-   as the setup command). Then X1.1 (local, opus; it is gap #50,
-   per-OS declarations, so solve it in the language rather than with a
-   helper if the fix stays small), then X1.2 in the cloud.
-2. **Language cards in the cloud**, two or three at a time, merged one
-   by one on `main`: F1.1 (framework hello world on `std.http`), O1.9
-   (quiet broken pipe), O1.5/O1.5a/O1.6 (fs, path, process), then O3.x.
-   Local slots stay for steps that need archives or screenshots.
-3. **AI-writability eval** (north star): a card that runs fresh agents
-   on fixed tasks with only `aye spec`, `aye check`, `aye explain`, and
-   records pass rate, check rounds and tokens. Write it before O3.x so
-   its numbers steer the order.
+1. **Linux development (X1): done 2026-10-08.** The full suite passes
+   on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
+   `container`). Steps touching the C prelude, `@cimport` or platform
+   calls run it before merging.
+2. **Language cards**, merged one by one on `main`: F1.1, O1.12,
+   O1.13, O1.5a and O1.5 are done (2026-10-10, `plans/done.md`);
+   O1.6 (process) and O3.1 (json) are in flight; then O3.1a, O3.2, O3.3.
+3. **AI-writability eval** (north star): `scripts/eval.py`
+   (`docs/aye-eval.md`); rerun with `--runs 3` after O1.12/O1.13 and
+   before ranking O3.x.
 
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | X1.1, then F1.1 and O1.9 in the cloud | cloud once X1.2 is done; local until then |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | P2 leftovers + O1 server basics | O1.6, O3.1, then O3.1a/O3.2/O3.3 | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
-| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 (F1.1 only) | F1.1, after O1.4a | cloud |
+| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
 (X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are
-done; after that lane cards in lane priority (F1.1 first, it builds on
-O1.4a), with X1.1 beside them. Project steps go when their condition
-holds: X1.2 once the user enables cloud. The browser resumes when Aye criteria O6–O9 are met, in the
+done, and so is Linux development (X1); next, lane cards in lane
+priority (F1.1 merged 2026-10-10; Aye-lane cards next). Project steps go when their condition
+holds. The browser resumes when Aye criteria O6–O9 are met, in the
 same step that splits `browser/` into its own repo (P8.1).
 
 ## Project
@@ -50,12 +45,8 @@ same step that splits `browser/` into its own repo (P8.1).
 Steps not tied to one lane, in this order. Their cards are in
 [`plans/project.md`](plans/project.md).
 
-1. **X1 cloud enablement.** X1.1: `browser/net/archive.aye` reads
-   `d_namlen` and `st_mtimespec` (macOS only, lines 114 and 131); make
-   it build on Linux. X1.2:
-   an Ubuntu 24.04 setup script in the repo, then the first full
-   `cargo test --release` on the cloud VM (4 vCPU). Failures become
-   new steps.
+1. **X1 Linux development.** Done 2026-10-08 (X1.1–X1.7): the suite
+   passes on Ubuntu 24.04 arm64 and amd64 through `scripts/linux.sh`.
 2. **X2 rename Ore → Aye.** Done 2026-10-08 (3042d53, `scripts/rename-aye.py`).
 3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
 4. **X4 go public** (repo github.com/aye-lang/aye, with the
@@ -103,6 +94,13 @@ its area. Nothing else of the plan.
 10. **Report:** commits (hash and one line each), the verify result, the
     full-suite result, follow-ups as proposed steps. A lesson goes into
     `docs/practices/` in the same commit as its fix.
+11. **Cloud steps** (Ubuntu 24.04 VM, a fresh clone): if a tool is
+    missing, run `sudo sh scripts/setup-ubuntu.sh` first. Work on a
+    branch `<step id>-<slug>` from `main`, push it and open a pull
+    request to `main` whose body is the report (rule 10). Never push to
+    `main` or merge; main merges one PR at a time and runs the macOS
+    checklist. The VM is Linux, so `scripts/linux.sh` is not used
+    there; the checklist's `browser/build.sh` runs as is.
 
 Merging (main's side):
 
@@ -123,8 +121,9 @@ Merging (main's side):
   ([workflow.md, "At most two local agents run builds and tests at once"](practices/workflow.md#at-most-two-local-agents-run-builds-and-tests-at-once)).
   Docs-only and git-only agents run beside them. Cloud agents run on
   the Claude Code cloud VM (Ubuntu 24.04, 4 vCPU), one step per
-  session; until X1.2 is done, cards marked cloud run locally within
-  the limit of 2. Repeated runs under load (10×, 30×) for a flaky test
+  session; cards marked cloud run locally within the limit of 2 when
+  the cloud is not in use. A `scripts/linux.sh` run counts as a build
+  agent. Repeated runs under load (10×, 30×) for a flaky test
   are the merge agent's check, not every step's.
 - **Model per step:** git only (commit, merge without tests, cleanup,
   push) → haiku git-runner. A merge that needs build and tests → sonnet,
@@ -166,7 +165,8 @@ goes to the backlog or to `done.md` as dropped.
   github.com/aye-lang/aye, private until it goes public together
   with the browser (X4); license MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`); site ayelang.dev (Cloudflare Workers, `site/`).
-- **Platforms:** macOS (local) and Ubuntu 24.04 (cloud, after X1).
+- **Platforms:** macOS (local) and Ubuntu 24.04 (Apple `container`
+  locally via `scripts/linux.sh`, after X1; the user's cloud).
   Windows is out of scope. M10's ThreadSanitizer run is not possible on
   this Mac.
 - **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md`.

@@ -50,6 +50,24 @@ extern int aye_rt_memcmp(const void *, const void *, size_t) __asm__(AYE_SYM("me
 extern int aye_rt_open(const char *, int, ...) __asm__(AYE_SYM("open"));
 extern int aye_rt_access(const char *, int) __asm__(AYE_SYM("access"));
 extern int aye_rt_clock_gettime(int, int64_t *) __asm__(AYE_SYM("clock_gettime"));
+#if defined(__APPLE__) && defined(__x86_64__)
+extern int aye_rt_stat(const char *, void *) __asm__(AYE_SYM("stat$INODE64"));
+#else
+extern int aye_rt_stat(const char *, void *) __asm__(AYE_SYM("stat"));
+#endif
+#if defined(__APPLE__) && defined(__x86_64__)
+#define AYE_INODE64 "$INODE64"
+#else
+#define AYE_INODE64 ""
+#endif
+extern int aye_rt_lstat(const char *, void *) __asm__(AYE_SYM("lstat" AYE_INODE64));
+extern int aye_rt_mkdir(const char *, unsigned) __asm__(AYE_SYM("mkdir"));
+extern int aye_rt_remove(const char *) __asm__(AYE_SYM("remove"));
+extern int aye_rt_rename(const char *, const char *) __asm__(AYE_SYM("rename"));
+extern uint8_t *aye_rt_opendir(const char *) __asm__(AYE_SYM("opendir" AYE_INODE64));
+extern uint8_t *aye_rt_readdir(uint8_t *) __asm__(AYE_SYM("readdir" AYE_INODE64));
+extern int aye_rt_closedir(uint8_t *) __asm__(AYE_SYM("closedir"));
+extern void aye_rt_rewinddir(uint8_t *) __asm__(AYE_SYM("rewinddir"));
 #define AYE_FILE(l) aye_files[(l) >> 20]
 #define AYE_LINE(l) ((l) & 0xfffff)
 
@@ -353,8 +371,9 @@ AYE_RT void aye_log_e(uint16_t e) { aye_rt_dprintf(2, "%s", aye_error_names[e]);
 
 /* Hooks that std calls through `extern fn`: the program's arguments;
    `open` for reading or `create` (write, create, truncate) with a path that
-   is not NUL-terminated (the fd, or -errno); `exists`; and the monotonic
-   clock in nanoseconds. Flag and clock values differ between macOS and
+   is not NUL-terminated (the fd, or -errno); `exists`; `mtime`; and the
+   monotonic clock in nanoseconds. Flag and clock values, and where
+   `struct stat` keeps the modification time, differ between macOS and
    Linux. */
 static int aye_argc;
 static char **aye_argv;
@@ -368,9 +387,23 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #ifdef __APPLE__
 #define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
 #define AYE_CLOCK_MONOTONIC 6
+#define AYE_ST_MTIME 6 /* st_mtimespec, in int64_t: byte 48 */
+#define AYE_ST_SIZE 12 /* st_size: byte 96 */
+#define AYE_ST_MODE 4 /* st_mode, 16 bits: byte 4 */
+#define AYE_ENOTEMPTY 66
+#define AYE_D_TYPE 20 /* dirent: d_type, then d_name */
 #else
 #define AYE_O_CREATE 01101
 #define AYE_CLOCK_MONOTONIC 1
+#define AYE_ST_MTIME 11 /* st_mtim, byte 88 on x86_64 and aarch64 */
+#define AYE_ST_SIZE 6 /* st_size: byte 48 on both */
+#ifdef __x86_64__
+#define AYE_ST_MODE 24 /* st_mode, low 16 bits: byte 24 */
+#else
+#define AYE_ST_MODE 16 /* byte 16 on aarch64 */
+#endif
+#define AYE_ENOTEMPTY 39
+#define AYE_D_TYPE 18
 #endif
 static __attribute__((unused)) char *aye_c_path(uint8_t *path, size_t len) {
     char *p = aye_rt_malloc(len + 1);
@@ -396,6 +429,82 @@ AYE_RT bool aye_std_exists(uint8_t *path, size_t len) {
     aye_rt_free(p);
     return r == 0;
 }
+/* std.fs.mtime: the modification time in nanoseconds since 1970, in
+   `*ns`; false if `stat` fails. Gap #50 (no per-OS declarations): the
+   field is `st_mtimespec` on macOS and `st_mtim` on Linux, so Aye code
+   cannot name it. `st` is larger than both OSes' `struct stat` (144
+   bytes). */
+AYE_RT bool aye_std_mtime(uint8_t *path, size_t len, int64_t *ns) {
+    char *p = aye_c_path(path, len);
+    if (!p) return false;
+    int64_t st[32];
+    int r = aye_rt_stat(p, st);
+    aye_rt_free(p);
+    if (r != 0) return false;
+    *ns = st[AYE_ST_MTIME] * 1000000000 + st[AYE_ST_MTIME + 1];
+    return true;
+}
+/* std.fs: stat, readDir, mkdir, remove and rename. `-errno` as a result
+   keeps the numbers that are the same on both OSes; ENOTEMPTY (66 on macOS,
+   39 on Linux) is -39 on both. */
+static __attribute__((unused)) int32_t aye_std_fail(void) {
+    int e = *aye_rt_errno_loc();
+    return e == AYE_ENOTEMPTY ? -39 : -e;
+}
+/* `lstat` of the path into `out`: the size, the modification time in
+   nanoseconds since 1970 and the S_IFMT bits of the mode (the same values
+   on both OSes); 0, or -errno. */
+AYE_RT int32_t aye_std_lstat(uint8_t *path, size_t len, int64_t *out) {
+    char *p = aye_c_path(path, len);
+    if (!p) return -12;
+    int64_t st[32];
+    int r = aye_rt_lstat(p, st);
+    int32_t err = r != 0 ? aye_std_fail() : 0;
+    aye_rt_free(p);
+    if (r != 0) return err;
+    out[0] = st[AYE_ST_SIZE];
+    out[1] = st[AYE_ST_MTIME] * 1000000000 + st[AYE_ST_MTIME + 1];
+    out[2] = *(uint16_t *)((char *)st + AYE_ST_MODE) & 0170000;
+    return 0;
+}
+/* `mkdir` (op 0), `remove` (op 1) of `path`, and `rename` (op 2) of `path`
+   to `to`; 0, or -errno. */
+AYE_RT int32_t aye_std_pathop(int32_t op, uint8_t *path, size_t len, uint8_t *to, size_t tolen) {
+    char *p = aye_c_path(path, len);
+    char *q = op == 2 ? aye_c_path(to, tolen) : 0;
+    int32_t err = -12;
+    if (p && (op != 2 || q)) {
+        int r = op == 0 ? aye_rt_mkdir(p, 0777) : op == 1 ? aye_rt_remove(p) : aye_rt_rename(p, q);
+        err = r != 0 ? aye_std_fail() : 0;
+    }
+    aye_rt_free(p);
+    aye_rt_free(q);
+    return err;
+}
+/* `opendir`: the directory, or null with -errno in `*err`. */
+AYE_RT uint8_t *aye_std_opendir(uint8_t *path, size_t len, int32_t *err) {
+    char *p = aye_c_path(path, len);
+    if (!p) {
+        *err = -12;
+        return 0;
+    }
+    uint8_t *d = aye_rt_opendir(p);
+    if (!d) *err = aye_std_fail();
+    aye_rt_free(p);
+    return d;
+}
+/* `readdir`: the next entry's NUL-terminated name, and its `d_type` in
+   `*kind`; null at the end. */
+AYE_RT uint8_t *aye_std_readdir(uint8_t *dir, int32_t *kind) {
+    uint8_t *e = aye_rt_readdir(dir);
+    if (!e) return 0;
+    *kind = e[AYE_D_TYPE];
+    return e + AYE_D_TYPE + 1;
+}
+/* `closedir` and `rewinddir` under our own names: a program that
+   `@cimport`s dirent.h declares the libc names itself (E0096). */
+AYE_RT void aye_std_closedir(uint8_t *dir) { aye_rt_closedir(dir); }
+AYE_RT void aye_std_rewinddir(uint8_t *dir) { aye_rt_rewinddir(dir); }
 /* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
    and Aye has no per-OS declarations, so this helper stays. */
 AYE_RT int32_t aye_std_errno(void) { return *aye_rt_errno_loc(); }

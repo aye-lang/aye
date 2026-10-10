@@ -1,0 +1,192 @@
+// std.path: file paths as byte strings (`[]u8`).
+//
+// Everything is lexical: nothing looks at the file system, so symbolic
+// links are not followed. The separator is `/` only. The functions that
+// pick a part of a path (`dirname`, `basename`, `extension`) return a slice
+// of their input; the ones that build a new path take an `Allocator`.
+
+import std.mem
+import std.mem.AllocError
+import std.mem.Allocator
+import std.text
+
+/// `a` and `b` with exactly one `/` between them: the slashes at the end
+/// of `a` and at the start of `b` are replaced by it. Nothing else changes
+/// (`..` and `.` stay); if one part is empty the result is a copy of the
+/// other. The result is new memory from `alloc` (free it with `alloc.free`).
+pub fn join(alloc: Allocator, a: []u8, b: []u8) AllocError![]mut u8 {
+    var out = text.Builder.init(alloc)
+    defer out.deinit()
+    if a.len == 0 {
+        try out.append(b)
+    } else if b.len == 0 {
+        try out.append(a)
+    } else {
+        try out.append(a[..trimEnd(a, a.len)])
+        try out.appendByte('/')
+        var i: usize = 0
+        while i < b.len && b[i] == '/' {
+            i += 1
+        }
+        try out.append(b[i..])
+    }
+    return out.toOwned()
+}
+
+/// The directory part of `p`: everything before the last name, without the
+/// slashes that end it. `dirname("a/b/c")` is "a/b", `dirname("/a")` is "/".
+/// Slashes at the end of `p` are ignored. A path with no directory part
+/// gives "." (a constant, not a slice of `p`).
+pub fn dirname(p: []u8) []u8 {
+    let end = trimEnd(p, p.len)
+    if end == 0 {
+        if p.len > 0 {
+            return p[..1]
+        }
+        return "."
+    }
+    var i = end
+    while i > 0 && p[i - 1] != '/' {
+        i -= 1
+    }
+    if i == 0 {
+        return "."
+    }
+    let dir = trimEnd(p, i)
+    if dir == 0 {
+        return p[..1]
+    }
+    return p[..dir]
+}
+
+/// The last name of `p`, without slashes: `basename("a/b/")` is "b". It is
+/// empty for "" and for a path of slashes only.
+pub fn basename(p: []u8) []u8 {
+    let end = trimEnd(p, p.len)
+    var i = end
+    while i > 0 && p[i - 1] != '/' {
+        i -= 1
+    }
+    return p[i..end]
+}
+
+/// The extension of the last name of `p`, with its dot: `extension("a/b.tar.gz")`
+/// is ".gz". It is empty when the name has no dot, when its only dot is
+/// the first character (".bashrc"), and for the names "." and "..".
+pub fn extension(p: []u8) []u8 {
+    let base = basename(p)
+    if text.eql(base, ".") || text.eql(base, "..") {
+        return base[base.len..]
+    }
+    var i = base.len
+    while i > 0 {
+        i -= 1
+        if base[i] == '.' {
+            if i == 0 {
+                return base[base.len..]
+            }
+            return base[i..]
+        }
+    }
+    return base[base.len..]
+}
+
+/// `p` cleaned without looking at the file system: `.` names and empty
+/// names (from `//`) are dropped, `name/..` pairs are dropped, and a
+/// trailing `/` is dropped except for the root "/". A `..` that would go
+/// above the root of an absolute path is dropped ("/.." is "/"); a `..`
+/// that leads a relative path stays ("../a" is "../a"). A path with nothing
+/// left is ".". The result is new memory from `alloc` (free it with
+/// `alloc.free`).
+pub fn normalize(alloc: Allocator, p: []u8) AllocError![]mut u8 {
+    // The result is never longer than `p`, except "" which becomes ".".
+    let buf = try alloc.alloc(0 as u8, p.len + 1)
+    let absolute = p.len > 0 && p[0] == '/'
+    var floor: usize = 0
+    if absolute {
+        buf[0] = '/'
+        floor = 1
+    }
+    // buf[..n] is the result so far: names separated by `/`, after the
+    // root if there is one.
+    var n = floor
+    var i: usize = 0
+    while i < p.len {
+        while i < p.len && p[i] == '/' {
+            i += 1
+        }
+        let start = i
+        while i < p.len && p[i] != '/' {
+            i += 1
+        }
+        let name = p[start..i]
+        if name.len == 0 || text.eql(name, ".") {
+            continue
+        }
+        if text.eql(name, "..") {
+            var k = n
+            while k > floor && buf[k - 1] != '/' {
+                k -= 1
+            }
+            if n > floor && !text.eql(buf[k..n], "..") {
+                // Drop the last name and the `/` before it.
+                n = k
+                if n > floor {
+                    n -= 1
+                }
+                continue
+            }
+            if absolute {
+                continue
+            }
+        }
+        if n > floor {
+            buf[n] = '/'
+            n += 1
+        }
+        mem.copy(buf[n..], name)
+        n += name.len
+    }
+    if n == 0 {
+        buf[0] = '.'
+        n = 1
+    }
+    let exact = alloc.resize(buf, n, 0) catch |e| {
+        alloc.free(buf)
+        return e
+    }
+    return exact
+}
+
+/// Is `p` the same path as `root`, or inside it? Both are normalized
+/// first, so "/srv/www/../a" is inside "/srv" and "/srv/../etc" is not.
+/// Whole names are compared ("/srv2" is not inside "/srv"). The check is
+/// lexical: "." as the root holds every relative path that does not start
+/// with `..`, and an absolute path is never inside a relative root or the
+/// other way round. Allocates the two normalized paths from `alloc` and
+/// frees them.
+pub fn isUnder(alloc: Allocator, root: []u8, p: []u8) AllocError!bool {
+    let r = try normalize(alloc, root)
+    defer alloc.free(r)
+    let n = try normalize(alloc, p)
+    defer alloc.free(n)
+    if text.eql(r, ".") {
+        return n[0] != '/' && !text.eql(n, "..") && !text.startsWith(n, "../")
+    }
+    if !text.startsWith(n, r) {
+        return false
+    }
+    if n.len == r.len {
+        return true
+    }
+    return r[r.len - 1] == '/' || n[r.len] == '/'
+}
+
+// The length of `p[..n]` without the `/`s at its end.
+fn trimEnd(p: []u8, n: usize) usize {
+    var end = n
+    while end > 0 && p[end - 1] == '/' {
+        end -= 1
+    }
+    return end
+}

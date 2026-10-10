@@ -1,0 +1,23 @@
+test "join puts one slash at the seam" ... ok
+test "join skips an empty part" ... ok
+test "dirname" ... ok
+test "dirname with trailing and doubled slashes" ... ok
+test "dirname of . and .. is by the last slash" ... ok
+test "basename" ... ok
+test "basename with trailing and doubled slashes" ... ok
+test "basename of . and .." ... ok
+test "extension" ... ok
+test "extension of dot files, . and .." ... ok
+test "normalize drops . and doubled slashes" ... ok
+test "normalize drops a trailing slash, except for the root" ... ok
+test "normalize resolves .." ... ok
+test "normalize at the root and at the start of a relative path" ... ok
+test "normalize of nothing is ." ... ok
+test "normalize keeps names that only look like . and .." ... ok
+test "isUnder: a path inside the root" ... ok
+test "isUnder: a path that climbs out of the root" ... ok
+test "isUnder: a longer name is not inside" ... ok
+test "isUnder: an absolute and a relative path do not mix" ... ok
+test "join, normalize and isUnder free what they allocate" ... ok
+
+21 passed; 0 failed

@@ -1,0 +1,237 @@
+// O1.5a: std.path: join, dirname, basename, extension, normalize, isUnder.
+// Lexical, Unix separators; `..`, `.`, trailing and doubled slashes.
+
+import std.mem.Allocator
+import std.path
+import std.testing
+import std.text
+
+fn same(want: []u8, got: []u8) {
+    @expect(text.eql(want, got))
+}
+
+fn joined(alloc: Allocator, a: []u8, b: []u8, want: []u8) {
+    let got = path.join(alloc, a, b) catch {
+        @expect(false)
+        return
+    }
+    defer alloc.free(got)
+    same(want, got)
+}
+
+fn norm(alloc: Allocator, p: []u8, want: []u8) {
+    let got = path.normalize(alloc, p) catch {
+        @expect(false)
+        return
+    }
+    defer alloc.free(got)
+    same(want, got)
+}
+
+fn under(alloc: Allocator, root: []u8, p: []u8) bool {
+    return path.isUnder(alloc, root, p) catch false
+}
+
+test "join puts one slash at the seam" {
+    let alloc = testing.allocator()
+    joined(alloc, "a", "b", "a/b")
+    joined(alloc, "a/", "b", "a/b")
+    joined(alloc, "a", "/b", "a/b")
+    joined(alloc, "a//", "//b", "a/b")
+    joined(alloc, "/", "b", "/b")
+    joined(alloc, "/", "/", "/")
+    joined(alloc, "a/b", "../c", "a/b/../c")
+}
+
+test "join skips an empty part" {
+    let alloc = testing.allocator()
+    joined(alloc, "", "b", "b")
+    joined(alloc, "a", "", "a")
+    joined(alloc, "", "", "")
+    joined(alloc, "/", "", "/")
+}
+
+test "dirname" {
+    let alloc = testing.allocator()
+    same("a/b", path.dirname("a/b/c"))
+    same("/a", path.dirname("/a/b"))
+    same("/", path.dirname("/a"))
+    same("/", path.dirname("/"))
+    same(".", path.dirname("a"))
+    same(".", path.dirname(""))
+}
+
+test "dirname with trailing and doubled slashes" {
+    let alloc = testing.allocator()
+    same("a", path.dirname("a/b/"))
+    same("a", path.dirname("a/b//"))
+    same("a", path.dirname("a//b"))
+    same("/", path.dirname("//a"))
+    same("/", path.dirname("///"))
+    same(".", path.dirname("a/"))
+}
+
+test "dirname of . and .. is by the last slash" {
+    let alloc = testing.allocator()
+    same("a", path.dirname("a/.."))
+    same("a/b", path.dirname("a/b/."))
+    same(".", path.dirname(".."))
+}
+
+test "basename" {
+    let alloc = testing.allocator()
+    same("c", path.basename("a/b/c"))
+    same("a", path.basename("a"))
+    same("b", path.basename("/a/b"))
+    same("a", path.basename("/a"))
+    same("", path.basename(""))
+    same("", path.basename("/"))
+}
+
+test "basename with trailing and doubled slashes" {
+    let alloc = testing.allocator()
+    same("b", path.basename("a/b/"))
+    same("b", path.basename("a/b//"))
+    same("b", path.basename("a//b"))
+    same("a", path.basename("a/"))
+    same("", path.basename("///"))
+}
+
+test "basename of . and .." {
+    let alloc = testing.allocator()
+    same("..", path.basename("a/.."))
+    same(".", path.basename("a/b/."))
+    same(".", path.basename("."))
+}
+
+test "extension" {
+    let alloc = testing.allocator()
+    same(".txt", path.extension("a/b.txt"))
+    same(".gz", path.extension("a/b.tar.gz"))
+    same("", path.extension("a/b"))
+    same("", path.extension("a.d/b"))
+    same("", path.extension(""))
+    same(".txt", path.extension("b.txt/"))
+    same(".txt", path.extension("a//b.txt"))
+}
+
+test "extension of dot files, . and .." {
+    let alloc = testing.allocator()
+    same("", path.extension("a/.bashrc"))
+    same(".gz", path.extension("a/.tar.gz"))
+    same(".", path.extension("a/b."))
+    same("", path.extension("."))
+    same("", path.extension(".."))
+    same("", path.extension("a/.."))
+    same("", path.extension("a/."))
+}
+
+test "normalize drops . and doubled slashes" {
+    let alloc = testing.allocator()
+    norm(alloc, "a/./b", "a/b")
+    norm(alloc, "./a", "a")
+    norm(alloc, "a//b///c", "a/b/c")
+    norm(alloc, "/a/./b/.", "/a/b")
+    norm(alloc, "//a", "/a")
+}
+
+test "normalize drops a trailing slash, except for the root" {
+    let alloc = testing.allocator()
+    norm(alloc, "a/b/", "a/b")
+    norm(alloc, "a/b//", "a/b")
+    norm(alloc, "/a/", "/a")
+    norm(alloc, "/", "/")
+    norm(alloc, "///", "/")
+}
+
+test "normalize resolves .." {
+    let alloc = testing.allocator()
+    norm(alloc, "a/b/../c", "a/c")
+    norm(alloc, "a/b/..", "a")
+    norm(alloc, "a/b/../..", ".")
+    norm(alloc, "a/../..", "..")
+    norm(alloc, "/a/b/../../c", "/c")
+    norm(alloc, "/a/../b/../c/", "/c")
+    norm(alloc, "a/./../b", "b")
+}
+
+test "normalize at the root and at the start of a relative path" {
+    let alloc = testing.allocator()
+    norm(alloc, "/..", "/")
+    norm(alloc, "/../a", "/a")
+    norm(alloc, "/a/../..", "/")
+    norm(alloc, "..", "..")
+    norm(alloc, "../a", "../a")
+    norm(alloc, "../..", "../..")
+    norm(alloc, "../a/../..", "../..")
+    norm(alloc, "a/../../b", "../b")
+}
+
+test "normalize of nothing is ." {
+    let alloc = testing.allocator()
+    norm(alloc, "", ".")
+    norm(alloc, ".", ".")
+    norm(alloc, "./", ".")
+    norm(alloc, "./.", ".")
+    norm(alloc, "a/..", ".")
+}
+
+test "normalize keeps names that only look like . and .." {
+    let alloc = testing.allocator()
+    norm(alloc, "...", "...")
+    norm(alloc, "a/..b/.c", "a/..b/.c")
+    norm(alloc, ".a/b./..", ".a")
+}
+
+test "isUnder: a path inside the root" {
+    let alloc = testing.allocator()
+    @expect(under(alloc, "/srv", "/srv/www/index.html"))
+    @expect(under(alloc, "/srv", "/srv"))
+    @expect(under(alloc, "/srv/", "/srv"))
+    @expect(under(alloc, "/srv", "/srv/"))
+    @expect(under(alloc, "/srv", "/srv//www/./a"))
+    @expect(under(alloc, "/srv/www", "/srv/x/../www/a"))
+    @expect(under(alloc, "/", "/anything"))
+    @expect(under(alloc, "/", "/"))
+    @expect(under(alloc, "a/b", "a/b/c"))
+    @expect(under(alloc, ".", "a/b"))
+    @expect(under(alloc, ".", "."))
+    @expect(under(alloc, "..", "../a"))
+}
+
+test "isUnder: a path that climbs out of the root" {
+    let alloc = testing.allocator()
+    @expect(!under(alloc, "/srv", "/srv/../etc/passwd"))
+    @expect(!under(alloc, "/srv", "/srv/www/../../etc"))
+    @expect(!under(alloc, "/srv", "/srv/.."))
+    @expect(!under(alloc, "a", "a/../b"))
+    @expect(!under(alloc, "a", "../a"))
+    @expect(!under(alloc, ".", ".."))
+    @expect(!under(alloc, ".", "../a"))
+    @expect(!under(alloc, "/srv/www", "/srv"))
+}
+
+test "isUnder: a longer name is not inside" {
+    let alloc = testing.allocator()
+    @expect(!under(alloc, "/srv", "/srv2"))
+    @expect(!under(alloc, "/srv", "/srv2/a"))
+    @expect(!under(alloc, "/srv/www", "/srv/www-old/a"))
+    @expect(!under(alloc, "a", "ab"))
+}
+
+test "isUnder: an absolute and a relative path do not mix" {
+    let alloc = testing.allocator()
+    @expect(!under(alloc, "/srv", "srv/a"))
+    @expect(!under(alloc, "srv", "/srv/a"))
+    @expect(!under(alloc, "/", "a"))
+}
+
+test "join, normalize and isUnder free what they allocate" {
+    let alloc = testing.allocator()
+    let p = try path.join(alloc, "/srv/www", "../../etc")
+    defer alloc.free(p)
+    @expect(!(try path.isUnder(alloc, "/srv/www", p)))
+    let n = try path.normalize(alloc, p)
+    defer alloc.free(n)
+    same("/etc", n)
+}
