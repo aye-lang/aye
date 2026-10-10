@@ -70,7 +70,6 @@ built-in database and cloud clients (`@cimport` covers them).
 - Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`. `tests/conformance.rs` (13 areas, 29 programs, native; O1.1).
 - Open gaps: #3 (ASan golden, P2.9), #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
-- Stale: `README.md:405-410` says `aye fmt`, `aye doc` and `Pool` are missing (O6.4).
 
 ## Phases
 
@@ -176,7 +175,6 @@ brackets.
 - O6.1 `aye lsp` diagnostics and formatting over JSON-RPC (old O6 table).
 - O6.2 `aye lsp` hover with `///` and go to definition (old O6 table).
 - O6.3 `aye doc --html <path>` (old O6 table; the website X3 uses it).
-- O6.4 `README.md:405-410` "Not yet supported" is stale; docs only, tiny (old O6 table).
 - O7.1 `docs/aye-bench.md` complete: req/s rerun, `browser/` build times, binary sizes (old O7 table).
 - O7.2 server gate O13, recorded in `docs/milestones.md` (old O7 table).
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).

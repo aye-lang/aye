@@ -410,10 +410,12 @@ pub fn main() {
 Not yet supported (reported as errors): `comptime` values other than types
 and compile-time execution beyond type functions, error payloads, error
 unions outside return types, `match` on strings, pointer arithmetic, enums
-as `dyn` values, closures, C unions and bit fields, `build.aye` and package dependencies,
-renaming imports, `aye fmt` and `aye doc`. std is minimal: no `Pool`/`Handle` (written in the
-program, as in `tests/cases/pool.aye`), no growable list, no string
-formatting into memory.
+as `dyn` values, closures, C bit fields (`@cimport` makes such records
+opaque), `build.aye` and package dependencies, renaming imports. std has
+`coro`, `crypto`, `diag`, `encoding`, `fs`, `heap`, `http`, `json`, `list`,
+`log`, `map`, `math`, `mem`, `net`, `os`, `path`, `pool`, `process`, `sort`,
+`sync`, `testing`, `text`, `thread` and `time`; `aye spec` indexes them and
+`aye doc --signatures std.<m>` prints a module's API.
 
 See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
 [`docs/decisions.md`](docs/decisions.md) for choices not fixed by the design doc.
