@@ -15,7 +15,6 @@ import std.text
 import url.Url
 
 let dirent = @cimport("dirent.h")
-let sysstat = @cimport("sys/stat.h")
 
 fn archiveDir(name: []u8) ?[]u8 {
     if getenv(name.ptr) |p| {
@@ -108,10 +107,10 @@ fn fallback(alloc: Allocator, dir: []u8, target: *Url, req: Request) FetchError!
     defer dirent.closedir(handle)
     var best = text.Builder.init(alloc)
     defer best.deinit()
-    var best_sec: i64 = 0
-    var best_nsec: i64 = 0
+    var best_time: i64 = 0
     while dirent.readdir(handle) |entry| {
-        let name = entry.d_name[0..entry.d_namlen as usize]
+        // `d_name` ends with a NUL; only macOS has `d_namlen`.
+        let name = entry.d_name[0..strlen(entry.d_name[..].ptr)]
         if !text.endsWith(name, ".response") {
             continue
         }
@@ -123,21 +122,14 @@ fn fallback(alloc: Allocator, dir: []u8, target: *Url, req: Request) FetchError!
         if text.eql(path.bytes(), get) || !try recordsUrl(alloc, path.bytes(), url) {
             continue
         }
-        try path.appendByte(0)
-        var info = @zeroed(sysstat.struct_stat)
-        if sysstat.stat(path.bytes().ptr, &mut info) != 0 {
-            continue
-        }
-        let sec = info.st_mtimespec.tv_sec as i64
-        let nsec = info.st_mtimespec.tv_nsec as i64
-        let file = path.bytes()[0..path.bytes().len - 1]
+        let file = path.bytes()
+        let modified = std.fs.mtime(file) orelse continue
         // The latest; of equal times the greater name, so that the choice
         // does not follow the directory's order.
-        if best.bytes().len == 0 || sec > best_sec || sec == best_sec && (nsec > best_nsec || nsec == best_nsec && sortsAfter(file, best.bytes())) {
+        if best.bytes().len == 0 || modified > best_time || modified == best_time && sortsAfter(file, best.bytes()) {
             best.clear()
             try best.append(file)
-            best_sec = sec
-            best_nsec = nsec
+            best_time = modified
         }
     }
     if best.bytes().len == 0 {

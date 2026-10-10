@@ -6,3 +6,4 @@ console.log(Math.exp(0), Math.exp(1) === Math.E, Math.log(Math.E), Math.log(1), 
 console.log(Math.log2(8), Math.log10(1000), Math.log1p(0), Math.expm1(0));
 console.log(Math.PI, Math.E, Math.SQRT2, Math.LN2, Math.LN10, Math.LOG2E, Math.LOG10E, Math.SQRT1_2);
 console.log(Math.min(0, -0), Math.max(-1, -Infinity), Math.fround ? Math.fround(5.5) : 5.5);
+console.log(Math.cbrt(27), Math.cbrt(-8), Math.cbrt(0.001), Math.cbrt(1e-310), Math.cbrt(Infinity), 1 / Math.cbrt(-0), Math.cbrt(NaN), Math.cbrt(1000), Math.cbrt(2));

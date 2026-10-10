@@ -196,6 +196,16 @@ pub fn exists(path: []u8) bool {
     return aye_std_exists(path.ptr, path.len)
 }
 
+/// The modification time of the file or directory at `path`, in
+/// nanoseconds since 1970-01-01 UTC; null if it cannot be read.
+pub fn mtime(path: []u8) ?i64 {
+    var ns: i64 = 0
+    if !aye_std_mtime(path.ptr, path.len, &mut ns) {
+        return null
+    }
+    return ns
+}
+
 /// Read the whole file at `path` into new memory from `alloc` (free it
 /// with `alloc.free`).
 pub fn readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8 {
@@ -222,6 +232,7 @@ pub fn stderr() File {
 extern fn aye_std_open(path: [*]u8, len: usize) i32
 extern fn aye_std_create(path: [*]u8, len: usize) i32
 extern fn aye_std_exists(path: [*]u8, len: usize) bool
+extern fn aye_std_mtime(path: [*]u8, len: usize, ns: *mut i64) bool
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32

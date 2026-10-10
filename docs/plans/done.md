@@ -20,7 +20,9 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | P2.10 | 2026-10-07 | `Document.node` uses `unreachable` for a stale handle (`browser/dom/dom.aye`) | 9c909eb |
 | O1.2 | 2026-10-08 | std documented in tiers: the spec keeps the CLI modules in full and an index line per other module; `aye doc --signatures std.<m>` is their API; `tests/spec.rs` checks the index and `///` coverage (decision in `docs/decisions.md`, "How std is documented as it grows") | a3498da |
 | O1.3 | 2026-10-08 | `std.net`: TCP `listen`/`accept`/`connect`/`read`/`readTimeout`/`write`/`close`, IPv4 only; golden `tests/cases/net_echo.aye`; gap #49 worked around with C helpers in `src/cgen.rs` (→ O1.3a) | 56967d4 |
+| O1.9 | 2026-10-08 | `aye` restores the default SIGPIPE at startup: `aye spec \| head` ends quietly; `tests/pipe.rs` | 0c40314 |
 | O1.10 | 2026-10-08 | `aye fmt` keeps `extern("x")` (no space); `--help`/`-h`/`help` and `<cmd> --help` print usage and exit 0 | 52b0828 |
+| O1.11 | 2026-10-08 | AI-writability eval: `scripts/eval.py` (headless `claude -p`, sonnet, only `aye` tools), 5 tasks in `tests/eval/`, `--self-test`; first run 5/5 pass, results and failure causes in `docs/aye-eval.md` | bccd9bf |
 | P2.4 | 2026-10-08 | Every `.aye` file formatted (9 changed, 5 excluded with reasons) and `cargo fmt` (1122 hunks); `tests/fmt.rs` keeps both | 1075c9b |
 | O1.8 | 2026-10-08 | (its commit says O1.7, an id clash with the benchmark card) `@tagName(x)`: error, enum and tagged-union tag names as static `[]u8`; E0116 for other types; gap #51 fixed | 323b81d |
 | O1.4a | 2026-10-08 | `std.http`: `listen(T, host, port, ctx, handler)` → `Server` with `port()`, `run(alloc)`, `stop()`; thread per connection, keep-alive, per-request arena for the handler; gaps #52, #53 opened; HEAD bodies and 408 left open | f68324a |
@@ -131,3 +133,10 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | X2.2 | 2026-10-08 | Ore → Aye: `aye` command, crate and binary, `.aye` files, `AYE_`/`aye_` names, docs; 513 moved, 321 rewritten | 3042d53 |
 | X5.1 | 2026-10-08 | `window_forms_html5` loads a copy in `/tmp/anyknown-forms-html5/`, so its golden PNG no longer holds the checkout path | 4d4ea93 |
 | X5.2 | 2026-10-08 | Checkout moved to `~/Documents/ayelang/aye`; full suite green there after `cargo clean --release -p aye` (test binaries kept the old `CARGO_BIN_EXE_aye` path) | – |
+| X1.1 | 2026-10-08 | `std.fs.mtime(path) ?i64` (C prelude `aye_std_mtime`, `struct stat` offset per OS: 48 macOS, 88 Linux); `archive.aye` uses it and `strlen(d_name)`; gap #50 stays open for a language-level fix | 0e61757 |
+| X1.2 | 2026-10-08 | `scripts/setup-ubuntu.sh`, `Containerfile`, `scripts/linux.sh` (Apple `container`, Ubuntu 24.04, target in a named volume); first Linux run recorded in `project.md` X1 | 02c42d3 |
+| X1.4 | 2026-10-08 | `scripts/linux.sh`: git works in worktrees (common git dir mounted read-only), image tag carries a hash of `scripts/linux/Containerfile` + `setup-ubuntu.sh`, TSan runtime installed; Linux fmt 7/7, TSan golden runs | aec5554 |
+| X1.3 | 2026-10-08 | `@cimport` of a system header takes its internal headers (`_*.h`, `bits/`) and its own subdirectory, not the rest of the include dir (gap #54): glibc `math.h` and `pthread.h` work; `GENERATOR_VERSION` 2 | 7a08c4b |
+| X1.6 | 2026-10-08 | `Math.cbrt` is a port of fdlibm `cbrt` (`browser/js/cbrt.aye`): same result on glibc and macOS; more cbrt cases in `164_math_functions.js` | 2ea52ca |
+| X1.7 | 2026-10-08 | `tests/golden.rs` runs cases on `available_parallelism()` workers instead of one thread per case: amd64 golden under Rosetta 264/264 (was a 29-min hang); macOS golden 132 s → 146 s | b2c723d |
+| X1.5 | 2026-10-08 | X1 done: on main b2c723d, `scripts/linux.sh` arm64 and `LINUX_ARCH=amd64` (Rosetta): build, `aye check browser`, `cargo test --release` (browser 62/62, golden 264/264, all others ok) and `browser/build.sh` exit 0 | – |
