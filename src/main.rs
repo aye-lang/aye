@@ -20,30 +20,51 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
 /// The language reference that `aye spec` prints.
 const SPEC: &str = include_str!("../docs/spec.md");
 
-/// The sections that `aye spec` prints with no argument, in the order of
-/// the document: what most programs need.
+/// The sections that `aye spec` prints with no argument, in this order:
+/// what a first program needs, the std index and the pitfalls right after
+/// the first program so that a read cut short still shows them. At most
+/// 28000 bytes, which Claude Code shows inline.
 const SPEC_CORE: &[&str] = &[
     "1",
+    "15",
+    "18",
     "4",
+    "enums",
     "5",
     "conversions",
     "6",
     "7",
+    "optionals",
     "8",
-    "9",
-    "12",
-    "15",
-    "18",
 ];
 
 /// The `###` headings that start a section of their own, with its name.
 /// Every `## N. Title` heading starts one too, and so does every
 /// `### std.m` heading (named `std.m`).
 const SPEC_SPLITS: &[(&str, &str)] = &[
+    ("Functions", "functions"),
+    ("Constants, globals and type aliases", "constants"),
+    ("Structs and methods", "structs"),
+    ("Enums (tagged unions)", "enums"),
     ("C functions and types", "c"),
     ("simd", "simd"),
     ("Conversions", "conversions"),
+    ("Pointers", "pointers"),
+    ("Optionals", "optionals"),
+    ("match", "match"),
     ("A complete CLI", "cli"),
+];
+
+/// When to read a section left out of the core, shown in its place in the
+/// list of other sections instead of its title.
+const SPEC_HINTS: &[(&str, &str)] = &[
+    ("functions", "function values, fn types"),
+    ("constants", "top-level let and var, type aliases"),
+    ("structs", "methods, field defaults, static calls"),
+    ("pointers", "*T, *mut T, [*]T, p.*"),
+    ("match", "patterns, captures, exhaustive arms"),
+    ("9", "allocators, Arena, leaks, custom allocators"),
+    ("12", "import, pub, multi-file modules"),
 ];
 
 struct Args {
@@ -445,17 +466,17 @@ fn spec_sections() -> Vec<SpecSection> {
     out
 }
 
-/// `aye spec`: the core sections (`SPEC_CORE`), then a list of the others;
-/// `aye spec <name>`: one section, by number or name; `aye spec all`: the
-/// whole document.
+/// `aye spec`: the core sections (`SPEC_CORE`, in its order), then a list
+/// of the others; `aye spec <name>`: one section, by number or name; `aye
+/// spec all`: the whole document.
 fn spec_cmd(args: Vec<String>) -> ExitCode {
     let sections = spec_sections();
     let core = |s: &SpecSection| s.names.iter().any(|n| SPEC_CORE.contains(&n.as_str()));
     match &args[..] {
         [] => {
-            let text: String = sections
+            let text: String = SPEC_CORE
                 .iter()
-                .filter(|s| core(s))
+                .filter_map(|n| sections.iter().find(|s| s.names.iter().any(|m| m == n)))
                 .map(|s| s.text)
                 .collect();
             println!("{}\n", text.trim_end());
@@ -469,10 +490,14 @@ fn spec_cmd(args: Vec<String>) -> ExitCode {
             );
             for s in sections.iter().filter(|s| !core(s)) {
                 let names = s.names.join(" ");
-                if s.names.len() == 1 && s.title == s.names[0] {
-                    println!("  {names}");
-                } else {
-                    println!("  {names}: {}", s.title);
+                let hint = SPEC_HINTS
+                    .iter()
+                    .find(|(n, _)| *n == s.names[0])
+                    .map(|(_, h)| *h);
+                match hint {
+                    Some(h) => println!("  {names}: {h}"),
+                    None if s.names.len() == 1 && s.title == s.names[0] => println!("  {names}"),
+                    None => println!("  {names}: {}", s.title),
                 }
             }
         }
