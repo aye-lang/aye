@@ -258,9 +258,7 @@ pub fn stat(path: []u8) PathError!Stat {
 pub fn readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries {
     var err: i32 = 0
     let dir = aye_std_opendir(path.ptr, path.len, &mut err) orelse return pathError(err)
-    defer {
-        _ = closedir(dir)
-    }
+    defer aye_std_closedir(dir)
     // Two passes: count the entries and the bytes of their names, then
     // fill. If the directory changes in between, the second pass stops at
     // the room it has.
@@ -282,7 +280,7 @@ pub fn readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries {
             alloc: alloc,
         }
     }
-    rewinddir(dir)
+    aye_std_rewinddir(dir)
     let names = try alloc.alloc(0 as u8, bytes)
     let store = alloc.alloc(DirEntry { name: []u8{}, kind: Kind.Other }, count) catch |e| {
         alloc.free(names)
@@ -411,8 +409,8 @@ extern fn aye_std_lstat(path: [*]u8, len: usize, out: *mut i64) i32
 extern fn aye_std_pathop(op: i32, path: [*]u8, len: usize, to: [*]u8, tolen: usize) i32
 extern fn aye_std_opendir(path: [*]u8, len: usize, err: *mut i32) ?[*]u8
 extern fn aye_std_readdir(dir: [*]u8, kind: *mut i32) ?[*]u8
-extern fn closedir(dir: [*]u8) i32
-extern fn rewinddir(dir: [*]u8)
+extern fn aye_std_closedir(dir: [*]u8)
+extern fn aye_std_rewinddir(dir: [*]u8)
 extern fn strlen(s: [*]u8) usize
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize

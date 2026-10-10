@@ -66,6 +66,8 @@ extern int aye_rt_remove(const char *) __asm__(AYE_SYM("remove"));
 extern int aye_rt_rename(const char *, const char *) __asm__(AYE_SYM("rename"));
 extern uint8_t *aye_rt_opendir(const char *) __asm__(AYE_SYM("opendir" AYE_INODE64));
 extern uint8_t *aye_rt_readdir(uint8_t *) __asm__(AYE_SYM("readdir" AYE_INODE64));
+extern int aye_rt_closedir(uint8_t *) __asm__(AYE_SYM("closedir"));
+extern void aye_rt_rewinddir(uint8_t *) __asm__(AYE_SYM("rewinddir"));
 #define AYE_FILE(l) aye_files[(l) >> 20]
 #define AYE_LINE(l) ((l) & 0xfffff)
 
@@ -499,6 +501,10 @@ AYE_RT uint8_t *aye_std_readdir(uint8_t *dir, int32_t *kind) {
     *kind = e[AYE_D_TYPE];
     return e + AYE_D_TYPE + 1;
 }
+/* `closedir` and `rewinddir` under our own names: a program that
+   `@cimport`s dirent.h declares the libc names itself (E0096). */
+AYE_RT void aye_std_closedir(uint8_t *dir) { aye_rt_closedir(dir); }
+AYE_RT void aye_std_rewinddir(uint8_t *dir) { aye_rt_rewinddir(dir); }
 /* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
    and Aye has no per-OS declarations, so this helper stays. */
 AYE_RT int32_t aye_std_errno(void) { return *aye_rt_errno_loc(); }
