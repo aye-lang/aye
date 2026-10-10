@@ -6,10 +6,11 @@ extern fn getpid() i32
 extern fn unlink(path: [*]u8) i32
 extern fn utime(path: [*]u8, times: *Utimbuf) i32
 
-// struct utimbuf: two time_t, the same on macOS and Linux.
+// struct utimbuf: two time_t. time_t is 64-bit on every target, while
+// c_long is 32-bit on wasm32, so it is i64 here, not c_long.
 extern struct Utimbuf {
-    actime: c_long
-    modtime: c_long
+    actime: i64
+    modtime: i64
 }
 
 pub fn main() !void {
