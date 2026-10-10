@@ -2,7 +2,7 @@
 """AI-writability eval (O1.11).
 
 Runs fresh headless Claude agents on the fixed tasks in tests/eval/<task>/.
-Each agent gets an empty temp dir, the task's prompt.md, and a Bash tool
+Each agent gets an empty short dir under /tmp/aye-eval/<stamp>/, the task's prompt.md, and a Bash tool
 that may run only `aye` commands; it learns Aye from `aye spec`,
 `aye check` and `aye explain`. The task's check.sh then builds and tests
 the agent's main.aye.
@@ -33,6 +33,8 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TASKS_DIR = os.path.join(ROOT, "tests", "eval")
 DOC = os.path.join(ROOT, "docs", "aye-eval.md")
+WORK_ROOT = "/tmp/aye-eval"
+STD_MODULE = re.compile(r"\bstd\.([a-z]+)")
 FINDINGS = "## Findings"
 EMPTY_PROGRAM = "pub fn main() {\n}\n"
 
@@ -148,9 +150,19 @@ def parse_stream(path):
     return s
 
 
-def run_agent(task, run, args, env, outdir):
+def std_modules(path):
+    """Distinct `std.<name>` prefixes in a main.aye, sorted, space-joined."""
+    try:
+        text = open(path).read()
+    except OSError:
+        return ""
+    return " ".join(sorted({f"std.{m}" for m in STD_MODULE.findall(text)}))
+
+
+def run_agent(task, run, args, env, outdir, stamp):
     prompt = open(os.path.join(TASKS_DIR, task, "prompt.md")).read() + PROMPT_FOOTER
-    workdir = tempfile.mkdtemp(prefix=f"aye-eval-{task}-")
+    workdir = os.path.join(WORK_ROOT, stamp, f"{task}-{run}")
+    os.makedirs(workdir, mode=0o700)
     base = os.path.join(outdir, f"{task}-{run}")
     cmd = [
         args.claude, "-p", prompt,
@@ -174,14 +186,17 @@ def run_agent(task, run, args, env, outdir):
     wall = time.time() - start
     s = parse_stream(base + ".jsonl")
     main = os.path.join(workdir, "main.aye")
+    s["std"] = ""
     if os.path.exists(main):
         shutil.copy(main, base + ".aye")
+        s["std"] = std_modules(main)
         passed, check_out = run_check(task, workdir, env)
     else:
         passed, check_out = False, "no main.aye\n"
     with open(base + ".check.txt", "w") as f:
         f.write(check_out)
-    shutil.rmtree(workdir, ignore_errors=True)
+    if not args.keep:
+        shutil.rmtree(workdir, ignore_errors=True)
     s.update(task=task, run=run, passed=passed, wall=wall)
     print(f"{task} run {run}: {'pass' if passed else 'FAIL'}, "
           f"{s['checks']} checks, {s['turns']} turns, {wall:.0f} s, "
@@ -214,7 +229,7 @@ def write_doc(results, args, outdir):
         f"(`claude -p`, at most {args.max_turns} turns); runs per task: {args.runs}.",
         f"- aye: `{aye_real}`, from commit `{git_rev(os.path.dirname(aye_real))}` "
         f"of its checkout, built {built:%Y-%m-%d %H:%M}.",
-        "- Each run: a fresh agent in an empty temp dir, tools Write, Edit, Read "
+        "- Each run: a fresh agent in an empty short dir under `/tmp/aye-eval/`, tools Write, Edit, Read "
         "and `Bash(aye *)`; it learns Aye from `aye spec`, `aye check`, "
         "`aye explain`. The task's `tests/eval/<task>/check.sh` judges its "
         "`main.aye`.",
@@ -223,15 +238,15 @@ def write_doc(results, args, outdir):
         f"`{rel_out}/` (not in git).",
         "",
         "| Task | Run | Pass | `aye check` calls | Turns | Input tokens | "
-        "Output tokens | Cost (USD) | Wall (s) | Refused calls | End |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "Output tokens | Cost (USD) | Wall (s) | Refused calls | std modules | End |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
         cost = "–" if r["cost"] is None else f"{r['cost']:.2f}"
         lines.append(
             f"| {r['task']} | {r['run']} | {'yes' if r['passed'] else 'no'} | "
             f"{r['checks']} | {fmt_int(r['turns'])} | {fmt_int(r['in_tok'])} | "
-            f"{fmt_int(r['out_tok'])} | {cost} | {r['wall']:.0f} | {r['denied']} | {r['end']} |"
+            f"{fmt_int(r['out_tok'])} | {cost} | {r['wall']:.0f} | {r['denied']} | {r['std'] or '–'} | {r['end']} |"
         )
     passed = sum(1 for r in results if r["passed"])
     lines += ["", f"Passed {passed} of {len(results)} runs.", ""]
@@ -257,6 +272,8 @@ def main():
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--max-turns", type=int, default=30)
     ap.add_argument("--timeout", type=int, default=1200, help="seconds per run")
+    ap.add_argument("--keep", action="store_true",
+                    help="keep the agents' working directories")
     ap.add_argument("--jobs", type=int, default=5, help="runs at once")
     args = ap.parse_args()
 
@@ -274,11 +291,13 @@ def main():
     os.makedirs(outdir)
     jobs = [(t, r) for t in names for r in range(1, args.runs + 1)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
-        futures = [ex.submit(run_agent, t, r, args, env, outdir) for t, r in jobs]
+        futures = [ex.submit(run_agent, t, r, args, env, outdir, stamp) for t, r in jobs]
         results = [f.result() for f in futures]
     with open(os.path.join(outdir, "results.json"), "w") as f:
         json.dump(results, f, indent=1)
     write_doc(results, args, outdir)
+    if not args.keep:
+        shutil.rmtree(os.path.join(WORK_ROOT, stamp), ignore_errors=True)
     print(f"wrote {os.path.relpath(DOC, ROOT)}; transcripts in {outdir}")
     return 0 if all(r["end"] != "no result" for r in results) else 1
 
