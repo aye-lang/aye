@@ -51,7 +51,8 @@
 //!   within 10 s (`General` allocates and frees in constant time).
 //! - `aye build --cflags -fsanitize=thread`: the M10 fan-out program runs
 //!   under ThreadSanitizer without a report (skipped where ThreadSanitizer
-//!   does not run).
+//!   does not run; Homebrew's LLVM is tried when the clang on `PATH` has
+//!   none).
 
 use aye::diag::Diag;
 use aye::driver::{self, Mode};
@@ -740,29 +741,6 @@ fn output_and_cpu_within(
     ))
 }
 
-/// Does clang's ThreadSanitizer work here: a C program with two threads,
-/// built with `-fsanitize=thread`, runs cleanly?
-fn tsan_works(work: &Path) -> bool {
-    let src = work.join("tsan_probe.c");
-    let exe = work.join("tsan_probe");
-    let c = "#include <pthread.h>\nstatic void *f(void *p) { return p; }\n\
-             int main(void) { pthread_t t; pthread_create(&t, 0, f, 0); return pthread_join(t, 0); }\n";
-    if std::fs::write(&src, c).is_err() {
-        return false;
-    }
-    let built = Command::new("clang")
-        .args(["-fsanitize=thread", "-pthread"])
-        .arg(&src)
-        .arg("-o")
-        .arg(&exe)
-        .status();
-    if !built.is_ok_and(|s| s.success()) {
-        return false;
-    }
-    output_within(&mut Command::new(&exe), 30)
-        .is_some_and(|o| o.status.success() && o.stderr.is_empty())
-}
-
 /// M10: the fan-out program built with `--cflags -fsanitize=thread` runs
 /// without a ThreadSanitizer report and prints what it prints without it.
 fn cli_tsan(work: &Path) -> Result<(), String> {
@@ -785,24 +763,26 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
             "`aye build --cflags -fno-such-aye-flag`: {code:?}\n{err}"
         ));
     }
-    if !tsan_works(work) {
+    let Some(dir) = sanitizer_clang(work, "cli", "thread") else {
         println!(
             "skipped cli/aye build --cflags -fsanitize=thread: clang's ThreadSanitizer does not run here"
         );
         return Ok(());
-    }
+    };
     let exe = work.join("threads_fanout_tsan");
-    let args = [
-        "build",
-        "tests/cases/threads_fanout.aye",
-        "--cflags",
-        "-fsanitize=thread",
-        "-o",
-        exe.to_str().unwrap(),
-    ];
-    let (_, err, code) = aye(root, &args)?;
-    if code != Some(0) {
-        return Err(format!("`aye {}` failed: {code:?}\n{err}", args.join(" ")));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aye"));
+    cmd.current_dir(root)
+        .args(["build", "tests/cases/threads_fanout.aye"])
+        .args(["--cflags", "-fsanitize=thread", "-o"])
+        .arg(&exe);
+    clang_first(&mut cmd, &dir)?;
+    let built = cmd.output().map_err(|e| e.to_string())?;
+    if !built.status.success() {
+        return Err(format!(
+            "`aye build --cflags -fsanitize=thread` failed: {}\n{}",
+            built.status,
+            String::from_utf8_lossy(&built.stderr)
+        ));
     }
     let out = output_within(&mut Command::new(&exe), 120)
         .ok_or("the program did not finish within 120 s")?;
@@ -820,14 +800,27 @@ fn cli_tsan(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The `clang` whose AddressSanitizer works here, as the directory to put
-/// first on `PATH` (`None` for the clang already on it): a C program that
-/// reads freed memory, built with `-fsanitize=address`, must die with a
-/// `heap-use-after-free` report. The clang on `PATH` is tried first, then
-/// Homebrew's LLVM (Apple's AddressSanitizer hangs on some Macs).
-fn asan_clang(work: &Path, tag: &str) -> Option<Option<PathBuf>> {
-    let src = work.join(format!("{tag}_asan_probe.c"));
-    let c = "#include <stdlib.h>\nint main(void) { volatile char *p = malloc(16); free((void *)p); return p[0]; }\n";
+/// The `clang` whose sanitizer `kind` (`address` or `thread`) works here, as
+/// the directory to put first on `PATH` (`None` for the clang already on
+/// it): a C program with a bug the sanitizer reports (a read of freed
+/// memory, or a data race between two threads), built with
+/// `-fsanitize=kind`, must die with its report within 30 s (a hang counts
+/// as not working). The clang on `PATH` is tried first, then Homebrew's
+/// LLVM (Apple's sanitizers hang on some Macs).
+fn sanitizer_clang(work: &Path, tag: &str, kind: &str) -> Option<Option<PathBuf>> {
+    let src = work.join(format!("{tag}_{kind}_probe.c"));
+    let (c, report) = if kind == "thread" {
+        (
+            "#include <pthread.h>\nint g;\nstatic void *f(void *p) { g = 1; return p; }\n\
+             int main(void) { pthread_t t; pthread_create(&t, 0, f, 0); g = 2; pthread_join(t, 0); return 0; }\n",
+            "ThreadSanitizer: data race",
+        )
+    } else {
+        (
+            "#include <stdlib.h>\nint main(void) { volatile char *p = malloc(16); free((void *)p); return p[0]; }\n",
+            "heap-use-after-free",
+        )
+    };
     std::fs::write(&src, c).ok()?;
     let brew = Command::new("brew")
         .args(["--prefix", "llvm"])
@@ -836,10 +829,11 @@ fn asan_clang(work: &Path, tag: &str) -> Option<Option<PathBuf>> {
         .filter(|o| o.status.success())
         .map(|o| Path::new(String::from_utf8_lossy(&o.stdout).trim()).join("bin"));
     for dir in [None, brew] {
-        let exe = work.join(format!("{tag}_asan_probe"));
+        let exe = work.join(format!("{tag}_{kind}_probe"));
         let clang = dir.as_ref().map_or("clang".into(), |d| d.join("clang"));
         let built = Command::new(clang)
-            .args(["-fsanitize=address", "-g"])
+            .arg(format!("-fsanitize={kind}"))
+            .args(["-g", "-pthread"])
             .arg(&src)
             .arg("-o")
             .arg(&exe)
@@ -848,14 +842,25 @@ fn asan_clang(work: &Path, tag: &str) -> Option<Option<PathBuf>> {
             continue;
         }
         let reported = output_within(&mut Command::new(&exe), 30).is_some_and(|o| {
-            !o.status.success()
-                && String::from_utf8_lossy(&o.stderr).contains("heap-use-after-free")
+            !o.status.success() && String::from_utf8_lossy(&o.stderr).contains(report)
         });
         if reported {
             return Some(dir);
         }
     }
     None
+}
+
+/// Put the directory `sanitizer_clang` found first on `cmd`'s `PATH`.
+fn clang_first(cmd: &mut Command, dir: &Option<PathBuf>) -> Result<(), String> {
+    if let Some(d) = dir {
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let path =
+            std::env::join_paths(std::iter::once(d.clone()).chain(std::env::split_paths(&old)))
+                .map_err(|e| e.to_string())?;
+        cmd.env("PATH", path);
+    }
+    Ok(())
 }
 
 /// P2.9 (gap #3): `tests/asan/X.aye` reads memory that a `List` or `Pool`
@@ -870,7 +875,7 @@ fn asan_clang(work: &Path, tag: &str) -> Option<Option<PathBuf>> {
 fn asan_case(p: &Path, work: &Path) -> Result<(), String> {
     let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let Some(dir) = asan_clang(work, &stem) else {
+    let Some(dir) = sanitizer_clang(work, &stem, "address") else {
         println!("skipped asan/{stem}: clang's AddressSanitizer does not run here");
         return Ok(());
     };
@@ -882,13 +887,7 @@ fn asan_case(p: &Path, work: &Path) -> Result<(), String> {
             .args(["build", p.to_str().unwrap(), "--mode", mode])
             .args(["--cflags", "-fsanitize=address", "-o"])
             .arg(&exe);
-        if let Some(d) = &dir {
-            let old = std::env::var_os("PATH").unwrap_or_default();
-            let path =
-                std::env::join_paths(std::iter::once(d.clone()).chain(std::env::split_paths(&old)))
-                    .map_err(|e| e.to_string())?;
-            cmd.env("PATH", path);
-        }
+        clang_first(&mut cmd, &dir)?;
         let built = cmd.output().map_err(|e| e.to_string())?;
         if !built.status.success() {
             return Err(format!(
