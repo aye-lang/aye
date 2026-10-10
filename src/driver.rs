@@ -573,6 +573,10 @@ pub struct TestResult {
     pub failures: Vec<Failure>,
     /// The wall time of the test's process.
     pub ms: u64,
+    /// The CPU time (user + system) of the test's process.
+    pub cpu_ms: u64,
+    /// The test was killed for going over the time limit.
+    pub timed_out: bool,
 }
 
 /// What `aye test` ran.
@@ -639,7 +643,10 @@ fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// it with `.aye` files is a root, and a module that several roots reach is
 /// tested once. Only tests whose shown name (`name`, `module: name`, the
 /// module relative to `path`) contains `filter` run, and with `module`,
-/// only those of that module. `cflags` are more flags for clang.
+/// only those of that module. `cflags` are more flags for clang. Up to
+/// `jobs` test processes run at once; `results` stay in test order. A test
+/// process that uses more than `time_limit` seconds of CPU time (0: no
+/// limit) is killed and fails.
 pub fn run_tests(
     path: &str,
     target: &'static Target,
@@ -647,6 +654,8 @@ pub fn run_tests(
     filter: &str,
     module: Option<&str>,
     cflags: &[String],
+    jobs: usize,
+    time_limit: u64,
 ) -> Result<TestRun, TestError> {
     let start = Instant::now();
     let top = Path::new(path);
@@ -709,40 +718,15 @@ pub fn run_tests(
             continue;
         }
         cc(&c, &exe, mode).map_err(TestError::Run)?;
-        for (i, name, module) in todo {
-            let began = Instant::now();
-            let out = match c.target.run_command(&exe).arg(i.to_string()).output() {
-                Ok(o) => o,
-                Err(e) => {
-                    let _ = std::fs::remove_file(&exe);
-                    return Err(TestError::Run(format!("cannot run {}: {e}", exe.display())));
-                }
-            };
-            let ms = began.elapsed().as_millis() as u64;
-            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-            let passed = out.status.success();
-            let mut failures = parse_failures(&files, &stderr);
-            if !passed && failures.is_empty() {
-                use std::os::unix::process::ExitStatusExt;
-                failures.push(Failure::Crash(
-                    match (out.status.code(), out.status.signal()) {
-                        (Some(c), _) => format!("exit status {c}"),
-                        (_, s) => format!("terminated by signal {}", s.unwrap_or(0)),
-                    },
-                ));
-            }
-            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-            ran.insert(module);
-            results.push(TestResult {
-                name,
-                passed,
-                stdout,
-                stderr,
-                failures,
-                ms,
-            });
-        }
+        let done = run_parallel(jobs, todo.len(), |k| {
+            let (i, name, _) = &todo[k];
+            run_one(c.target, &exe, *i, name.clone(), &files, time_limit)
+        });
         let _ = std::fs::remove_file(&exe);
+        for ((_, _, module), r) in todo.into_iter().zip(done) {
+            ran.insert(module);
+            results.push(r.map_err(TestError::Run)?);
+        }
     }
     if let Some(m) = module
         && results.is_empty()
@@ -765,6 +749,177 @@ pub fn run_tests(
         results,
         modules: ran.len(),
         ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+/// Run `f(0)` .. `f(n - 1)` on up to `jobs` threads; the results are in
+/// the order of the indices.
+fn run_parallel<T: Send>(jobs: usize, n: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let mut done: Vec<(usize, T)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..jobs.clamp(1, n.max(1)))
+            .map(|_| {
+                s.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        if k >= n {
+                            return mine;
+                        }
+                        mine.push((k, f(k)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap())
+            .collect()
+    });
+    done.sort_by_key(|(k, _)| *k);
+    done.into_iter().map(|(_, t)| t).collect()
+}
+
+/// `SIGKILL`, and `SIGXCPU`, which some systems send at the CPU limit.
+const SIGKILL: i32 = 9;
+const SIGXCPU: i32 = 24;
+
+/// Run test `i` of `exe` in its own process and report it. The process may
+/// use `time_limit` seconds of CPU time (user + system, from `wait4`; 0: no
+/// limit): the kernel kills it at that limit (`RLIMIT_CPU`). It is also
+/// killed after 10 times the limit (at least 60 s) of wall time, so that a
+/// test that sleeps cannot hang the run.
+fn run_one(
+    target: &Target,
+    exe: &Path,
+    i: usize,
+    name: String,
+    files: &[String],
+    time_limit: u64,
+) -> Result<TestResult, String> {
+    use std::io::Read;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::time::Duration;
+    // `tv_usec` is an int on macOS and a long on Linux: 16 bytes either way,
+    // and the low half holds it on little-endian machines.
+    #[repr(C)]
+    struct Timeval {
+        sec: i64,
+        usec: i32,
+    }
+    #[repr(C)]
+    struct Rusage {
+        utime: Timeval,
+        stime: Timeval,
+        rest: [i64; 14],
+    }
+    #[repr(C)]
+    struct Rlimit {
+        cur: u64,
+        max: u64,
+    }
+    unsafe extern "C" {
+        fn wait4(pid: i32, status: *mut i32, options: i32, rusage: *mut Rusage) -> i32;
+        fn setrlimit(resource: i32, limit: *const Rlimit) -> i32;
+    }
+    const WNOHANG: i32 = 1;
+    const RLIMIT_CPU: i32 = 0;
+    let fail = |e: std::io::Error| format!("cannot run {}: {e}", exe.display());
+    let mut cmd = target.run_command(exe);
+    cmd.arg(i.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if time_limit > 0 {
+        // SAFETY: `setrlimit` is async-signal-safe, as `pre_exec` requires.
+        unsafe {
+            cmd.pre_exec(move || {
+                let l = Rlimit {
+                    cur: time_limit,
+                    max: time_limit,
+                };
+                setrlimit(RLIMIT_CPU, &l);
+                Ok(())
+            })
+        };
+    }
+    let began = Instant::now();
+    let mut child = cmd.spawn().map_err(fail)?;
+    let pid = child.id() as i32;
+    // The pipes are read while the test runs, so that its output cannot
+    // fill them and block it.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let out_reader = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = stdout.read_to_end(&mut v);
+        v
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        let _ = stderr.read_to_end(&mut v);
+        v
+    });
+    let wall = Duration::from_secs((time_limit * 10).max(60));
+    let (mut status, mut ru) = (0, unsafe { std::mem::zeroed::<Rusage>() });
+    let mut hung = false;
+    let mut nap = 1;
+    loop {
+        match unsafe { wait4(pid, &mut status, WNOHANG, &mut ru) } {
+            0 => {}
+            r if r == pid => break,
+            _ => return Err(format!("cannot wait for {}", exe.display())),
+        }
+        if time_limit > 0 && began.elapsed() >= wall {
+            hung = true;
+            let _ = child.kill();
+            unsafe { wait4(pid, &mut status, 0, &mut ru) };
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(nap));
+        nap = (nap * 2).min(10);
+    }
+    let ms = began.elapsed().as_millis() as u64;
+    let time = |t: &Timeval| t.sec as u64 * 1000 + t.usec as u64 / 1000;
+    let cpu_ms = time(&ru.utime) + time(&ru.stime);
+    let status = std::process::ExitStatus::from_raw(status);
+    let stdout = String::from_utf8_lossy(&out_reader.join().unwrap()).into_owned();
+    let stderr = String::from_utf8_lossy(&err_reader.join().unwrap()).into_owned();
+    let signal = status.signal();
+    let timed_out = time_limit > 0
+        && (hung
+            || cpu_ms > time_limit * 1000
+            || (cpu_ms >= time_limit * 1000 && matches!(signal, Some(SIGKILL | SIGXCPU))));
+    let passed = status.success() && !timed_out;
+    let mut failures = parse_failures(files, &stderr);
+    if timed_out {
+        failures.push(Failure::Crash(if hung {
+            format!(
+                "time limit: {:.1} s wall of {} s",
+                ms as f64 / 1000.0,
+                wall.as_secs()
+            )
+        } else {
+            format!(
+                "time limit: {:.1} s CPU of {time_limit} s",
+                cpu_ms as f64 / 1000.0
+            )
+        }));
+    } else if !passed && failures.is_empty() {
+        failures.push(Failure::Crash(match (status.code(), signal) {
+            (Some(c), _) => format!("exit status {c}"),
+            (_, s) => format!("terminated by signal {}", s.unwrap_or(0)),
+        }));
+    }
+    Ok(TestResult {
+        name,
+        passed,
+        stdout,
+        stderr,
+        failures,
+        ms,
+        cpu_ms,
+        timed_out,
     })
 }
 
@@ -826,6 +981,15 @@ fn parse_failures(files: &[String], stderr: &str) -> Vec<Failure> {
 }
 
 impl TestResult {
+    /// For a test that went over the time limit, how: `time limit: 10.4 s
+    /// CPU of 10 s`.
+    pub fn time_limit_note(&self) -> Option<&str> {
+        self.failures.iter().find_map(|f| match f {
+            Failure::Crash(m) if self.timed_out => Some(m.as_str()),
+            _ => None,
+        })
+    }
+
     /// One entry of the `tests` array in `aye test --json`.
     pub fn to_json(&self) -> String {
         let failures: Vec<String> = self
@@ -858,10 +1022,16 @@ impl TestResult {
             })
             .collect();
         format!(
-            r#"{{"name":{},"status":"{}","ms":{},"failures":[{}],"stdout":{},"stderr":{}}}"#,
+            r#"{{"name":{},"status":"{}","ms":{},"cpu_ms":{}{},"failures":[{}],"stdout":{},"stderr":{}}}"#,
             json_str(&self.name),
             if self.passed { "pass" } else { "fail" },
             self.ms,
+            self.cpu_ms,
+            if self.timed_out {
+                r#","timed_out":true"#
+            } else {
+                ""
+            },
             failures.join(","),
             json_str(&self.stdout),
             json_str(&self.stderr)

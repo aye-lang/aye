@@ -1,0 +1,17 @@
+// `aye test --time-limit 1` (see time_limit.args) kills a test that uses
+// more than 1 s of CPU time; the others still run.
+
+test "fast" {
+    @expectEqual(2, 1 + 1)
+}
+
+test "spins the CPU" {
+    var n: u64 = 0
+    while true {
+        n = (n + 1) % 1000
+    }
+}
+
+test "also fast" {
+    @expectEqual(4, 2 + 2)
+}

@@ -39,10 +39,13 @@
 //!   wasm32-wasip1`), `aye check X.aye <args>` must print exactly `X.err` on
 //!   stderr and exit with status 1.
 //! - `tests/tests/X.aye`: `aye test X.aye` (debug mode) must print exactly
-//!   `X.out`, and `aye test --json X.aye` exactly `X.json` if it exists. The
-//!   exit status must be 0 when no test failed, and 1 otherwise. Wall times
-//!   (`(12 ms)`, `"ms":12`) are replaced by `N` before the comparison, here
-//!   and for `aye test` in the other cases.
+//!   `X.out`, and `aye test --json X.aye` exactly `X.json` if it exists;
+//!   with `X.args` (such as `--time-limit 1`) these come before the file.
+//!   The exit status must be 0 when no test failed, and 1 otherwise. Wall
+//!   and CPU times (`(12 ms)`, `"ms":12`, `"cpu_ms":12`, `time limit: 1.0 s`)
+//!   are replaced by `N` before the comparison, here and for `aye test` in
+//!   the other cases. `aye test -j 1` and `-j 4` on `std_testing.aye` must
+//!   both print its `X.out`.
 //! - `tests/fix/X.aye`: `aye fix X.aye` on a copy must leave exactly
 //!   `X.fixed` and print exactly `X.out`. If `X.stderr` exists, errors
 //!   remain: stderr must equal it and the exit status must be 1; otherwise
@@ -418,7 +421,9 @@ fn error_case(path: &Path) -> Result<(), String> {
 }
 
 /// `aye test` prints wall times: `(12 ms)` after a test, `; 34 ms` after the
-/// summary, `"ms":12` in JSON. Every such number becomes `N`.
+/// summary, `"ms":12` in JSON; and CPU times: `"cpu_ms":12` in JSON, `time
+/// limit: 1.0 s CPU of 1 s` after a test that went over the limit. Every
+/// such number becomes `N`.
 fn scrub_ms(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -429,7 +434,17 @@ fn scrub_ms(s: &str) -> String {
             .unwrap_or(tail.len());
         let (digits, after) = tail.split_at(n);
         out.push_str(head);
+        if head.ends_with("time limit: ") && after.starts_with('.') {
+            // The measured CPU seconds, `1.0`.
+            let frac = after[1..]
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(after.len() - 1);
+            out.push('N');
+            rest = &after[1 + frac..];
+            continue;
+        }
         if head.ends_with("\"ms\":")
+            || head.ends_with("\"cpu_ms\":")
             || after == " ms"
             || after.starts_with(" ms)")
             || after.starts_with(" ms\n")
@@ -479,12 +494,16 @@ fn test_case_for(path: &Path, extra: &[&str]) -> Result<(), String> {
     } else {
         1
     };
+    let file_args = read(&path.with_extension("args")).unwrap_or_default();
     let mut runs = vec![(vec![rel.as_str()], expected)];
     if let Some(json) = read(&path.with_extension("json")) {
         runs.push((vec!["--json", rel.as_str()], json));
     }
     for (mut args, want) in runs {
-        args.splice(0..0, extra.iter().copied());
+        args.splice(
+            0..0,
+            extra.iter().copied().chain(file_args.split_whitespace()),
+        );
         let (got, code) = aye_test(&args)?;
         if got != want {
             return Err(format!(
@@ -496,6 +515,22 @@ fn test_case_for(path: &Path, extra: &[&str]) -> Result<(), String> {
             return Err(format!(
                 "`aye test {}`: expected exit status {status}, got {code:?}",
                 args.join(" ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `aye test -j 1` and `-j 4` print the same, in test order: `std_testing`.
+fn test_jobs_case() -> Result<(), String> {
+    let rel = "tests/tests/std_testing.aye";
+    let want = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tests/std_testing.out"))
+        .ok_or("missing std_testing.out")?;
+    for j in ["1", "4"] {
+        let (got, code) = aye_test(&["-j", j, rel])?;
+        if got != want || code != Some(1) {
+            return Err(format!(
+                "`aye test -j {j} {rel}`: expected std_testing.out and exit status 1, got status {code:?} and\n{got}"
             ));
         }
     }
@@ -1506,6 +1541,7 @@ fn main() {
                 test_case(p)
             });
         }
+        add(&mut jobs, "tests/-j".to_string(), test_jobs_case);
         for p in &fix_cases {
             let w = &work;
             add(&mut jobs, format!("fix/{}", name(p)), move || {

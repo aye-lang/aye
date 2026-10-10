@@ -39,7 +39,7 @@ aye run <path> [--mode debug|safe|fast] [-- args...]  # build to a temp file and
 aye emit-c <path> [--mode debug|safe|fast]            # print the generated C
 aye check <path> [--json]                             # front end only: report errors, no C, no clang
 aye fix <path>                                        # apply the fix-its of `aye check` in place
-aye test <path> [--filter <text>] [--module <m>] [--json] [--mode debug|safe|fast]   # run the `test` blocks of every module
+aye test <path> [--filter <text>] [--module <m>] [--json] [--time-limit <s>] [-j <n>] [--mode debug|safe|fast]   # run the `test` blocks of every module
 aye fmt [--check] <path>                              # format in place (a directory: every .aye file under it)
 aye doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
 aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   # print the Aye declarations `@cimport` makes of a C header
@@ -177,6 +177,11 @@ test "leaks a node" ... FAILED (3 ms)
 Each test line ends with the wall time of its process; the last line counts the
 modules that ran a test and the time of the whole run.
 
+`--time-limit <seconds>` (default 10; 0: none) limits the CPU time of each
+test: a test over it is killed and fails with `FAILED (time limit: 10.4 s CPU
+of 10 s)`; `-j <n>` (default: the number of CPUs) runs up to `n` tests at
+once, and the output stays in test order.
+
 A ```` ```aye ```` block in a `///` doc comment is a test body too (`test
 "doc: square (line 4)"`), so the examples in the documentation keep working.
 
@@ -190,7 +195,7 @@ status is 1 if a test failed or the file does not compile, and 0 otherwise.
 
 ```
 {"file":"list.aye","diagnostics":[],
- "tests":[{"name":"leaks a node","status":"fail","ms":3,
+ "tests":[{"name":"leaks a node","status":"fail","ms":3,"cpu_ms":2,
            "failures":[{"kind":"leak","line":5,"col":23,"message":"16 bytes allocated here were never freed"}],
            "stdout":"","stderr":"list.aye:5:23: leak: 16 bytes allocated here were never freed\n"}],
  "passed":0,"failed":1}
@@ -198,7 +203,9 @@ status is 1 if a test failed or the file does not compile, and 0 otherwise.
 
 - `diagnostics`: the compile errors, as in `aye check --json`; then `tests` is
   empty.
-- `status`: `"pass"` or `"fail"`.
+- `status`: `"pass"` or `"fail"`; `ms` and `cpu_ms`: the wall and CPU time
+  of the test's process; `"timed_out":true` is there when the time limit
+  killed it.
 - `failures`, in the order they happened:
   - `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":"..."}`
   - `{"kind":"error","error":"Name","trace":[{"line":L,"col":C},...]}`: the
