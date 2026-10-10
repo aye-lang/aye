@@ -1,4 +1,4 @@
 pub fn main() {
     let not = 1
-    @println(not ])
+    @println(not = 1)
 }
