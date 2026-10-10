@@ -8,11 +8,29 @@ language's biggest integration test. The framework does one slice (F1)
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-08)
+## Resume here (handoff 2026-10-10 night)
 
-A new session starts in `~/Documents/ayelang/aye` (moved by X5.2; full suite green there on 2026-10-08).
-The state is this file's lane table, [`plans/done.md`](plans/done.md)
-and `git worktree list` (expected: main only). Next, in order:
+A new session starts in `~/Documents/ayelang/aye`; the full suite was
+green on main at fefa325 (28 cards merged on 2026-10-10; O6, O8 and O9
+hold). The state is this file's lane table, [`plans/done.md`](plans/done.md)
+and `git worktree list`. Two branches are committed but **not merged**:
+
+- **O2.7** (freestanding runtime gaps), worktree
+  `.claude/worktrees/agent-a164625c58d6885e7`, commit eb4efa4: libm via
+  `__builtin_*` and `env.Math` imports, `env.strtod`, `env.aye_clock`,
+  `env.aye_fmt_double`, pthread stubs; freestanding golden 3 → 11, sweep
+  73 → 78 of 116. Left: `aye check browser`, `browser/build.sh`,
+  `scripts/linux.sh` golden, `git merge main`, rerun golden, then merge.
+- **O1.17b** (first-exec stall): merged as a docs-only decisions entry.
+  Cause: macOS `syspolicyd`/Gatekeeper/XProtect assess every new
+  executable on first exec (~0.37 s, includes a network notarization
+  check); `codesign`/`xattr` do not help. Untried: `-Wl,-no_adhoc_codesign`,
+  `-mmacosx-version-min`, and the **Developer Tools exemption for the
+  terminal app** (System Settings → Privacy & Security → Developer Tools;
+  only the user can do it). Fallback lever: run a case's three mode
+  binaries in parallel so the stalls overlap (they use no CPU).
+
+Then, in order:
 
 1. **Linux development (X1): done 2026-10-08.** The full suite passes
    on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
