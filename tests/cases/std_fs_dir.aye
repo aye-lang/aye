@@ -99,6 +99,19 @@ pub fn main() !void {
     _ = at(&mut p, dir, "link")
     try p.appendByte(0)
     @println(symlink(q.bytes().ptr, p.bytes().ptr))
+    // Links to a directory and to nothing.
+    q.clear()
+    try q.append("sub")
+    try q.appendByte(0)
+    _ = at(&mut p, dir, "dlink")
+    try p.appendByte(0)
+    @println(symlink(q.bytes().ptr, p.bytes().ptr))
+    q.clear()
+    try q.append("missing")
+    try q.appendByte(0)
+    _ = at(&mut p, dir, "dangling")
+    try p.appendByte(0)
+    @println(symlink(q.bytes().ptr, p.bytes().ptr))
 
     // stat
     let s = try std.fs.stat(at(&mut p, dir, "b.txt"))
@@ -115,6 +128,29 @@ pub fn main() !void {
     @println(kindName(sub.kind))
     let ln = try std.fs.stat(at(&mut p, dir, "link"))
     @println(kindName(ln.kind))
+    let dl = try std.fs.stat(at(&mut p, dir, "dlink"))
+    @println(kindName(dl.kind))
+    let dg = try std.fs.stat(at(&mut p, dir, "dangling"))
+    @println(kindName(dg.kind))
+
+    // statFollow: the file and directory links lead to a file and a
+    // directory; the dangling one leads nowhere.
+    let fl = try std.fs.statFollow(at(&mut p, dir, "link"))
+    @print(fl.size)
+    @print(" ")
+    @println(kindName(fl.kind))
+    let fd = try std.fs.statFollow(at(&mut p, dir, "dlink"))
+    @println(kindName(fd.kind))
+    let ff = try std.fs.statFollow(at(&mut p, dir, "b.txt"))
+    @println(kindName(ff.kind))
+    if std.fs.statFollow(at(&mut p, dir, "dangling")) |_| {
+        @println("statFollow: found")
+    } else |err| {
+        @println(match err {
+            .NotFound => "statFollow: not found"
+            _ => "statFollow: other error"
+        })
+    }
     if std.fs.stat(at(&mut p, dir, "missing")) |_| {
         @println("stat: found")
     } else |err| {
@@ -164,7 +200,7 @@ pub fn main() !void {
             _ => "remove: other error"
         })
     }
-    for name in [5][]u8{"b.txt", "c.txt", "empty", "link", "sub"} {
+    for name in [7][]u8{"b.txt", "c.txt", "dangling", "dlink", "empty", "link", "sub"} {
         try std.fs.remove(at(&mut p, dir, name))
     }
     try list(alloc, dir)
