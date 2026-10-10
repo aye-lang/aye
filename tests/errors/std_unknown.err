@@ -1,0 +1,2 @@
+std_unknown.aye:5:12: error[E0081]: unknown std module `std.io`; std has: coro, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time
+std_unknown.aye:8:17: error[E0081]: unknown std module `std.string`; std has: coro, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time

@@ -1615,7 +1615,7 @@ pub fn main() {
 }
 E0081 = 81 {
     "unknown module",
-    "`import a.b` finds the module `a.b` in the directory `a/b` next to the root module (std is built in), and a path `m.name` needs an item or submodule `name` of the module `m`. A module that is used must be imported in the file: `import std` makes `std.fs.open` available, `import std.fs` makes `fs.open` available.",
+    "`import a.b` finds the module `a.b` in the directory `a/b` next to the root module (std is built in), and a path `m.name` needs an item or submodule `name` of the module `m`. A module that is used must be imported in the file: `import std` makes `std.fs.open` available, `import std.fs` makes `fs.open` available. For a std module that does not exist (`std.io`, `std.string`), the message lists the std modules, and names the one it is close to (`std.tex` for `std.text`).",
     r#"import std
 
 pub fn main() {

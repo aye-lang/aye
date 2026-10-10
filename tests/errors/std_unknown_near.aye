@@ -1,0 +1,6 @@
+// An unknown std module that is close to a real one is suggested.
+
+import std.tex
+
+pub fn main() {
+}

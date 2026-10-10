@@ -1,4 +1,4 @@
-imports.aye:4:12: error[E0081]: module `std` has no `nosuch`
+imports.aye:4:12: error[E0081]: unknown std module `std.nosuch`; std has: coro, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time
 imports.aye:5:16: error[E0081]: module `std.mem` has no `Nope`
 imports.aye:7:12: error[E0015]: `fs` is imported more than once (first at 6:12)
 imports.aye:8:16: error[E0015]: the import of `Allocator` clashes with the declaration of `Allocator` at 10:8 (rename the declaration)
