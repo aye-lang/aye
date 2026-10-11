@@ -2,7 +2,9 @@
 // two requests in one write && reads both responses, then a third on the
 // same connection, then a malformed request (400), then `Connection:
 // close`. A HEAD request gets the headers && the Content-Length of the GET
-// body, no body, && the connection serves a GET after it. `stop` ends the
+// body, no body, && the connection serves a GET after it. 20 requests, one
+// after the other on one keep-alive connection, each answered (O7.4a: the
+// connection has one arena, reset after each request). `stop` ends the
 // server.
 
 import std.heap.General
@@ -88,6 +90,32 @@ fn readAll(c: Conn, want: usize) !void {
     @println("<end>")
 }
 
+// Sends `GET /k` and waits for the answer whose body is "GET /k #<hit>";
+// true when it is a 200 and ends with that body.
+fn oneKeepAlive(c: Conn, hit: u64) !bool {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var want = Builder.init(gpa.allocator())
+    defer want.deinit()
+    try want.append("GET /k #")
+    try want.appendUint(hit)
+    let w = want.bytes()
+    try c.write("GET /k HTTP/1.1\r\nHost: x\r\n\r\n")
+    var buf = @zeroed([512]u8)
+    var got: usize = 0
+    while got < 512 {
+        let n = try c.readTimeout(buf[got..], 5000)
+        if n == 0 {
+            break
+        }
+        got += n
+        if got >= w.len && mem.eql(buf[got - w.len..got], w) {
+            break
+        }
+    }
+    return got >= w.len && mem.eql(buf[0..12], "HTTP/1.1 200") && mem.eql(buf[got - w.len..got], w)
+}
+
 pub fn main() !void {
     var app = App { hits: Atomic(u32).init(0) }
     var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
@@ -124,6 +152,20 @@ pub fn main() !void {
     try cl.write("GET /d HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
     try readAll(cl, 99)
     cl.close()
+
+    // 20 requests, one at a time, on one keep-alive connection: the
+    // connection's arena is reset after each (and the debug leak checker
+    // watches it). Each answer must carry its own hit number.
+    let ka = try net.connect("127.0.0.1", s.port())
+    var ok: u32 = 0
+    for i in 0..20 {
+        if try oneKeepAlive(ka, 7 + i as u64) {
+            ok += 1
+        }
+    }
+    ka.close()
+    @print("keep-alive answered ")
+    @println(ok)
 
     s.stop()
     t.join()

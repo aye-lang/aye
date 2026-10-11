@@ -99,3 +99,5 @@ before, after, Go, after, before:
 On Linux the pool is 1.7x the thread per connection at `-c 64` (about 0.8x Go, from 0.45x), and `-c 1` is unchanged. The cloud VM rerun
 (4 cores, the table at the top) is still to do. The per-request arena stays: `Arena` has no `reset`, so one arena per connection is not a
 one-line change (O7.4).
+
+2026-10-11 O7.4a (macOS, local, load 5 to 8): one arena per keep-alive connection, reset after each request, instead of one per request. `ab -k -c 64 -n 100000`, median of 3, over 3 to 4 rounds: before 119k req/s (rounds 116.6k to 121.8k), after 124k (123.6k to 125.3k; one round at 66k while another job ran); `-c 1`: 48.0k to 48.9k before, 43.2k to 48.4k after. Within the noise: the hello handler allocates little, so the saving is not visible here.
