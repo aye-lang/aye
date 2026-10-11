@@ -1,0 +1,4 @@
+fast client answered 20
+fast client done before the slow one read: true
+slow client got both responses: true
+slow client saw the close: true

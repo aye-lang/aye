@@ -2242,6 +2242,8 @@ Listener.close(self: Self)
 Conn.read(self: Self, buf: []mut u8) ReadError!usize   waits; at most buf.len bytes; 0 when the peer closed
 Conn.readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize   read, waiting at most ms (poll)
 Conn.write(self: Self, bytes: []u8) WriteError!void    write everything
+Conn.writeSome(self: Self, bytes: []u8) WriteError!usize   what the socket takes now; 0: buffer full
+Conn.setNonBlocking(self: Self) bool   O_NONBLOCK: writeSome and read do not wait (poll first)
 Conn.close(self: Self)
 error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
 error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }

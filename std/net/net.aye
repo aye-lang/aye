@@ -88,26 +88,56 @@ pub struct Conn {
     }
 
     /// Writes all of `bytes`; ConnectionClosed when the peer is gone.
+    /// WriteFailed on a non-blocking connection whose buffer is full.
     pub fn write(self: Self, bytes: []u8) WriteError!void {
+        var off: usize = 0
+        while off < bytes.len {
+            let n = try self.writeSome(bytes[off..])
+            if n == 0 {
+                return WriteError.WriteFailed
+            }
+            off += n
+        }
+    }
+
+    /// Writes what the socket takes now, at most `bytes.len`: the number
+    /// written, 0 when the buffer of a non-blocking connection is full
+    /// (`setNonBlocking`; wait with `poll` for POLLOUT). A blocking
+    /// connection waits for room, as `write` does. ConnectionClosed when
+    /// the peer is gone.
+    pub fn writeSome(self: Self, bytes: []u8) WriteError!usize {
+        if bytes.len == 0 {
+            return 0
+        }
         var flags: i32 = 0
         if !isDarwin() {
             flags = MSG_NOSIGNAL_LINUX
         }
-        var off: usize = 0
-        while off < bytes.len {
-            let n = send(self.fd, bytes[off..].ptr, bytes.len - off, flags)
+        while true {
+            let n = send(self.fd, bytes.ptr, bytes.len, flags)
             if n > 0 {
-                off += n as usize
-            } else {
-                let e = aye_std_errno()
-                if n == 0 || e == EPIPE || e == econnreset() {
-                    return WriteError.ConnectionClosed
-                }
-                if e != EINTR {
-                    return WriteError.WriteFailed
-                }
+                return n as usize
+            }
+            let e = aye_std_errno()
+            if n == 0 || e == EPIPE || e == econnreset() {
+                return WriteError.ConnectionClosed
+            }
+            if e == eagain() {
+                return 0
+            }
+            if e != EINTR {
+                return WriteError.WriteFailed
             }
         }
+        unreachable
+    }
+
+    /// Makes the connection non-blocking (`O_NONBLOCK`): `writeSome` gives
+    /// 0 instead of waiting, and `read` gives ReadFailed when no data is
+    /// there, so wait with `poll` first. False when the system refused.
+    pub fn setNonBlocking(self: Self) bool {
+        let flags = fcntl(self.fd, F_GETFL)
+        return flags >= 0 && fcntl(self.fd, F_SETFL, flags | pick(0x4, 0x800)) == 0
     }
 
     /// Closes the connection.
@@ -295,6 +325,8 @@ let POLLIN: i16 = 1
 let EINTR: i32 = 4
 let EACCES: i32 = 13
 let EPIPE: i32 = 32
+let F_GETFL: i32 = 3
+let F_SETFL: i32 = 4
 // Linux: send's flag; macOS: the socket option.
 let MSG_NOSIGNAL_LINUX: i32 = 0x4000
 let SO_NOSIGPIPE_DARWIN: i32 = 0x1022
@@ -330,6 +362,7 @@ fn eaddrinuse() i32 { return pick(48, 98) }
 fn enetunreach() i32 { return pick(51, 101) }
 fn ehostunreach() i32 { return pick(65, 113) }
 fn etimedout() i32 { return pick(60, 110) }
+fn eagain() i32 { return pick(35, 11) }
 
 fn readError(e: i32) ReadError {
     if e == econnreset() {
@@ -364,3 +397,4 @@ extern fn freeaddrinfo(res: ?*mut AddrInfo)
 extern fn uname(buf: [*]u8) i32
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32
+extern fn fcntl(fd: i32, cmd: i32, ...) i32

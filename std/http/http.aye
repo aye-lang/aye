@@ -676,8 +676,8 @@ fn defaultWorkers() u32 {
 /// handler is `fn(ctx: *mut T, req: *Request, res: *mut Response, alloc:
 /// Allocator)`: it fills `res` (status 200 and no body to begin with);
 /// `alloc` is an arena that lives until the response is written (the
-/// connection's arena, reset after each request), so a handler allocates and
-/// never frees, and keeps no pointer into it past the call. Handlers run on many threads at once:
+/// connection's arena, reset once the response is all written), so a handler
+/// allocates and never frees, and keeps no pointer into it past the call. Handlers run on many threads at once:
 /// what they share through `ctx` needs a `std.sync.Mutex` or an `Atomic`.
 /// A `HEAD` request is answered like a `GET` (the handler sees the method and
 /// may fill the same body): the server writes the status line, the headers
@@ -685,6 +685,14 @@ fn defaultWorkers() u32 {
 ///
 /// Make it with `listen` (which listens, so `port()` is known at once, also
 /// for port 0), run `run` on a thread, and end it with `stop`.
+///
+/// Slow clients (O3.9a): connections are non-blocking, and what the socket
+/// does not take of a response at once stays in the connection's arena
+/// until `poll` says there is room, so a client that reads slowly holds up
+/// only itself. Its next request (pipelined or not) is answered only after
+/// the response is all written, and a client that takes no bytes for
+/// `idleMs` is closed. A write error closes the connection. A slow handler
+/// is out of scope: it still holds up the other connections of its worker.
 ///
 /// Server-sent events (O3.6b): a handler that calls `res.stream()` makes its
 /// connection a stream, which `broadcast` writes events to from any thread.
@@ -895,6 +903,31 @@ pub struct Server {
         o.inbuf.append(chunk[0..n]) catch |e| {
             return false
         }
+        return self.serveBuffered(alloc, o)
+    }
+
+    // Writes what the socket of `o` takes of its pending output (a `poll`
+    // said it has room). Once all of it is written, the connection is
+    // closed if the response said so, or the requests already read are
+    // answered; false when `o` is to be closed.
+    fn flushReady(self: *mut Self, alloc: Allocator, o: *mut Open) bool {
+        if !put(o, o.pending) {
+            return false
+        }
+        if o.pending.len > 0 {
+            return true
+        }
+        if o.closing {
+            return false
+        }
+        return self.serveBuffered(alloc, o)
+    }
+
+    // Answers each whole request in `o.inbuf` from `o.off` on, in order. It
+    // stops at a response the socket did not take whole: the worker writes
+    // the rest when `poll` says there is room (`flushReady`) and only then
+    // answers the next request. False when `o` is to be closed.
+    fn serveBuffered(self: *mut Self, alloc: Allocator, o: *mut Open) bool {
         let a = o.arena.allocator()
         while self.stopped.load() == 0 {
             let parsed = parse(a, o.inbuf.bytes()[o.off..], self.limits) catch |e| {
@@ -913,8 +946,11 @@ pub struct Server {
                     return true
                 }
                 let bad = Response { status: errorStatus(e), headers: []Header{}, body: []u8{} }
-                send(a, o.conn, bad, "close", false)
-                return false
+                let wire = encode(a, bad, "close", false) catch |e2| {
+                    return false
+                }
+                o.closing = true
+                return put(o, wire) && o.pending.len > 0
             }
             var req = parsed.request
             o.off += parsed.consumed
@@ -935,15 +971,23 @@ pub struct Server {
                 o.off = 0
                 return ok
             }
-            send(a, o.conn, res, how, text.eql(req.method, "HEAD"))
+            let wire = encode(a, res, how, text.eql(req.method, "HEAD")) catch |e| {
+                return false
+            }
             req.deinit()
-            o.arena.reset()
-            if !keep {
+            o.closing = !keep
+            if !put(o, wire) {
                 return false
             }
             if o.off == o.inbuf.len() {
                 o.inbuf.clear()
                 o.off = 0
+            }
+            if o.pending.len > 0 {
+                return true
+            }
+            if !keep {
+                return false
             }
         }
         return false
@@ -1001,12 +1045,17 @@ pub struct Server {
 // yet parsed; `last` is when bytes last came (`time.monotonicMs`). `arena`
 // serves one request at a time (parse, handler, send) and is reset after
 // each; `inbuf` is on the worker's allocator, so it survives the reset.
+// `pending` is the part of the last response the socket has not taken yet:
+// it is in the arena, so the arena is reset only once it is written, and
+// `closing` says to close the connection then.
 struct Open {
     conn: Conn
     arena: Arena
     inbuf: Builder
     off: usize
     last: u64
+    pending: []u8
+    closing: bool
     // True once the connection is an event stream: it is on the server's
     // list (`next`), the worker only discards what the client sends, and
     // `dead` is 1 when `broadcast` dropped it from the list.
@@ -1025,12 +1074,18 @@ fn closeOpen(s: *mut Server, alloc: Allocator, o: *mut Open) {
     alloc.destroy(o)
 }
 
-// Fills `fds` with the listener, then one entry per connection of `open`.
+// Fills `fds` with the listener, then one entry per connection of `open`:
+// it waits for room to write when the connection has pending output, else
+// for bytes to read.
 fn pollSet(fds: *mut List(PollFd), listener: Listener, open: *List(*mut Open)) AllocError!void {
     fds.clear()
     try fds.append(PollFd { fd: listener.fd, events: POLLIN, revents: 0 })
     for o in open.items() {
-        try fds.append(PollFd { fd: o.conn.fd, events: POLLIN, revents: 0 })
+        var ev = POLLIN
+        if o.pending.len > 0 {
+            ev = POLLOUT
+        }
+        try fds.append(PollFd { fd: o.conn.fd, events: ev, revents: 0 })
     }
 }
 
@@ -1062,7 +1117,11 @@ fn workerMain(s: *mut Server) {
             let o = open.items()[i]
             var keep = true
             if r > 0 && fds.items()[i + 1].revents != 0 {
-                keep = s.serveReady(alloc, o)
+                if o.pending.len > 0 {
+                    keep = s.flushReady(alloc, o)
+                } else {
+                    keep = s.serveReady(alloc, o)
+                }
                 o.last = now
             } else if o.stream {
                 keep = o.dead.load() == 0
@@ -1080,7 +1139,8 @@ fn workerMain(s: *mut Server) {
                     c.close()
                     break
                 }
-                let o = alloc.create(Open { conn: c, arena: Arena.init(alloc), inbuf: Builder.init(alloc), off: 0, last: now, stream: false, next: null, dead: Atomic(u32).init(0) }) catch |e| {
+                _ = c.setNonBlocking()
+                let o = alloc.create(Open { conn: c, arena: Arena.init(alloc), inbuf: Builder.init(alloc), off: 0, last: now, pending: []u8{}, closing: false, stream: false, next: null, dead: Atomic(u32).init(0) }) catch |e| {
                     c.close()
                     continue
                 }
@@ -1096,26 +1156,35 @@ fn workerMain(s: *mut Server) {
     }
 }
 
-// Writes `res`, with a `Connection` header when `how` is not empty; with
-// `head`, the body is left out (its length stays in `Content-Length`).
-fn send(a: Allocator, conn: Conn, res: Response, how: []u8, head: bool) {
+// The bytes of `res` in `a`, with a `Connection` header when `how` is not
+// empty; with `head`, the body is left out (its length stays in
+// `Content-Length`).
+fn encode(a: Allocator, res: Response, how: []u8, head: bool) AllocError![]u8 {
     var out = Builder.init(a)
     var r = res
     if how.len > 0 {
-        r = withConnection(a, res, how) catch |e| {
-            return
-        }
+        r = try withConnection(a, res, how)
     }
-    writeResponse(&mut out, r) catch |e| {
-        return
-    }
+    try writeResponse(&mut out, r)
     var wire = out.bytes()
     if head {
         wire = wire[0..wire.len - r.body.len]
     }
-    conn.write(wire) catch |e| {
-        return
+    return wire
+}
+
+// Writes what the socket of `o` takes of `wire` (in `o`'s arena) and keeps
+// the rest in `o.pending`; resets the arena once all of it is written.
+// False on a write error: the connection is dropped.
+fn put(o: *mut Open, wire: []u8) bool {
+    let n = o.conn.writeSome(wire) catch |e| {
+        return false
     }
+    o.pending = wire[n..]
+    if o.pending.len == 0 {
+        o.arena.reset()
+    }
+    return true
 }
 
 let POLLIN: i16 = 1
