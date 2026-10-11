@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files; none means `.`):
-  aye build <path> [-o out] [-c] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
-  aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [--target <target>] [-- args...]
+  aye build <path> [-o out] [-c] [--mode debug|safe|fast] [--cflags <flags>] [--no-link <lib>] [--target <target>]
+  aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [--no-link <lib>] [--target <target>] [-- args...]
   aye emit-c <path> [--mode debug|safe|fast] [--target <target>]
   aye check <path> [--json] [--target <target>]
   aye fix <path>
-  aye test <path> [--filter <text>] [--module <module>] [--json] [--time-limit <seconds>] [-j <n>] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
+  aye test <path> [--filter <text>] [--module <module>] [--json] [--time-limit <seconds>] [-j <n>] [--mode debug|safe|fast] [--cflags <flags>] [--no-link <lib>] [--target <target>]
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
+  (--no-link: treat the `@linkOptional(\"<lib>\")` library as not installed: not linked, `@hasLink` false; repeatable)
   (-c: compile to an object file, `<path>.o`, without linking; for any --target, no sysroot needed)
   (--target: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding; default: this machine)
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
@@ -85,6 +86,8 @@ struct Args {
     prog_args: Vec<String>,
     /// `--cflags "..."`: more flags for clang.
     cflags: Vec<String>,
+    /// `--no-link lib`: `@linkOptional` libraries to treat as absent.
+    no_link: Vec<String>,
     /// `--target name`.
     target: Option<String>,
     /// `aye build -c`: an object file, not linked.
@@ -102,6 +105,7 @@ fn parse_args() -> Result<Args, String> {
         (None, None, Mode::Debug, false, String::new(), None);
     let mut prog_args = Vec::new();
     let mut cflags = Vec::new();
+    let mut no_link = Vec::new();
     let mut target = None;
     let mut compile_only = false;
     let mut time_limit = 10;
@@ -140,6 +144,10 @@ fn parse_args() -> Result<Args, String> {
                         .map(String::from),
                 );
             }
+            "--no-link" if matches!(cmd.as_str(), "build" | "run" | "test") => no_link.push(
+                it.next()
+                    .ok_or("`--no-link` needs a library name, such as libcurl")?,
+            ),
             "--target" if matches!(cmd.as_str(), "build" | "run" | "test" | "emit-c" | "check") => {
                 target = Some(it.next().ok_or("`--target` needs a target name")?)
             }
@@ -162,6 +170,7 @@ fn parse_args() -> Result<Args, String> {
         module,
         prog_args,
         cflags,
+        no_link,
         target,
         compile_only,
         time_limit,
@@ -275,6 +284,7 @@ fn main() -> ExitCode {
         }
     };
     root.target = target;
+    root.no_link = args.no_link.clone();
     let app_name = root.manifest.as_ref().and_then(|m| m.name());
     if args.cmd == "check" {
         let res = driver::front_end(root, None).result;
@@ -721,6 +731,7 @@ fn test(args: &Args, target: &'static driver::Target) -> ExitCode {
         &args.filter,
         args.module.as_deref(),
         &args.cflags,
+        &args.no_link,
         args.jobs,
         args.time_limit,
     ) {
