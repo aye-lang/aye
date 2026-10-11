@@ -44,8 +44,9 @@ Then, in order:
    <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
    `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. O5.2c and O3.1b done (2026-10-11). O1.15a, O1.16, O5.1a and O2.5b (PR #1, Linux suite green in 290 s)
    done; O1.17b closed (no software fix, see decisions). O2.7a, O1.16a, O2.5c (cloud PR #2) and O2.8 done; **O8 fully holds**
-   (the Linux triples compile on macOS with `-c`). O1.15b and O4.1 (dependency design) done. O2.5d and O4.2 (path deps) done. O2.7b done (freestanding golden 91). O4.3 done (URL deps, lock, cache); **O7 check pending** the full run
-   after its merge. In flight: O1.19, O1.18; a cloud routine re-runs the
+   (the Linux triples compile on macOS with `-c`). O1.15b and O4.1 (dependency design) done. O2.5d and O4.2 (path deps) done. O2.7b done (freestanding golden 91). O4.3 done (URL deps, lock, cache); **O7 holds** (checked on 46d1630:
+   `tests/deps.rs` 3/3, path and URL deps, lock, mismatch, offline). O1.19
+   done (`return` in a match arm). In flight: O4.3a, O1.18a; a cloud routine re-runs the
    Linux suite on the no-IPv6 VM. Eval 2026-10-11: 15/15, mean turns 15.1 → 11.1, tokens −35%, 0 refused
    calls (`docs/aye-eval.md`). Next: O1.18–O1.20 (eval costs), P-flaky,
    then the O6.x LSP phase.
@@ -62,7 +63,7 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O1.19, O1.18, O4.3a; cloud: Linux re-run | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O4.3a, O1.18a; then O6.x LSP | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
