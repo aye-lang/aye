@@ -18,7 +18,7 @@ main for the exact hash); every criterion O6–O13 holds (2026-10-11,
 Branches to merge first, then the rest in order:
 
 1. **O3.6d** (std.http streaming initial frame; dev-server heartbeat
-   threads removed) is done on branch `worktree-agent-a6fb9cf154916ee79`
+   threads removed) was merged as 29b1770
    (b0843f8, main merged, all targeted tests green, downstream not run).
    Merge it, run the full suite and `scripts/downstream.sh`, fill the
    `O36D` placeholder in `plans/done.md` and `plans/aye.md`, push.
