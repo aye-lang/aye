@@ -1,0 +1,5 @@
+import helper
+
+pub fn one() i64 {
+    return helper.one()
+}

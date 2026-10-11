@@ -1,0 +1,6 @@
+import lib
+
+pub fn main() {
+    let b: i64 = lib.make()
+    @println(b)
+}

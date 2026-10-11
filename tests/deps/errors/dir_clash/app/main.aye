@@ -1,0 +1,5 @@
+import util
+
+pub fn main() {
+    @println(util.one())
+}

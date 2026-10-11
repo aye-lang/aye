@@ -1,0 +1,1 @@
+./aye.toml:4:1: error[E0123]: dependency `lib` has dependencies of its own (`b`), which are not supported yet; vendor them into `lib`, or use a version of it without them

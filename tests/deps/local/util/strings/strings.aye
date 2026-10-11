@@ -1,0 +1,7 @@
+pub fn double(x: i64) i64 {
+    return x * 2
+}
+
+pub fn greeting() []u8 {
+    return "hello from util.strings"
+}

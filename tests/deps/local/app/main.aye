@@ -1,0 +1,15 @@
+// An app with a path dependency (aye.toml): `import util` is the .aye files
+// of ../util, `import util.strings` its strings/ directory.
+import util
+import util.strings
+
+pub fn main() {
+    @println(util.twice(21))
+    @println(strings.greeting())
+    let c = util.Counter { n: 4 }
+    @println(util.next(c).n)
+}
+
+test "twice" {
+    @expectEqual(42, util.twice(21))
+}

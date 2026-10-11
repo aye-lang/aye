@@ -191,6 +191,7 @@ if nodes.get(target) |node| {
 - **模組**：同一目錄的 `.aye` 檔共用一個命名空間，只有 `pub` 的東西會導出。沒有 header 檔，模組之間不允許循環 import。
 - **建置腳本**：`build.aye` 在編譯期直譯執行，宣告 target、相依套件、要連結的 C 函式庫。不需要 Make、CMake。
 - **相依套件**：`build.aye` 寫來源 URL，`aye.lock` 記錄內容雜湊。沒有中央 registry，第一版也不做版本解析。
+- **O4 更新**：相依套件與建置改為宣告式的 `aye.toml`（不執行 `build.aye`），細節見 [decisions.md「Dependencies (O4)」](decisions.md#dependencies-o4)。
 - **測試**：`test "名稱" { ... }` 直接寫在原始碼旁邊，`aye test` 執行。測試預設用 debug allocator，leak 就是測試失敗。
 - **Build mode**：`debug`（全部檢查、不最佳化）、`safe`（最佳化 + 檢查）、`fast`（最佳化、關掉檢查）。也可以用 `@setSafety(off)` 對單一熱路徑關掉檢查。
 - **交叉編譯**：`aye build --target aarch64-macos`。第一階段由 clang 處理 target，見編譯器架構一節。

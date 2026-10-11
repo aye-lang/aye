@@ -3,7 +3,7 @@ use aye::{codes, diag, doc, fmt};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files):
+const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files; none means `.`):
   aye build <path> [-o out] [-c] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
   aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [--target <target>] [-- args...]
   aye emit-c <path> [--mode debug|safe|fast] [--target <target>]
@@ -55,6 +55,7 @@ const SPEC_SPLITS: &[(&str, &str)] = &[
     ("Optionals", "optionals"),
     ("match", "match"),
     ("A complete CLI", "cli"),
+    ("Dependencies", "deps"),
 ];
 
 /// When to read a section left out of the core, shown in its place in the
@@ -148,7 +149,7 @@ fn parse_args() -> Result<Args, String> {
             _ => return Err(format!("unexpected argument `{a}`")),
         }
     }
-    let file = file.ok_or("missing input file or directory")?;
+    let file = file.unwrap_or_else(|| ".".to_string());
     Ok(Args {
         cmd,
         file,
@@ -250,6 +251,7 @@ fn main() -> ExitCode {
         }
     };
     root.target = target;
+    let app_name = root.manifest.as_ref().and_then(|m| m.name());
     if args.cmd == "check" {
         let res = driver::front_end(root, None).result;
         if args.json {
@@ -292,10 +294,11 @@ fn main() -> ExitCode {
         ("build", Some(o)) => PathBuf::from(o),
         ("build", None) => PathBuf::from(format!(
             "{}{}",
-            Path::new(&args.file)
+            app_name.unwrap_or_else(|| Path::new(&args.file)
                 .file_stem()
                 .unwrap_or("main".as_ref())
-                .to_string_lossy(),
+                .to_string_lossy()
+                .into_owned()),
             if args.compile_only { ".o" } else { target.ext }
         )),
         _ => std::env::temp_dir().join(format!("aye-run-{}{}", std::process::id(), target.ext)),
@@ -581,7 +584,7 @@ fn spec_cmd(args: Vec<String>) -> ExitCode {
 /// check again, until no fix applies (at most 10 rounds). Each applied fix
 /// is printed as `file:line:col: fixed: <help>`; then the errors that
 /// remain are printed as `aye check` prints them. The exit status is 0 when
-/// no error remains. Files of std are never written.
+/// no error remains. Files of std and of dependencies are never written.
 fn fix(path: &str) -> ExitCode {
     let check = || match Root::load(path) {
         Ok(root) => Ok(driver::front_end(root, None)),
@@ -597,7 +600,7 @@ fn fix(path: &str) -> ExitCode {
         };
         let Err(ds) = &checked.result else { break };
         let mut any = false;
-        for f in checked.files.iter().filter(|f| !f.std) {
+        for f in checked.files.iter().filter(|f| !f.std && !f.dep) {
             let mine: Vec<diag::Diag> = ds.iter().filter(|d| d.file == f.name).cloned().collect();
             let (fixed, applied) = driver::apply_fixes(&f.text, &mine);
             if applied.is_empty() {

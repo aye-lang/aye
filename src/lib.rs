@@ -10,6 +10,7 @@ pub mod doc;
 pub mod driver;
 pub mod fmt;
 pub mod lexer;
+pub mod manifest;
 pub mod module;
 pub mod oir;
 pub mod parser;
