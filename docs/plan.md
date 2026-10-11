@@ -8,64 +8,38 @@ is the language's biggest integration test, run as the downstream check. The fra
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-10 night)
+## Resume here (handoff 2026-10-11 night)
 
-A new session starts in `~/Documents/ayelang/aye`; the full suite was
-green on main at fefa325 (28 cards merged on 2026-10-10; O6, O8 and O9
-hold). The state is this file's lane table, [`plans/done.md`](plans/done.md)
-and `git worktree list`. All agent branches are merged. Notes:
+A new session starts in `~/Documents/ayelang/aye`. The full suite was
+green on main at dcd1f6b-era commits (see the last "Plan:" commit on
+main for the exact hash); every criterion O6–O13 holds (2026-10-11,
+`plans/done.md`). The state is this file's lane table,
+[`plans/done.md`](plans/done.md), the lane files and `git worktree list`.
+Branches to merge first, then the rest in order:
 
-- **O2.7** merged (freestanding golden 3 → 11). The two Linux bugs its
-  Linux run exposed (O5.2c, O3.1b) are fixed on main (2026-10-11); the
-  first cloud session verifies the Linux full suite (rule 7).
-- **O1.17b** (first-exec stall): merged as a docs-only decisions entry.
-  Cause: macOS `syspolicyd`/Gatekeeper/XProtect assess every new
-  executable on first exec (~0.37 s, includes a network notarization
-  check); `codesign`/`xattr` do not help. Untried: `-Wl,-no_adhoc_codesign`,
-  `-mmacosx-version-min`, and the **Developer Tools exemption for the
-  terminal app** (System Settings → Privacy & Security → Developer Tools;
-  only the user can do it). Fallback lever: run a case's three mode
-  binaries in parallel so the stalls overlap (they use no CPU).
+1. **O3.6d** (std.http streaming initial frame; dev-server heartbeat
+   threads removed) is done on branch `worktree-agent-a6fb9cf154916ee79`
+   (b0843f8, main merged, all targeted tests green, downstream not run).
+   Merge it, run the full suite and `scripts/downstream.sh`, fill the
+   `O36D` placeholder in `plans/done.md` and `plans/aye.md`, push.
+2. **O2.6** (stack overflow on wasm) is WIP on
+   `worktree-agent-a8d4905904c125e6d` (388a235): the prelude check and
+   `--stack-first` are in; the V8 `RangeError` mapping in the two runners
+   and the marker changes are left. The card in `plans/aye.md` has the
+   exact list. Continue on that branch.
+3. **O2.5a** (std casts audit, cimport `int64_t` mapping) was started
+   with no commit; the card in `plans/aye.md` records the partial audit
+   and the cimport bug to fix. Start fresh from main.
+4. **F5.9** (framework hello req/s) ran as a cloud routine on
+   2026-10-11 16:05 UTC; look for its PR (`cloud/f59-bench`) and merge it.
+   **F5.8** is merged (PR #4). F5 then has only the Chrome checks left
+   (dev reload, island) and F1.2b (stray `.aye` in a route dir).
+5. Then the backlog in `plans/aye.md` (O2.5e, O2.8a, O6.x leftovers,
+   O3.6c, O7.5) and `plans/framework.md`.
 
-Then, in order:
-
-1. **Linux development (X1): done 2026-10-08.** The full suite passes
-   on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
-   `container`). Steps touching the C prelude, `@cimport` or platform
-   calls run it before merging.
-2. **Language cards**, merged one by one on `main`: F1.1, O1.12,
-   O1.13, O1.5a, O1.5, O1.6, O3.1, O3.1a, O3.2, O3.3, O3.3a, O3.4a and
-   O3.4, O3.5, O1.12a, O1.13a, O1.5b, O3.8 and O1.11a are done
-   (2026-10-10, `plans/done.md`). **O6 holds** (checked on bf4c5d8).
-   Phase O2.x (targets, O8): O2.1 done (`docs/decisions.md` "Targets
-   (O2)"); P2.9, P2.9a, O2.2, O2.3 and O2.4 done. **O8 holds** (checked on
-   ec88c60: all four wasm/macOS targets run, E0118 names the target;
-   the Linux triples compile on macOS too via `aye build -c`, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 and O5.2 done. **O9 holds** (checked on 91fb479: `aye test
-   <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
-   `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. O5.2c and O3.1b done (2026-10-11). O1.15a, O1.16, O5.1a and O2.5b (PR #1, Linux suite green in 290 s)
-   done; O1.17b closed (no software fix, see decisions). O2.7a, O1.16a, O2.5c (cloud PR #2) and O2.8 done; **O8 fully holds**
-   (the Linux triples compile on macOS with `-c`). O1.15b and O4.1 (dependency design) done. O2.5d and O4.2 (path deps) done. O2.7b done (freestanding golden 91). O4.3 done (URL deps, lock, cache); **O7 holds** (checked on 46d1630:
-   `tests/deps.rs` 3/3, path and URL deps, lock, mismatch, offline). O1.19
-   done (`return` in a match arm). Cloud re-run on x86_64 Linux (0a3cca7): all green except the
-   aarch64 `-c` case (O2.8b, in flight); `net_ipv6` skipped as designed.
-   O4.3a/b and O1.18a done. **O11 holds** (conformance prints
-   passed/total per area and target, 100% native and wasm32-wasip1 with
-   the impossible entries listed, since O2.3). Phase O6.x (LSP, O10):
-   O6.1, O6.2 and O6.3 done: **O10 holds** (checked on 7babce6: lsp
-   diagnostics, format, hover, definition, `aye doc --html`, each tested). **O13 holds** (O7.2, 2026-10-11: rest_json
-   3/3, one check each). **O12 holds** (O7.1, PR #3: Aye fast 39.1k req/s vs Node 10.7k;
-   Go 99k, see O3.9). All of O6–O13 now hold. O2.8b done; a cloud routine re-runs the
-   Linux suite on the no-IPv6 VM. Eval 2026-10-11: 15/15, mean turns 15.1 → 11.1, tokens −35%, 0 refused
-   calls (`docs/aye-eval.md`). Next: O1.18–O1.20 (eval costs), P-flaky,
-   then the O6.x LSP phase.
-   Cloud lane: the Agent tool's `remote` option ran locally (no VM);
-   the working route is a one-time **routine** (`RemoteTrigger`, repo
-   `aye-lang/aye`, x86_64 Linux VM, delivers a PR). First run: O2.5c
-   (x86_64 full suite), routine trig_01YR3PfLjyAVdisYBD1SPQzm, 2026-10-11.
-3. **AI-writability eval** (north star): `scripts/eval.py`
-   (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
-   15/15 and showed the spec core is still too large for Claude Code's
-   inline output (O1.13a). Rerun after O1.13a.
+Notes: `web dev` needs `aye` on `PATH` (or `AYE=`); dev CLI relative
+app paths work since F3.1a. The macOS first-exec stall (O1.17b) is
+unchanged; heavy verification goes to cloud Linux (rule 7).
 
 ## Lanes
 
