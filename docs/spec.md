@@ -1596,7 +1596,7 @@ std.coro      coroutines: create, resume, yield                              bel
 std.testing   the leak-checked allocator of a test                           below
 std.log       err/info: "error: "/"info: " lines to stderr; line: no prefix  below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
-std.os        args, getenv, exit                                             below
+std.os        args, getenv, exit, cpuCount                                   below
 std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
@@ -1607,12 +1607,12 @@ std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye
 ```
 
 An HTTP server is `std.http`, not raw `std.net`. `http.listen(T, host,
-port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves, a thread per
-connection, until `s.stop()`. The handler reads `req.method`,
-`req.target`, `req.body` and `req.header(name)`, and fills `res.status`
-(200), `res.headers` and `res.body`; its `alloc` is an arena that lives
-until the response is written (a `HEAD` response omits the body, not its
-`Content-Length`). The client is `http.get(arena,
+port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves on
+`s.workers` threads (the CPU count) until `s.stop()`. The handler reads
+`req.method`, `req.target`, `req.body` and `req.header(name)`, and fills
+`res.status` (200), `res.headers` and `res.body`; its `alloc` is an arena
+that lives until the response is written (a `HEAD` response omits the
+body, not its `Content-Length`). The client is `http.get(arena,
 "http://host:8080/path")` (also `post`, `request`, `requestWith`): a
 `Response` with `status`, `headers`, `body` and `header(name)`, allocated
 in the arena; redirects are followed only on request; `https://` goes
@@ -2185,6 +2185,7 @@ pub fn main() !void {
 ```
 std.os.args(alloc: Allocator) AllocError![][]u8   the arguments; [0] is the program; free the slice with alloc.free
 std.os.getenv(name: []u8) ?[]u8                   the variable's value (points into the environment; do not free); null if unset
+std.os.cpuCount() u32                             the number of CPUs online (at least 1)
 std.os.exit(code: i32)                            exit now with this status (flushes @print output; deferred statements do not run)
 ```
 
