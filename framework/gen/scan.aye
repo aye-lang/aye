@@ -11,15 +11,20 @@ import std.path
 import std.text
 import std.text.Builder
 
-/// A directory of `app/` that serves a URL: `dir` is the directory below
-/// `app/` (`blog/[slug]`; empty for `app/` itself), `url` the pattern it
-/// serves (`/blog/[slug]`), `fns` the names of its handlers: `page` for a
+/// A directory of `app/` with a role: `dir` is the directory below `app/`
+/// (`blog/[slug]`; empty for `app/` itself), `url` the pattern it serves
+/// (`/blog/[slug]`), `fns` the names of its handlers: `page` for a
 /// `page.aye`, and each of `get`, `post`, `put`, `patch`, `delete` that its
-/// `route.aye` exports.
+/// `route.aye` exports. `layout` is true when it has a `layout.aye` (that
+/// exports `layout`), `notFound` when it has a `not-found.aye` (that exports
+/// `notFound`; only `app/` itself may). A directory with only a layout has
+/// no handlers and serves nothing.
 pub struct Page {
     dir: []u8
     url: []u8
     fns: [][]u8
+    layout: bool
+    notFound: bool
 }
 
 /// The names of the functions of a `route.aye`; each one answers the HTTP
@@ -59,8 +64,13 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
             }
         }
     }
-    if fns.len() > 0 {
-        try out.append(Page { dir: rel, url: try urlOf(alloc, rel), fns: fns.items() })
+    let layout = hasRole(alloc, here, found.items, "layout.aye", "layout")
+    let notFound = hasRole(alloc, here, found.items, "not-found.aye", "notFound")
+    if notFound && rel.len > 0 {
+        die("not-found.aye is only supported in app/", here, "")
+    }
+    if fns.len() > 0 || layout || notFound {
+        try out.append(Page { dir: rel, url: try urlOf(alloc, rel), fns: fns.items(), layout: layout, notFound: notFound })
     }
     for e in found.items {
         if e.kind == fs.Kind.Dir && !text.startsWith(e.name, ".") {
@@ -75,11 +85,34 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
 pub fn checkClashes(pages: []Page) {
     for i in 0..pages.len {
         for j in i + 1..pages.len {
+            if pages[i].fns.len == 0 || pages[j].fns.len == 0 {
+                continue
+            }
             if compare(pages[i].url, pages[j].url, true) == 0 {
                 die("two pages are the same route", pages[i].dir, pages[j].dir)
             }
         }
     }
+}
+
+/// The indices in `pages` of the layouts around the page of the directory
+/// `dir`: its own, then each parent's up to `app/`'s (the order in which they
+/// are applied).
+pub fn layouts(alloc: Allocator, pages: []Page, dir: []u8) AllocError![]usize {
+    var out = List(usize).init(alloc)
+    var d = dir
+    while true {
+        for i in 0..pages.len {
+            if pages[i].layout && text.eql(pages[i].dir, d) {
+                try out.append(i)
+            }
+        }
+        if d.len == 0 {
+            break
+        }
+        d = parentOf(d)
+    }
+    return out.items()
 }
 
 /// The number of routes (handlers) in `pages`.
@@ -137,6 +170,40 @@ pub fn die(what: []u8, a: []u8, b: []u8) {
     }
     fs.stderr().write("\n") catch |e| {}
     os.exit(1)
+}
+
+// `dir` without its last segment ("" for a single segment).
+fn parentOf(dir: []u8) []u8 {
+    var i = dir.len
+    while i > 0 {
+        i -= 1
+        if dir[i] == '/' {
+            return dir[0..i]
+        }
+    }
+    return ""
+}
+
+// Does the directory `here` have the file `file`, and does it export
+// `pub fn <name>`? A file without the function is an error.
+fn hasRole(alloc: Allocator, here: []u8, found: []fs.DirEntry, file: []u8, name: []u8) bool {
+    for e in found {
+        if e.kind == fs.Kind.File && text.eql(e.name, file) {
+            let p = path.join(alloc, here, e.name) catch |err| {
+                die("out of memory", "", "")
+                return false
+            }
+            let src = fs.readFile(alloc, p) catch |err| {
+                die("cannot read", p, "")
+                return false
+            }
+            if !exports(alloc, src, name) {
+                die("the file has no pub fn of this name", p, name)
+            }
+            return true
+        }
+    }
+    return false
 }
 
 // Does `src` have a line that starts with `pub fn <name>(`?

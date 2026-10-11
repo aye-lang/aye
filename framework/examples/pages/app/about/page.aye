@@ -6,5 +6,5 @@ import web.Response
 
 pub fn page(req: *Request, res: *mut Response) Error!void {
     let html = res.html()
-    try html.raw("<!doctype html><title>About</title><h1>About</h1>")
+    try html.raw("<h1>About</h1>")
 }

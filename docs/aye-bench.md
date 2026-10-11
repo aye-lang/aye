@@ -65,3 +65,37 @@ Follow-up cards (proposed):
 - O7.3: `std.http` accept loop with a fixed worker pool instead of a thread per connection.
 - O7.4: reuse the per-request arena across keep-alive requests on one connection.
 - O7.5: rerun this file on a machine with 8+ cores and a separate load generator.
+
+## 2026-10-11 worker pool (macOS, local)
+
+O3.9 replaced the thread per connection with a fixed pool: `Server.workers` threads (the CPU count, 2 to 64, set before `run`),
+each polling the shared listener and the connections it accepted; one worker accepts at a time, after a `poll` that does not wait.
+"before" is `04af3d9`, "after" is this branch; same `scripts/bench/hello_http.aye`, `--mode fast`,
+`ab -k -c 64 -n 100000` three times after 1000 warm-up requests, `-c 1` once (`-n 50000` on macOS, `-n 30000` on Linux). No failed requests anywhere.
+
+MacBook (10 cores: 6 performance, 4 efficiency; macOS 26.5), host, `ab` on the same machine. Other agents were building and testing at the same time
+(`uptime` load average 11 to 15 for these two rounds), so the noise is about ±15%:
+
+| round (load) | server | -c 64 runs (req/s) | median | -c 1 req/s |
+|---|---|---|---|---|
+| 3 (15.5) | before | 104625 / 84207 / 95886 | 95886 | 42719 |
+| 3 (14.6) | after (10 workers) | 102154 / 109451 / 105224 | 105224 | 35488 |
+| 4 (11.1) | after (10 workers) | 92119 / 85562 / 79796 | 85562 | 32971 |
+| 4 (11.4) | before | 101906 / 106339 / 98622 | 101906 | 37518 |
+
+On the macOS host the two are the same within the noise: single-threaded `ab` is the limit (one earlier `before` round at load 5 gave
+120718 median and 52154 at `-c 1`). With `workers = 2`, 64 keep-alive connections are still all served (74.7k req/s, 0 failed), and so are
+5000 requests without keep-alive at `-c 16`.
+
+Linux container on the same Mac (`scripts/linux.sh`, Ubuntu 24.04 arm64, 5 vCPUs, load 1.2; Go 1.22.2 from the image), servers in order
+before, after, Go, after, before:
+
+| server | -c 64 runs, first pass (req/s) | second pass | medians | -c 1 req/s |
+|---|---|---|---|---|
+| before (thread per connection) | 137204 / 132077 / 139395 | 147786 / 163128 / 136304 | 137204, 147786 | 31354, 33506 |
+| after (5 workers) | 236800 / 217537 / 236115 | 262703 / 223102 / 249150 | 236115, 249150 | 30165, 37741 |
+| Go `net/http` | 168947 / 312386 / 305329 | | 305329 | 18548 |
+
+On Linux the pool is 1.7x the thread per connection at `-c 64` (about 0.8x Go, from 0.45x), and `-c 1` is unchanged. The cloud VM rerun
+(4 cores, the table at the top) is still to do. The per-request arena stays: `Arena` has no `reset`, so one arena per connection is not a
+one-line change (O7.4).

@@ -282,7 +282,9 @@ fn resolve(host: []u8, port: u16, flags: i32, head: *mut ?*mut AddrInfo) i32 {
     return getaddrinfo(name[..].ptr, service[..].ptr, &hints, head)
 }
 
-extern struct PollFd {
+/// C's `struct pollfd`, for `poll` on `Listener.fd` and `Conn.fd`
+/// (`std.http.Server` uses it).
+pub extern struct PollFd {
     fd: i32
     events: i16
     revents: i16

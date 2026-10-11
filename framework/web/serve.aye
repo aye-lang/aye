@@ -15,11 +15,12 @@ import std.text.Builder
 /// Why `run` gave up: it could not listen, write or allocate.
 pub error ServeError = ListenError || WriteError || AllocError
 
-/// What every connection thread reads: the route table and the directory
-/// of static files.
+/// What every connection thread reads: the route table, the directory of
+/// static files and the page for a path that nothing answers.
 struct App {
     routes: []Route
     public: []u8
+    notFound: ?Handler
 }
 
 /// The port after `--port` in the program's arguments, or `fallback`.
@@ -52,7 +53,18 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// the path of the directory, absolute or relative to the working directory,
 /// or empty for none.
 pub fn run(alloc: Allocator, port: u16, routes: []Route, public: []u8) ServeError!void {
-    var app = App { routes: routes, public: public }
+    try serve(alloc, port, routes, public, null)
+}
+
+/// `run` for an app with a `not-found.aye`: a request that no route and no
+/// file answers (any method) gets `notFound` called with the status set to
+/// 404. If `notFound` returns an error, the plain page of that error is sent.
+pub fn runApp(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFound: Handler) ServeError!void {
+    try serve(alloc, port, routes, public, notFound)
+}
+
+fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFound: ?Handler) ServeError!void {
+    var app = App { routes: routes, public: public, notFound: notFound }
     var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
     var line = Builder.init(alloc)
     defer line.deinit()
@@ -89,6 +101,11 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
             fail(&mut res, Error.MethodNotAllowed)
             res.header("Allow", methods) catch |e| {
                 res.headers.clear()
+            }
+        } else if app.notFound |page| {
+            res.status = 404
+            page(&req, &mut res) catch |e| {
+                fail(&mut res, e)
             }
         } else {
             fail(&mut res, Error.NotFound)

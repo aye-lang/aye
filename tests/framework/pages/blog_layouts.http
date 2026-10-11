@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 269
+
+<!doctype html><html><head><title>Pages</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Home</a> <a href="/about">About</a> <a href="/blog/hello">Blog</a></nav><section class="blog"><p>Blog</p><h1>Post: layouts</h1></section></body></html>
