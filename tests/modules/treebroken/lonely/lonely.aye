@@ -1,0 +1,7 @@
+pub fn answer() i64 {
+    return missing
+}
+
+test "answer" {
+    @expectEqual(42, answer())
+}

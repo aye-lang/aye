@@ -1458,7 +1458,9 @@ test "allocations are checked" {
   runs only the tests of module `html`. Give the program's directory, not
   the module's: imports start there. Every directory under `dir` with
   `.aye` files is also a root, so a module that nothing imports is tested
-  too, once (shown as `test "sub.mod: name"`, the path from `dir`). `aye
+  too, once (shown as `test "sub.mod: name"`, the path from `dir`); a
+  root that does not compile is one failed entry, `test "sub.mod" ...
+  FAILED (compile)`, and the run goes on. `aye
   build`/`aye run` leave tests out. A root module with tests needs no
   `main` for `aye check` and `aye test`.
 - A ```` ```aye ```` block in a `///` doc comment (outside std) is a test

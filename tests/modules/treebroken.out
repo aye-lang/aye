@@ -1,0 +1,5 @@
+test "root" ... ok (N ms)
+test "util: twice" ... ok (N ms)
+test "lonely" ... FAILED (compile)
+
+2 passed; 1 failed; 2 modules; N ms

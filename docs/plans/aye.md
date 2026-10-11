@@ -130,14 +130,13 @@ brackets.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
 - O1.17b first-exec stall, round 2 (cause known, `decisions.md` "First-exec stall"): try `-Wl,-no_adhoc_codesign` and `-mmacosx-version-min`; count the executables golden links; if nothing hides the stall, run a case's debug/safe/fast binaries in parallel in `tests/golden.rs`. Verify: golden wall time under 250 s on a quiet machine.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
-- O1.15a `aye doc std.<x>` for an unknown module prints the same module list and suggestion as E0081 (`src/doc.rs`; O1.15 report). Verify: a CLI golden.
+- O1.15b the std-name matcher needs the first two letters to match, so `std.txt` and `std.jsno` get no suggestion (O1.15a report); loosen it (edit distance ≤ 2) for both E0081 and `aye doc`. Verify: the `std_unknown_near` golden plus a `std.txt` case.
 - O1.16a `aye fix` for `;` inside `(` or `[` (e.g. a C-style `for (a; b; c)`) still applies the newline fix, which is wrong there; the lexer does not track bracket depth (O1.16 report). Verify: a `tests/fix` case leaves such a `;` alone or suggests nothing.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O4.1 manifest and `aye.lock` design; `docs/framework.md` already fixed "declarative file, not a `build.aye` run" (old O4 table).
 - O4.2 local path dependencies: a root imports a module from another root (old O4 table; also the browser split, P8.1).
 - O4.3 URL dependencies: fetch, hash check against `aye.lock`, offline build from the cache (old O4 table).
-- O5.1a `aye test <dir>`: a subdirectory that is not imported and does not compile on its own fails the whole run (O5.1 report); decide: skip with a note, or a `--strict`. Verify: a golden with a broken lonely module.
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
 - O5.2a `aye test`: compile the next module root while the current root's tests run (compile dominates `aye test browser`, 8.9 s; O5.2 report). Verify: `aye test browser` wall time drops.
 - O5.2b per-test `ms` is inflated under `-j` by the first-exec cost of a fresh binary (~0.5 s on macOS, same cause as O1.17b and O5.1b); warm the binary once before fanning out. Verify: `treetests` times under 50 ms after the first.
