@@ -246,7 +246,10 @@ other agents' builds on the Mac.
 - `target/release/aye check browser` (prints nothing on success) when
   the compiler or std changed
 - the test targets the card touches: `cargo test --release --test golden`,
-  `--test conformance`, `--test spec`, `--lib` as applicable. **Not the
+  `--test conformance`, `--test spec`, `--lib` as applicable, and
+  `--test fmt` whenever a `.aye` file was added or changed (it formats
+  every tracked `.aye`; a fixture that must not lex goes in its
+  `FMT_EXCLUDED` list, 2026-10-11: `tests/fix/semicolons.aye`). **Not the
   full suite**: the full `cargo test --release` runs once on `main`
   after the merge, by the integrator, and never in two worktrees at
   once (2026-10-10: two agents' full suites beside main's pushed the

@@ -106,9 +106,11 @@ fn idempotent_and_same_diagnostics() {
     assert!(formatted >= 150, "only {formatted} files formatted");
     // Files that do not lex or whose brackets do not match.
     assert!(
-        refused
-            .iter()
-            .all(|f| f.contains("/tests/errors/") || f.contains("/tests/modules/single/")),
+        refused.iter().all(|f| {
+            f.contains("/tests/errors/")
+                || f.contains("/tests/modules/single/")
+                || f.ends_with("/tests/fix/semicolons.aye")
+        }),
         "{refused:?}"
     );
 }
@@ -213,6 +215,7 @@ const FMT_EXCLUDED: &[(&str, &str)] = &[
         "does not parse on purpose",
     ),
     ("tests/errors/unknown_escape.aye", "does not lex on purpose"),
+    ("tests/fix/semicolons.aye", "has `;` terminators on purpose"),
     (
         "tests/modules/single/broken.aye",
         "brackets do not match on purpose",
