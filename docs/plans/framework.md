@@ -52,7 +52,7 @@ first part of FD1/FD2 (literal routes, a page, the 404).
 |---|---|---|---|
 | F0 | Design | `docs/framework.md` answers the open choices | done (user questions open) |
 | F1 | Hello-world route served by an Aye HTTP server | `cargo test --release --test framework` | done (F1.1, 2026-10-10) |
-| F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c done, F1.2 in flight, then F1.3 |
+| F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c, F1.2, F1.3 and F2.1 done; next F2 cards |
 | F3 | Dev server (FD5) | edit → new response, scripted | paused |
 | F4 | Client code (FD6) | an island under Node 22 and in Chrome | paused |
 | F5 | Production build, numbers, the example app (FD7–FD9) | FD7–FD9 checks | paused |
@@ -66,7 +66,8 @@ None open; F1.1 is in `done.md`.
 Paused; cards get written if the framework lane is resumed. Source in
 brackets.
 
-- F1.2 `web gen <app>` scans `app/` (Next.js names, `[slug]`) and writes `.web/`; `/`, `/about`, unknown path (needs O1.5, symlinks) (old F1 table; `docs/framework.md` F1).
-- F1.3 one API route returning JSON with a dynamic segment, 405 for POST (needs O3.1) (old F1 table).
+- F1.2a `web gen` leftovers: `[...rest]` and `(group)` directories, `layout.aye`, `not-found.aye`, percent-decoding of path segments; replace the `--web <dir>` flag and the `.web/web` symlink with an `aye.toml` path dependency on `framework/web` (O4.2 exists). Verify: `pages` test cases.
+- F1.3a API-route error bodies: `web.run`'s `fail()` writes plain text for every error; an error returned from a `route.aye` handler should be `{"error":"..."}` (docs/framework.md), which needs the route kind in the table; also scan `route.aye` exports with the parser (or `aye doc --signatures`) instead of `pub fn get(` line matching; update docs/framework.md F1.3 names (`items/[id]`). Verify: a route that returns an error gives a JSON body in the `pages` test.
+- F2 cards (write next): `layout.aye`, `not-found.aye`, `[...rest]`, query/form parsing (FD1–FD3); static-file `ETag`/304 once O3.4b lands; production `@embedFile` for `public/` (FD7). F2.1 static files done.
 - F2–F5 rows: written when the lane resumes; the Aye steps each phase needs are in `docs/framework.md`, "Aye-lane steps by phase".
 - Islands and dev reload in the anyknown browser need `WebAssembly` and `EventSource` there (neither exists); until then the framework tests with Node 22 and Chrome (`docs/framework.md` §5, §7).
