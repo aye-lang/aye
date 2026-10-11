@@ -927,12 +927,13 @@ fn run_one(
     let stderr = String::from_utf8_lossy(&err_reader.join().unwrap()).into_owned();
     let signal = status.signal();
     // Only the CPU limit sends `SIGXCPU`, and Linux delivers it with the
-    // accounted CPU time still a little under the limit.
+    // accounted CPU time still a little under the limit. A `SIGKILL` arriving
+    // at up to a tick (tens of ms) under the limit counts as well.
     let timed_out = time_limit > 0
         && (hung
             || cpu_ms > time_limit * 1000
             || signal == Some(SIGXCPU)
-            || (cpu_ms >= time_limit * 1000 && signal == Some(SIGKILL)));
+            || (cpu_ms + 100 >= time_limit * 1000 && signal == Some(SIGKILL)));
     let passed = status.success() && !timed_out;
     let mut failures = parse_failures(files, &stderr);
     if timed_out {
@@ -1115,6 +1116,18 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
 /// Compile generated C to an executable with clang, linked with the
 /// program's libraries.
 pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
+    compile(p, out, mode, true)
+}
+
+/// Compile generated C to an object file (`clang -c`), without linking.
+/// The generated C includes no libc header, so a foreign target needs no
+/// sysroot for this.
+pub fn cc_obj(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
+    compile(p, out, mode, false)
+}
+
+/// `cc` and `cc_obj`: `link` is whether clang links.
+fn compile(p: &CProgram, out: &Path, mode: Mode, link: bool) -> Result<(), String> {
     // The C goes to a file, not to clang's stdin: a pipe holds 64 KiB, and
     // clang may exit (a bad flag) before it has read all of the source,
     // which would kill this process with SIGPIPE.
@@ -1125,21 +1138,24 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::write(&src, &p.c).map_err(|e| e.to_string())?;
-    let result = cc_file(p, &src, out, mode);
+    let result = cc_file(p, &src, out, mode, link);
     let _ = std::fs::remove_file(&src);
     result
 }
 
-/// `cc` for the C source in the file `src`.
-fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode) -> Result<(), String> {
+/// `compile` for the C source in the file `src`.
+fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode, link: bool) -> Result<(), String> {
     let freestanding = p.target.os == Os::Freestanding;
     let mut cmd = p.target.clang()?;
     cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing"]);
+    if !link {
+        cmd.arg("-c");
+    }
     // `-pthread`: std.thread and std.sync call pthreads (wasi-libc has
     // none, and `-pthread` breaks its link).
     if !p.target.is_wasm() {
         cmd.arg("-pthread");
-    } else {
+    } else if link {
         // wasm-ld's stack is 64 KiB, with no guard: 8 MiB, like a native
         // main thread's.
         cmd.arg("-Wl,-z,stack-size=8388608");
@@ -1148,13 +1164,10 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode) -> Result<(), Strin
     // exported functions are the roots. An `extern fn` without a body (or a
     // libc function the runtime lacks) becomes an import from `env`.
     if freestanding {
-        cmd.args([
-            "-DAYE_FREESTANDING",
-            "-ffreestanding",
-            "-nostdlib",
-            "-Wl,--no-entry",
-            "-Wl,--allow-undefined",
-        ]);
+        cmd.args(["-DAYE_FREESTANDING", "-ffreestanding", "-nostdlib"]);
+        if link {
+            cmd.args(["-Wl,--no-entry", "-Wl,--allow-undefined"]);
+        }
     }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
@@ -1164,14 +1177,14 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode) -> Result<(), Strin
         .arg("-o")
         .arg(out);
     // std.math calls libm.
-    if !freestanding {
+    if link && !freestanding {
         cmd.arg("-lm");
     }
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).
     // `-lm` is always there.
     let links: Vec<String> = p.links.iter().filter(|l| *l != "m").cloned().collect();
-    let flags = link_flags(&links);
+    let flags = if link { link_flags(&links) } else { Vec::new() };
     if !flags.is_empty() {
         cmd.args(["-Wno-unused-command-line-argument", "-x", "none"])
             .args(flags);
@@ -1180,15 +1193,20 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode) -> Result<(), Strin
         .status()
         .map_err(|e| format!("failed to run clang: {e}"))?;
     if !status.success() {
-        if !p.links.is_empty() {
+        if link && !p.links.is_empty() {
             return Err(format!(
                 "clang failed: check that the libraries of `@link` ({}) are installed (if they are, this is a compiler bug)",
                 p.links.join(", ")
             ));
         }
         if !p.target.is_host() {
+            let hint = if link {
+                "; `aye build -c` compiles to an object file without linking, which needs no sysroot"
+            } else {
+                ""
+            };
             return Err(format!(
-                "clang failed for target {} (check that its toolchain and sysroot are installed; if they are, this is a compiler bug)",
+                "clang failed for target {} (check that its toolchain and sysroot are installed; if they are, this is a compiler bug{hint})",
                 p.target.name
             ));
         }
