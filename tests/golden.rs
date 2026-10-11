@@ -946,6 +946,7 @@ fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Resul
     };
     let expected_out = read(&path.with_extension(golden)).ok_or("missing golden")?;
     let expected_panic = read(&path.with_extension("panic")).filter(|_| args.is_empty());
+    let expected_error = read(&path.with_extension("stderr")).filter(|_| args.is_empty());
     let modes: &[Mode] = if expected_panic.is_some() {
         &[Mode::Debug, Mode::Safe]
     } else {
@@ -972,6 +973,20 @@ fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Resul
             return Err(format!(
                 "[{mode:?}] stdout mismatch\n--- expected\n{expected_out}--- got\n{stdout}"
             ));
+        }
+        if let Some(full) = &expected_error {
+            let want = if mode == Mode::Debug {
+                full.clone()
+            } else {
+                format!("{}\n", full.lines().next().unwrap_or(""))
+            };
+            if out.status.code() != Some(1) || stderr != want {
+                return Err(format!(
+                    "[{mode:?}] expected exit status 1 and stderr\n{want}--- got {}\n{stderr}",
+                    out.status
+                ));
+            }
+            continue;
         }
         match &expected_panic {
             Some(p) => {
