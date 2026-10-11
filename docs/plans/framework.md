@@ -436,6 +436,7 @@ the card that makes it:
 - model: sonnet
 - time box: 120 min
 - notes: Expect Linux differences in `std.fs` link handling and `stat` (the O2.5 notes). Fix only what is small and inside `framework/` or the test; anything in `std/` or `src/` is an O-card in the report. Stop rule: two failing runs of the same test → report.
+- done: 2026-10-11, Ubuntu 24.04 x86_64. `cargo test --release --test framework` exit 0, 20 passed, 0 skipped (build_prod, dev_island, dev_broken, dev_error, dev_script, dev_reload, dev_units, dev_start, dev_reload_cycle, island_build, hello, dev_reload_node, islands_glue, posts_comments, island_e2e, pages, gen_prod, web_units, posts_pages, prod_serve). `ldd` of the pages production binary (728608 bytes): `linux-vdso.so.1`, `libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6`, `libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6`, `/lib64/ld-linux-x86-64.so.2`; no libcurl. Run under `env -i`, `/`, `/about` and `/style.css` all answered 200. `scripts/downstream.sh` was skipped: the anyknown clone needs `gh auth`, unavailable in the cloud session.
 
 #### F5.9: the hello page's requests per second
 - lane: framework
