@@ -1620,7 +1620,8 @@ port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves on
 `res.status` (200), `res.headers` and `res.body`; its `alloc` is an arena
 that lives until the response is written (a `HEAD` response omits the
 body, not its `Content-Length`; `res.stream()` keeps the connection open
-as an event stream that `s.broadcast(alloc, event, data)` writes to). `req.query(alloc, name)` and
+as an event stream that `s.broadcast(alloc, event, data)` writes to, after
+`res.body` if it is not empty: the first chunk, as is). `req.query(alloc, name)` and
 `req.form(alloc, name)` give the first value of a query or urlencoded form
 field, percent-decoded (`+` is a space) in `alloc`, and `req.cookie(name)`
 a cookie as sent; each gives null when missing. The client is `http.get(arena,

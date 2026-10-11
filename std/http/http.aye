@@ -273,11 +273,14 @@ pub struct Response {
     /// Turns the response of a server handler into a server-sent event
     /// stream (O3.6b). The server writes the status line, the handler's
     /// `headers`, `Content-Type: text/event-stream`, `Cache-Control:
-    /// no-cache` and `Connection: keep-alive`, with no `Content-Length` and
-    /// no body (`res.body` is ignored, and `Content-Type` is not to be in
-    /// `headers`), and then keeps the connection open: `Server.broadcast`
-    /// sends events to it until the client leaves or the server stops. A
-    /// `HEAD` request is answered as a plain response.
+    /// no-cache` and `Connection: keep-alive`, with no `Content-Length`
+    /// (`Content-Type` is not to be in `headers`). A non-empty `res.body` is
+    /// written as is, right after the head, as the first chunk of the stream
+    /// (O3.6d): the handler formats it as event frames (`event: build\ndata:
+    /// x\n\n`), with no chunked framing. Then the server keeps the connection
+    /// open: `Server.broadcast` sends events to it until the client leaves
+    /// or the server stops, and none is sent before the first chunk is
+    /// written. A `HEAD` request is answered as a plain response.
     pub fn stream(self: *mut Self) {
         self.streaming = true
     }
@@ -699,9 +702,9 @@ fn defaultWorkers() u32 {
 /// Threading: the worker that accepted the connection owns it (it reads
 /// and closes it, and discards what the client sends); `streamLock` guards
 /// the list of open streams, and every write to a stream happens under it.
-/// A worker takes the lock to add a stream (together with the response
-/// head, so no event comes before it) and to remove it before it closes
-/// the connection, so `broadcast` never writes to a closed or reused
+/// A worker takes the lock to add a stream (once the response head and the
+/// body, the first chunk, are written, so no event comes before them) and
+/// to remove it before it closes the connection, so `broadcast` never writes to a closed or reused
 /// descriptor. A stream that cannot take an event at once (the client is
 /// gone, or its socket buffer is full) is dropped, never waited for: the
 /// writing thread removes it from the list and the owning worker closes it
@@ -917,6 +920,10 @@ pub struct Server {
         if o.pending.len > 0 {
             return true
         }
+        if o.stream {
+            self.linkStream(o)
+            return true
+        }
         if o.closing {
             return false
         }
@@ -966,7 +973,6 @@ pub struct Server {
             if res.streaming && !text.eql(req.method, "HEAD") {
                 let ok = self.openStream(a, o, res)
                 req.deinit()
-                o.arena.reset()
                 o.inbuf.clear()
                 o.off = 0
                 return ok
@@ -993,8 +999,10 @@ pub struct Server {
         return false
     }
 
-    // Writes the head of a stream response and puts `o` on the list of
-    // streams, both under the lock; false when the head cannot be written.
+    // Writes the head of a stream response and its body (the first chunk)
+    // as `put` does, and puts `o` on the list of streams once all of it is
+    // written (`flushReady` does when the socket took only part), so that
+    // `broadcast` never writes before it; false when the write fails.
     fn openStream(self: *mut Self, a: Allocator, o: *mut Open, res: Response) bool {
         var out = Builder.init(a)
         out.append("HTTP/1.1 ") catch |e| {
@@ -1029,15 +1037,25 @@ pub struct Server {
         out.append("Content-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n") catch |e| {
             return false
         }
-        self.streamLock.lock()
-        defer self.streamLock.unlock()
-        o.conn.write(out.bytes()) catch |e| {
+        out.append(res.body) catch |e| {
             return false
         }
         o.stream = true
+        if !put(o, out.bytes()) {
+            return false
+        }
+        if o.pending.len == 0 {
+            self.linkStream(o)
+        }
+        return true
+    }
+
+    // Puts `o` on the list of streams, under the lock.
+    fn linkStream(self: *mut Self, o: *mut Open) {
+        self.streamLock.lock()
+        defer self.streamLock.unlock()
         o.next = self.streamHead
         self.streamHead = o
-        return true
     }
 }
 

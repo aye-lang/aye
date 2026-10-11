@@ -28,6 +28,8 @@ struct App {
     notFound: ?Handler
     dev: bool
     prod: bool
+    // The first event of `/_web/events` (`devBuildFrame`); empty without `--dev`.
+    buildFrame: []u8
 }
 
 /// The port after `--port` in the program's arguments, or `fallback`.
@@ -62,7 +64,8 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// page gets `<script src="/_web/dev.js">` before `</body>` (or at its end),
 /// `GET /_web/dev.js` serves that script and `GET /_web/events` is an event
 /// stream that sends `event: build` with the build id (the start time in
-/// milliseconds) every 200 ms; without `--dev` those two paths are not special.
+/// milliseconds) as its first event, when a page connects; without `--dev`
+/// those two paths are not special.
 pub fn run(alloc: Allocator, port: u16, routes: []Route, public: []u8) ServeError!void {
     try serve(alloc, port, routes, public, "", null, false)
 }
@@ -97,11 +100,12 @@ pub fn runProd(alloc: Allocator, port: u16, routes: []Route, assets: []Asset, no
 
 fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, client: []u8, notFound: ?Handler, prod: bool) ServeError!void {
     let dev = !prod && devArg(alloc)
-    var app = App { routes: routes, public: public, client: client, notFound: notFound, dev: dev, prod: prod }
-    var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
+    var frame: []u8 = ""
     if dev {
-        try devBeats(alloc, &mut server, try devBuildId(alloc))
+        frame = try devBuildFrame(alloc, try devBuildId(alloc))
     }
+    var app = App { routes: routes, public: public, client: client, notFound: notFound, dev: dev, prod: prod, buildFrame: frame }
+    var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
     var line = Builder.init(alloc)
     defer line.deinit()
     try line.append("listening on 127.0.0.1:")
@@ -123,6 +127,7 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     }
     if app.dev && req.method == Method.Get && text.eql(req.path, "/_web/events") {
         hres.status = 200
+        hres.body = app.buildFrame
         hres.stream()
         return
     }

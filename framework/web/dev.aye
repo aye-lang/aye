@@ -3,29 +3,15 @@
 // server was started anew (docs/framework.md section 5).
 
 import std.heap.Arena
-import std.heap.General
-import std.http
 import std.mem.AllocError
 import std.mem.Allocator
 import std.os
 import std.text
 import std.text.Builder
-import std.thread
 import std.time
-
-/// How often the server sends the build id to the open event streams, in
-/// milliseconds. A handler cannot write the first event of its own stream,
-/// so a page that has just connected gets the id on the next beat.
-pub let beatMs: u64 = 200
 
 /// The tag `devInject` puts in a page.
 let scriptTag = "<script src=\"/_web/dev.js\"></script>"
-
-/// What the thread that sends the beats needs: the listener and the id.
-struct Beat {
-    server: *mut http.Server
-    id: []u8
-}
 
 /// True when the program's arguments have `--dev`.
 pub fn devArg(alloc: Allocator) bool {
@@ -87,24 +73,14 @@ pub fn injectTag(res: *mut Response, tag: []u8) AllocError!void {
     res.page.buf = out
 }
 
-/// Starts the thread that sends `event: build` with `id` to every open
-/// event stream of `server` each `beatMs`, until the process ends.
-pub fn devBeats(alloc: Allocator, server: *mut http.Server, id: []u8) thread.SpawnError!void {
-    let job = alloc.alloc(Beat { server: server, id: id }, 1) catch |e| {
-        return thread.SpawnError.SystemResources
-    }
-    let t = try thread.spawn(Beat, beat, &mut job[0])
-}
-
-fn beat(job: *mut Beat) {
-    var gpa = General.init()
-    defer gpa.deinit()
-    while true {
-        time.sleep(beatMs)
-        let sent = job.server.broadcast(gpa.allocator(), "build", job.id) catch |e| {
-            continue
-        }
-    }
+/// The body of the response that opens `/_web/events`: `event: build` with
+/// `id`, as one frame (`Response.stream` writes it first on the stream).
+pub fn devBuildFrame(alloc: Allocator, id: []u8) AllocError![]u8 {
+    var b = Builder.init(alloc)
+    try b.append("event: build\ndata: ")
+    try b.append(id)
+    try b.append("\n\n")
+    return b.bytes()
 }
 
 test "the tag goes before the last closing body tag" {
@@ -116,6 +92,12 @@ test "the tag goes before the last closing body tag" {
     try devInject(&mut res)
     @expectEqual("<body>a<script src=\"/_web/dev.js\"></script></body></html>", res.page.bytes())
     @expectEqual(true, devIsHtml(&res))
+}
+
+test "the build frame is one event with the id" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    @expectEqual("event: build\ndata: 42\n\n", try devBuildFrame(arena.allocator(), "42"))
 }
 
 test "a page without a closing body tag gets the tag at the end" {
