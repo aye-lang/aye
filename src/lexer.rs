@@ -283,6 +283,8 @@ struct Lexer {
     col: u32,
     toks: Vec<Token>,
     errors: Vec<Error>,
+    /// How many `(` and `[` are open (not `{`: `{ a; b }` is a block).
+    depth: u32,
 }
 
 pub fn lex(src: &str) -> std::result::Result<Vec<Token>, Vec<Error>> {
@@ -293,6 +295,7 @@ pub fn lex(src: &str) -> std::result::Result<Vec<Token>, Vec<Error>> {
         col: 1,
         toks: Vec::new(),
         errors: Vec::new(),
+        depth: 0,
     };
     lx.run();
     if lx.errors.is_empty() {
@@ -641,13 +644,17 @@ impl Lexer {
 
     /// E0002 for the `;` just consumed at `span`, with its fix: delete it at
     /// the end of a line (or before `}`), else turn it and the blanks after
-    /// it into a newline and the indentation of the line.
+    /// it into a newline and the indentation of the line. Inside `(` or `[`
+    /// a newline would be wrong (`for (a; b; c)`, `[1; 2]`): no fix.
     fn semicolon(&self, span: Span) -> Error {
         let e = Error::new(
             E0002,
             span,
             "unexpected `;` (Aye ends statements at newlines)",
         );
+        if self.depth > 0 {
+            return e;
+        }
         let blanks = self.chars[self.pos..]
             .iter()
             .take_while(|c| matches!(c, ' ' | '\t'))
@@ -684,12 +691,24 @@ impl Lexer {
             t
         };
         let tok = match (c, next) {
-            ('(', _) => Tok::LParen,
-            (')', _) => Tok::RParen,
+            ('(', _) => {
+                self.depth += 1;
+                Tok::LParen
+            }
+            (')', _) => {
+                self.depth = self.depth.saturating_sub(1);
+                Tok::RParen
+            }
             ('{', _) => Tok::LBrace,
             ('}', _) => Tok::RBrace,
-            ('[', _) => Tok::LBracket,
-            (']', _) => Tok::RBracket,
+            ('[', _) => {
+                self.depth += 1;
+                Tok::LBracket
+            }
+            (']', _) => {
+                self.depth = self.depth.saturating_sub(1);
+                Tok::RBracket
+            }
             (',', _) => Tok::Comma,
             (':', _) => Tok::Colon,
             ('?', _) => Tok::Question,
@@ -963,6 +982,27 @@ mod tests {
         assert_eq!(
             fixes,
             want.map(|(l, s, e, r)| (l, s, e, r.to_string())).to_vec()
+        );
+    }
+
+    #[test]
+    fn semicolons_in_brackets_have_no_fix() {
+        let e = lex("for (a; b; c) { f(); g() }\nlet x = [1; 2];\nh(1;)\n{ a; b }").unwrap_err();
+        let at: Vec<_> = e
+            .iter()
+            .map(|e| (e.span.line, e.span.col, e.fix.is_some()))
+            .collect();
+        assert_eq!(
+            at,
+            vec![
+                (1, 7, false),
+                (1, 10, false),
+                (1, 20, true),
+                (2, 11, false),
+                (2, 15, true),
+                (3, 4, false),
+                (4, 4, true),
+            ]
         );
     }
 

@@ -1,0 +1,7 @@
+// A `;` inside `(` or `[` has no automatic fix; the one at depth 0 does.
+pub fn main() {
+    for (var i = 0; i < 3; i += 1) {
+        @println(i)
+    }
+    let xs = [1; 2]
+}
