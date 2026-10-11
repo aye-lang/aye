@@ -1,0 +1,9 @@
+// A native root uses the shared part of an island, as a page does: the
+// wasm-only `islands/counter/client.aye` (externs, and imports relative to
+// its own root) is not loaded.
+
+import islands.counter.view
+
+pub fn main() {
+    @println(view.label(5))
+}

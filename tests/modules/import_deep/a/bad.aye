@@ -1,0 +1,9 @@
+// Never loaded: `import a.b` does not load the module `a`.
+
+import nothere
+
+extern fn no_such_symbol(x: i64) i64
+
+pub fn g() i64 {
+    return no_such_symbol(nothere.x)
+}

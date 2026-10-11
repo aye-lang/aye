@@ -1,0 +1,12 @@
+// The island's wasm32-freestanding root: its root is this directory, so
+// `import view` is `islands/counter/view` here, and no module at all from
+// the native root.
+
+import view
+
+extern fn dom_set_text(el: i32, s: [*]u8, len: usize)
+
+pub extern fn mount(root: i32) {
+    let text = view.label(0)
+    dom_set_text(root, text.ptr, text.len)
+}

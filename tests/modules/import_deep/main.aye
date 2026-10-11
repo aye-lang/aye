@@ -1,0 +1,8 @@
+// `import a.b` loads only the module in `a/b`: the parent `a` is not
+// loaded, so its unresolvable extern and import are never checked.
+
+import a.b
+
+pub fn main() {
+    @println(b.f())
+}
