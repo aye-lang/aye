@@ -1,0 +1,2 @@
+../lib/lib.aye:1:14: error[E0084]: `Allocator` is not declared: it is `std.mem.Allocator` (add `import std.mem.Allocator`)
+../lib/lib.aye:1:1: help: add `import std.mem.Allocator`

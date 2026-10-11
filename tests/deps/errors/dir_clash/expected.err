@@ -1,0 +1,1 @@
+./main.aye:1:8: error[E0120]: `util` names both the dependency in aye.toml and the directory ./util; rename the key

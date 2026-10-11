@@ -1,0 +1,4 @@
+name = "app"
+
+[deps]
+util = { git = "https://example.com/util" }

@@ -62,6 +62,15 @@
 //! - `tests/example1/`: Example 1 of the design doc, the directory module
 //!   `app`, run in `ok`, `missing` and `invalid` (each with its own
 //!   `app.toml`, or none); `aye test app` runs its tests.
+//! - `tests/deps/local/`: an app with a path dependency (`app/aye.toml` names
+//!   `util = { path = "../util" }`). `aye run` in `app` (no path) prints
+//!   `app.out`; `aye test` in `app` prints `app.test.out` (the dependency's
+//!   tests are not the app's), `aye test` in `local` prints `all.test.out`;
+//!   `aye build` names the executable after `name` in `aye.toml`.
+//! - `tests/deps/errors/X/`: `aye check` in `X/app` (or the command in
+//!   `X/expected.args`) must print exactly `X/expected.err` on stderr and
+//!   exit with status 1, and leave every file of `X` as it was (`aye fix`
+//!   never writes a dependency).
 //! - `aye run`, `aye build -o`, `aye check`, `aye test --filter` and `aye
 //!   test --module` are also run through the built binary.
 //! - `tests/asan/X.aye`: built with `--cflags -fsanitize=address` in debug
@@ -717,6 +726,94 @@ fn example1() -> Result<(), String> {
         return Err(format!(
             "`aye test app`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"
         ));
+    }
+    Ok(())
+}
+
+/// Every file under `dir` as (path relative to `dir`, text), sorted.
+fn tree(dir: &Path) -> Vec<(String, String)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for p in entries {
+            if p.is_dir() {
+                walk(base, &p, out);
+            } else {
+                let rel = p.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+                out.push((rel, std::fs::read_to_string(&p).unwrap_or_default()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// Copy the directory `from` to `to`.
+fn copy_tree(from: &Path, to: &Path) {
+    for (rel, text) in tree(from) {
+        let p = to.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+}
+
+/// `tests/deps/local`: an app and its path dependency.
+fn deps_local(work: &Path) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/deps/local");
+    let want = read(&root.join("app.out")).ok_or("missing app.out")?;
+    let (out, err, code) = aye(&root.join("app"), &["run"])?;
+    if out != want || !err.is_empty() || code != Some(0) {
+        return Err(format!(
+            "`aye run`: {code:?}\n--- expected\n{want}--- got\n{out}{err}"
+        ));
+    }
+    for (dir, file) in [("app", "app.test.out"), (".", "all.test.out")] {
+        let want = read(&root.join(file)).ok_or(format!("missing {file}"))?;
+        let (out, err, code) = aye(&root.join(dir), &["test"])?;
+        let out = scrub_ms(&out);
+        if out != want || !err.is_empty() || code != Some(0) {
+            return Err(format!(
+                "`aye test` in {dir}: {code:?}\n--- expected\n{want}--- got\n{out}{err}"
+            ));
+        }
+    }
+    let copy = work.join("deps-local");
+    let _ = std::fs::remove_dir_all(&copy);
+    copy_tree(&root, &copy);
+    let (_, err, code) = aye(&copy.join("app"), &["build"])?;
+    if code != Some(0) || !copy.join("app/app").is_file() {
+        return Err(format!(
+            "`aye build` did not make `app` (the name in aye.toml): {code:?}\n{err}"
+        ));
+    }
+    let _ = std::fs::remove_dir_all(&copy);
+    Ok(())
+}
+
+/// A case of `tests/deps/errors`.
+fn deps_error_case(dir: &Path, work: &Path) -> Result<(), String> {
+    let x = name(dir);
+    let want = read(&dir.join("expected.err")).ok_or("missing expected.err")?;
+    let args = read(&dir.join("expected.args")).unwrap_or_else(|| "check".to_string());
+    let args: Vec<&str> = args.split_whitespace().collect();
+    let copy = work.join(format!("deps-errors-{x}"));
+    let _ = std::fs::remove_dir_all(&copy);
+    copy_tree(dir, &copy);
+    let (_, err, code) = aye(&copy.join("app"), &args)?;
+    let changed = tree(&copy) != tree(dir);
+    let _ = std::fs::remove_dir_all(&copy);
+    if err != want || code != Some(1) {
+        return Err(format!(
+            "`aye {}`: {code:?}\n--- expected\n{want}--- got\n{err}",
+            args.join(" ")
+        ));
+    }
+    if changed {
+        return Err(format!("`aye {}` wrote a file", args.join(" ")));
     }
     Ok(())
 }
@@ -1626,6 +1723,15 @@ fn main() {
     let cimport_cases = cases("cimport");
     let asan_cases = cases("asan");
     let mod_cases = module_dirs();
+    let deps_errors: Vec<PathBuf> = {
+        let mut v: Vec<PathBuf> =
+            std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/deps/errors"))
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+        v.sort();
+        v
+    };
     let wasm = wasm_target();
     let freestanding = freestanding_target();
     type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
@@ -1711,6 +1817,13 @@ fn main() {
             println!("skipped wasm32-freestanding goldens: no wasm32 clang or no node");
         }
         add(&mut jobs, "example1".to_string(), example1);
+        let w = &work;
+        add(&mut jobs, "deps/local".to_string(), move || deps_local(w));
+        for p in &deps_errors {
+            add(&mut jobs, format!("deps/errors/{}", name(p)), move || {
+                deps_error_case(p, w)
+            });
+        }
         let w = &work;
         add(&mut jobs, "cli/aye run".to_string(), move || cli_run(w));
         add(&mut jobs, "cli/aye build -o".to_string(), move || {

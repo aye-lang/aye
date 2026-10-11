@@ -1,0 +1,1 @@
+./aye.toml:4:10: error[E0119]: unknown field `git` of a dependency; expected `name = "app"`, then `[deps]` with lines such as `util = { path = "../util" }` or `lib = { url = "https://example.com/lib.tar.gz" }`

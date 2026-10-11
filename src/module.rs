@@ -23,9 +23,10 @@ use crate::ast::{self, ArmBody, ExprKind, Item as AstItem, StmtKind, TypeExprKin
 use crate::codes::*;
 use crate::diag::{Error, Span};
 use crate::driver::Target;
+use crate::manifest::{self, ManifestFile, Source};
 use crate::{cimport, lexer, parser};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// A source file of the program.
 pub struct SourceFile {
@@ -34,6 +35,9 @@ pub struct SourceFile {
     pub text: String,
     /// Part of the embedded std (`aye fix` never writes it).
     pub std: bool,
+    /// Part of a dependency, or a manifest (`aye.toml`): not tested by the
+    /// program's tests, and `aye fix` never writes it.
+    pub dep: bool,
 }
 
 /// std, embedded: (module, file name, source).
@@ -291,6 +295,29 @@ enum Res {
     Unresolved,
 }
 
+/// `path` without `.` and `a/..` components (no symbolic links are followed).
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir
+                if out
+                    .components()
+                    .next_back()
+                    .is_some_and(|l| matches!(l, Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
+}
+
 /// An error that was already reported.
 fn silent() -> Error {
     Error::new(Code(0), Span::default(), "")
@@ -398,9 +425,19 @@ fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
     e
 }
 
+/// A dependency of `aye.toml`: `import key` is the `.aye` files in `dir`.
+struct DepDir {
+    key: String,
+    dir: PathBuf,
+}
+
 struct Loader<'a> {
     /// The root module's directory: `import a.b` is `base/a/b`.
     base: &'a Path,
+    /// The dependencies of the root module's manifest.
+    deps: Vec<DepDir>,
+    /// Keys of dependencies that could not be had (already reported).
+    broken_deps: Vec<String>,
     /// Add the doc comments' examples as tests (`aye test`).
     doc_tests: bool,
     /// What the program is built for: it lacks some std modules.
@@ -433,9 +470,12 @@ pub fn load(
     base: &Path,
     doc_tests: bool,
     target: &Target,
+    manifest: Option<ManifestFile>,
 ) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
     let mut l = Loader {
         base,
+        deps: Vec::new(),
+        broken_deps: Vec::new(),
         doc_tests,
         target,
         files: Vec::new(),
@@ -452,6 +492,9 @@ pub fn load(
         shadowed: Vec::new(),
     };
     l.add_module(String::new(), root);
+    if let Some(mf) = manifest {
+        l.add_deps(mf);
+    }
     let mut m = 0;
     while m < l.modules.len() {
         if !l.modules[m].broken {
@@ -617,7 +660,7 @@ impl Loader<'_> {
         for f in files {
             let id = self.files.len();
             let set = |s: &mut Span| s.file = id as u16;
-            let doc_tests = self.doc_tests && !f.std;
+            let doc_tests = self.doc_tests && !f.std && !f.dep;
             let parsed = lexer::lex(&f.text)
                 .and_then(|toks| {
                     if doc_tests {
@@ -686,6 +729,116 @@ impl Loader<'_> {
         m
     }
 
+    /// A file that is no module's: the manifests.
+    fn add_aux(&mut self, file: SourceFile) -> u16 {
+        let id = self.files.len() as u16;
+        self.files.push(file);
+        self.asts.push(None);
+        id
+    }
+
+    /// Read the manifest `mf` of the root module and find its dependencies.
+    fn add_deps(&mut self, mf: ManifestFile) {
+        let text = mf.file.text.clone();
+        let id = self.add_aux(mf.file);
+        let at = |mut e: Error| {
+            e.span.file = id;
+            e
+        };
+        let manifest = match manifest::parse(&text) {
+            Ok(m) => m,
+            Err(errs) => {
+                for e in errs {
+                    self.report(at(e));
+                }
+                return;
+            }
+        };
+        for d in manifest.deps {
+            let key = &d.key;
+            if key == "std" || lexer::is_keyword(key) || !manifest::is_ident(key) {
+                let why = if key == "std" {
+                    "is the embedded standard library".to_string()
+                } else {
+                    "is not an identifier an `import` can name".to_string()
+                };
+                let msg = format!("the dependency key `{key}` {why}; rename the key");
+                self.report(at(Error::new(E0120, d.span, msg)));
+                continue;
+            }
+            let Source::Path(p) = &d.source else {
+                let msg = format!(
+                    "dependency `{key}`: URL dependencies are not supported yet; use a `path`"
+                );
+                self.report(at(Error::new(E0121, d.span, msg)));
+                self.broken_deps.push(d.key);
+                continue;
+            };
+            let dir = normalize(&mf.dir.join(p));
+            if !dir.is_dir() {
+                let msg = format!(
+                    "dependency `{key}`: the path `{p}` is not a directory (looked for {})",
+                    dir.display()
+                );
+                self.report(at(Error::new(E0121, d.span, msg)));
+                self.broken_deps.push(d.key);
+                continue;
+            }
+            match ManifestFile::read(&dir) {
+                Err(msg) => {
+                    self.report(at(Error::new(E0121, d.span, msg)));
+                    self.broken_deps.push(d.key);
+                    continue;
+                }
+                Ok(None) => {}
+                Ok(Some(dm)) => {
+                    let dtext = dm.file.text.clone();
+                    let did = self.add_aux(dm.file);
+                    match manifest::parse(&dtext) {
+                        Err(errs) => {
+                            for mut e in errs {
+                                e.span.file = did;
+                                self.report(e);
+                            }
+                            self.broken_deps.push(d.key);
+                            continue;
+                        }
+                        Ok(m) if !m.deps.is_empty() => {
+                            let keys: Vec<String> =
+                                m.deps.iter().map(|x| format!("`{}`", x.key)).collect();
+                            let msg = format!(
+                                "dependency `{key}` has dependencies of its own ({}), which are not supported yet; vendor them into `{key}`, or use a version of it without them",
+                                keys.join(", ")
+                            );
+                            self.report(at(Error::new(E0123, d.span, msg)));
+                            self.broken_deps.push(d.key);
+                            continue;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+            }
+            self.deps.push(DepDir { key: d.key, dir });
+        }
+    }
+
+    /// The dependency that module `path` belongs to, if any.
+    fn dep_of(&self, path: &str) -> Option<&DepDir> {
+        let first = path.split('.').next().unwrap_or("");
+        self.deps.iter().find(|d| d.key == first)
+    }
+
+    /// The directory of module `path`, and whether it is a dependency's.
+    fn module_dir(&self, path: &str) -> (PathBuf, bool) {
+        match self.dep_of(path) {
+            Some(d) => {
+                let rest = path.split_once('.').map_or("", |(_, r)| r);
+                (d.dir.join(rest.replace('.', "/")), true)
+            }
+            None => (self.base.join(path.replace('.', "/")), false),
+        }
+    }
+
     /// The module `path` (`util.sub`, `std.fs`), loaded the first time;
     /// `None` if there is none. `span` is the use, for read errors.
     fn module(&mut self, path: &str, span: Span) -> Option<usize> {
@@ -704,12 +857,13 @@ impl Loader<'_> {
                             name: name.to_string(),
                             text: text.to_string(),
                             std: true,
+                            dep: false,
                         })
                         .collect(),
                 )
             }
         } else {
-            let dir = self.base.join(path.replace('.', "/"));
+            let (dir, dep) = self.module_dir(path);
             match std::fs::read_dir(&dir) {
                 Ok(entries) => {
                     let mut paths: Vec<_> = entries
@@ -725,6 +879,7 @@ impl Loader<'_> {
                                 name,
                                 text,
                                 std: false,
+                                dep,
                             }),
                             Err(e) => self.report(Error::new(
                                 E0081,
@@ -800,7 +955,7 @@ impl Loader<'_> {
                 self.import(imp);
             }
             for item in &mut ast.items {
-                if self.files[f].std && matches!(item, AstItem::Test(_)) {
+                if (self.files[f].std || self.files[f].dep) && matches!(item, AstItem::Test(_)) {
                     continue;
                 }
                 self.item(item);
@@ -856,6 +1011,7 @@ impl Loader<'_> {
                                 name: imp.path.to_string_lossy().into_owned(),
                                 text: imp.source,
                                 std: false,
+                                dep: false,
                             };
                             let q = self.add_module(path.clone(), vec![file]);
                             // Not a module that `import` can find.
@@ -894,6 +1050,7 @@ impl Loader<'_> {
         let mut n = 2;
         while self.modules.iter().any(|m| m.path == path)
             || self.by_path.contains_key(&path)
+            || self.dep_of(&path).is_some()
             || self.base.join(&path).is_dir()
         {
             path = format!("{name}{n}");
@@ -931,16 +1088,42 @@ impl Loader<'_> {
 
     fn import_target(&mut self, path: &[(String, Span)]) -> Binding {
         let (first, span) = &path[0];
-        let Some(mut q) = self.module(first, *span) else {
-            if let Some(msg) = self.root_import(first) {
-                self.report(Error::new(E0083, *span, msg));
-                return Binding::Bad;
-            }
-            let dir = self.base.join(first);
+        // In a dependency, imports start at its own top directory.
+        let pkg = match self.cur {
+            0 => None,
+            m => self.dep_of(&self.modules[m].path).map(|d| d.key.clone()),
+        };
+        let full = match &pkg {
+            Some(key) if first != "std" => format!("{key}.{first}"),
+            _ => first.clone(),
+        };
+        if pkg.is_none() && self.broken_deps.contains(first) {
+            return Binding::Bad;
+        }
+        if pkg.is_none() && self.dep_of(first).is_some() && self.base.join(first).is_dir() {
             let msg = format!(
-                "cannot find module `{first}` (no directory `{}`{})",
-                dir.display(),
+                "`{first}` names both the dependency in aye.toml and the directory {}; rename the key",
+                self.base.join(first).display()
+            );
+            self.report(Error::new(E0120, *span, msg));
+            return Binding::Bad;
+        }
+        let Some(mut q) = self.module(&full, *span) else {
+            if pkg.is_none() {
+                if let Some(msg) = self.root_import(first) {
+                    self.report(Error::new(E0083, *span, msg));
+                    return Binding::Bad;
+                }
+            }
+            let dir = self.module_dir(&full).0;
+            let hint = if pkg.is_none() {
                 self.sibling_hint(first)
+            } else {
+                String::new()
+            };
+            let msg = format!(
+                "cannot find module `{first}` (no directory `{}`{hint})",
+                dir.display()
             );
             self.report(Error::new(E0081, *span, msg));
             return Binding::Bad;
@@ -1688,7 +1871,7 @@ impl Loader<'_> {
                 let ast = self.asts[f].take().unwrap();
                 for mut item in ast.items {
                     match &mut item {
-                        AstItem::Test(_) if self.files[f].std => continue,
+                        AstItem::Test(_) if self.files[f].std || self.files[f].dep => continue,
                         AstItem::Test(t) => {
                             t.func.name = canonical(&path, &format!("test#{tests}"));
                             t.module = path.clone();

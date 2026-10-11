@@ -1,0 +1,5 @@
+# The app: `util` is the directory next to it.
+name = "app"
+
+[deps]
+util = { path = "../util" }
