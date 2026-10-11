@@ -1701,6 +1701,44 @@ fn cli_doc_example_error(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `aye check` (and the other commands) on a path that does not exist: one
+/// error line that names the path and says to write it first, exit 1.
+fn cli_missing_path() -> Result<(), String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cases: [(&[&str], &str); 5] = [
+        (
+            &["check", "nope.aye"],
+            "error: nope.aye: no such file; write the file, then run aye check nope.aye\n",
+        ),
+        (
+            &["check", "nodir/"],
+            "error: nodir/: no such directory; create it and write its .aye files, then run aye check nodir/\n",
+        ),
+        (
+            &["run", "nope.aye"],
+            "error: nope.aye: no such file; write the file, then run aye run nope.aye\n",
+        ),
+        (
+            &["test", "nodir"],
+            "error: nodir: no such directory; create it and write its .aye files, then run aye test nodir\n",
+        ),
+        (
+            &["fmt", "nope.aye"],
+            "error: nope.aye: no such file; write the file, then run aye fmt nope.aye\n",
+        ),
+    ];
+    for (args, want) in cases {
+        let (out, err, code) = aye(dir, args)?;
+        if !out.is_empty() || err != want || code != Some(1) {
+            return Err(format!(
+                "`aye {}`: {code:?}\n--- stdout\n{out}--- expected stderr\n{want}--- got\n{err}",
+                args.join(" ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `aye explain <code>`: known code (exit 0), unknown code (exit 2).
 fn cli_explain() -> Result<(), String> {
     let run = |code: &str| {
@@ -1947,6 +1985,11 @@ fn main() {
             });
         }
         add(&mut jobs, "cli/aye explain".to_string(), cli_explain);
+        add(
+            &mut jobs,
+            "cli/aye check: a missing path".to_string(),
+            cli_missing_path,
+        );
         add(
             &mut jobs,
             "cli/aye doc: an unknown std module".to_string(),

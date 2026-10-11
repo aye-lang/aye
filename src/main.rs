@@ -183,6 +183,23 @@ fn restore_sigpipe() {
     unsafe { signal(SIGPIPE, SIG_DFL) };
 }
 
+/// The error line for a `path` that does not exist, or `None`. A path that
+/// does not end in `.aye` is taken for a directory. `cmd` is what `aye`
+/// should be run with again, e.g. `check`.
+fn missing_path(cmd: &str, path: &str) -> Option<String> {
+    if Path::new(path).exists() {
+        return None;
+    }
+    let (what, todo) = if path.ends_with(".aye") {
+        ("file", "write the file")
+    } else {
+        ("directory", "create it and write its .aye files")
+    };
+    Some(format!(
+        "error: {path}: no such {what}; {todo}, then run aye {cmd} {path}"
+    ))
+}
+
 fn main() -> ExitCode {
     #[cfg(unix)]
     restore_sigpipe();
@@ -243,6 +260,10 @@ fn main() -> ExitCode {
         }
         None => driver::host_target(),
     };
+    if let Some(e) = missing_path(&args.cmd, &args.file) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
     if args.cmd == "test" {
         return test(&args, target);
     }
@@ -369,6 +390,10 @@ fn fmt_cmd(args: Vec<String>) -> ExitCode {
         eprintln!("aye: unexpected argument `{path}`\n{USAGE}");
         return ExitCode::from(2);
     }
+    if let Some(e) = missing_path("fmt", path) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
     let mut files = Vec::new();
     if let Err(e) = aye_files(Path::new(path), &mut files) {
         eprintln!("aye: {e}");
@@ -469,6 +494,16 @@ fn doc_cmd(args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let is_std = path == "std" || path.starts_with("std.");
+    let doc_cmd_text = if html {
+        "doc --html"
+    } else {
+        "doc --signatures"
+    };
+    if let Some(e) = missing_path(doc_cmd_text, path).filter(|_| !is_std) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
+    }
     if html {
         let dir = std::path::Path::new(out_dir.map_or("doc", |d| d.as_str()));
         return match doc::html(path, dir) {
