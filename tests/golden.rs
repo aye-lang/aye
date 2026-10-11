@@ -1569,9 +1569,12 @@ fn cli_check() -> Result<(), String> {
     let bad = "tests/errors/unknown_escape.aye";
     let three = "tests/errors/three_errors.aye";
     let fixable = "tests/fix/let_var.aye";
-    let diag = |code: &str, line: u32, col: u32, msg: &str| {
+    let diag = |code: &str, line: u32, col: u32, end: Option<(u32, u32)>, msg: &str| {
+        let end = end
+            .map(|(l, c)| format!(r#","end_line":{l},"end_col":{c}"#))
+            .unwrap_or_default();
         format!(
-            r#"{{"severity":"error","code":"{code}","file":"{three}","line":{line},"col":{col},"message":"{msg}","fixes":[]}}"#
+            r#"{{"severity":"error","code":"{code}","file":"{three}","line":{line},"col":{col}{end},"message":"{msg}","fixes":[]}}"#
         )
     };
     let checks: &[(&[&str], bool, String, String)] = &[
@@ -1606,10 +1609,17 @@ fn cli_check() -> Result<(), String> {
                     "E0023",
                     4,
                     12,
+                    Some((4, 13)),
                     "mismatched types: expected `i64`, found `i32`"
                 ),
-                diag("E0038", 9, 16, "struct `P` has no field `y`"),
-                diag("E0018", 11, 14, "undefined variable `missing`"),
+                diag("E0038", 9, 16, None, "struct `P` has no field `y`"),
+                diag(
+                    "E0018",
+                    11,
+                    14,
+                    Some((11, 21)),
+                    "undefined variable `missing`"
+                ),
             ),
             String::new(),
         ),

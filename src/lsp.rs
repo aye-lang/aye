@@ -6,9 +6,14 @@
 //! - `textDocument/publishDiagnostics` after `didOpen`, `didChange` and
 //!   `didSave`: the errors of `driver::front_end` on the document's root,
 //!   which is what `aye check <file>` loads, a module of that one file,
-//!   with the open text in place of the file on disk. Only errors in the
-//!   document itself are published; errors in files it imports are not.
-//!   `didClose` clears them.
+//!   with the open text in place of the file on disk. The range of a
+//!   diagnostic is the one the compiler gives (`Diag::end`), else the token
+//!   at the error; the severity is the diagnostic's. Errors in files the
+//!   document imports are not published as such: an `import` line whose
+//!   module has errors gets one diagnostic of its own, with the errors as
+//!   `relatedInformation`. `didClose` clears them.
+//! - `textDocument/codeAction`: a `quickfix` for each diagnostic in the
+//!   range that has a fix-it (the edits `aye fix` applies).
 //! - `textDocument/formatting`: one edit that replaces the whole text with
 //!   `fmt::format`, or no edit if the text is formatted or does not lex.
 //! - `textDocument/hover` and `textDocument/definition` (`nav`): the
@@ -19,9 +24,10 @@
 //! reader for the messages a client sends; output is built with
 //! `diag::json_str`.
 
-use crate::diag::{Diag, json_str};
+use crate::diag::{Diag, Severity, Span, json_str};
 use crate::driver::{self, Root};
 use crate::fmt;
+use crate::module::SourceFile;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -379,50 +385,218 @@ fn token_len(line: &str, start: usize) -> usize {
     }
 }
 
-/// The LSP diagnostic of `d` in the document `src`. Aye lines and columns
-/// are 1-based, and a column counts characters; LSP's are 0-based, and a
-/// character offset counts UTF-16 units. The range is the token at the
-/// error. A fix-it's description goes on the message after a newline as
-/// `help: ...`.
-fn diagnostic(src: &str, d: &Diag) -> String {
-    let line_no = d.span.line.saturating_sub(1);
+/// The LSP position (0-based line, UTF-16 character) of the 1-based line and
+/// character column `at` in `src`.
+fn position(src: &str, at: Span) -> (u32, u32) {
+    let line_no = at.line.saturating_sub(1);
     let line = src
         .split('\n')
         .nth(line_no as usize)
         .unwrap_or("")
         .trim_end_matches('\r');
-    let start = (d.span.col as usize).saturating_sub(1);
-    let end = start + token_len(line, start);
+    (
+        line_no,
+        utf16_col(line, (at.col as usize).saturating_sub(1)),
+    )
+}
+
+fn range_json(start: (u32, u32), end: (u32, u32)) -> String {
+    format!(
+        r#"{{"start":{{"line":{},"character":{}}},"end":{{"line":{},"character":{}}}}}"#,
+        start.0, start.1, end.0, end.1
+    )
+}
+
+/// The LSP range of `d` in the document `src`: up to `Diag::end` if the
+/// compiler gave one after the start, else the token at the error.
+fn range(src: &str, d: &Diag) -> ((u32, u32), (u32, u32)) {
+    let start = position(src, d.span);
+    let end = match d.end {
+        Some(e) if (e.line, e.col) > (d.span.line, d.span.col) => position(src, e),
+        _ => {
+            let line = src
+                .split('\n')
+                .nth(start.0 as usize)
+                .unwrap_or("")
+                .trim_end_matches('\r');
+            let from = (d.span.col as usize).saturating_sub(1);
+            (start.0, utf16_col(line, from + token_len(line, from)))
+        }
+    };
+    (start, end)
+}
+
+/// The LSP diagnostic of `d` in the document `src`. Aye lines and columns
+/// are 1-based, and a column counts characters; LSP's are 0-based, and a
+/// character offset counts UTF-16 units. A fix-it's description goes on the
+/// message after a newline as `help: ...`.
+fn diagnostic(src: &str, d: &Diag) -> String {
     let mut message = d.msg.clone();
     if let Some(f) = &d.fix {
         message.push_str("\nhelp: ");
         message.push_str(&f.help);
     }
+    let r = range(src, d);
+    let severity = match d.severity {
+        Severity::Error => 1,
+        Severity::Warning => 2,
+    };
     format!(
-        r#"{{"range":{{"start":{{"line":{line_no},"character":{}}},"end":{{"line":{line_no},"character":{}}}}},"severity":1,"code":"{}","source":"aye","message":{}}}"#,
-        utf16_col(line, start),
-        utf16_col(line, end),
+        r#"{{"range":{},"severity":{severity},"code":"{}","source":"aye","message":{}}}"#,
+        range_json(r.0, r.1),
         d.code,
         json_str(&message)
     )
 }
 
-/// The errors in the file `path` (its text `src` replaces the disk's) as
-/// the JSON array of LSP diagnostics. The root is the one `aye check
-/// <path>` loads; a file that is not on disk is a root of its own.
-fn diagnostics(path: &str, src: &str) -> String {
+/// The `file:` URI of the file `path`, percent-encoded.
+fn path_uri(path: &str) -> String {
+    let mut out = String::from("file://");
+    for b in path.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// The `import a.b.c` lines of `src`: the 0-based line, the path, and the
+/// length of the line in characters.
+fn import_lines(src: &str) -> Vec<(u32, Vec<String>, usize)> {
+    src.split('\n')
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let line = line.trim_end_matches('\r');
+            let rest = line.strip_prefix("import ")?;
+            let word = rest
+                .trim()
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+                .next()?;
+            let path: Vec<String> = word.split('.').map(str::to_string).collect();
+            let len = line.trim_end().chars().count();
+            (!path.iter().any(String::is_empty)).then_some((i as u32, path, len))
+        })
+        .collect()
+}
+
+/// Does the directory of the file `name` end with `/a/b` for the path
+/// `a.b`: is the file part of the module?
+fn in_module(name: &str, path: &[String]) -> bool {
+    let dir = name.rsplit_once('/').map_or("", |(d, _)| d);
+    format!("/{dir}").ends_with(&format!("/{}", path.join("/")))
+}
+
+/// The errors of the root `path` (the text `src` replaces the file on
+/// disk's): the name of the document's file, all the files, and the errors
+/// of every file. The root is the one `aye check <path>` loads; a file that
+/// is not on disk is a root of its own.
+fn check(path: &str, src: &str) -> (String, Vec<SourceFile>, Vec<Diag>) {
     let mut root = Root::load(path).unwrap_or_else(|_| Root::single(path, src));
     root.files[0].text = src.to_string();
     let name = root.files[0].name.clone();
     let checked = panic::catch_unwind(AssertUnwindSafe(|| driver::front_end(root, None)));
-    let list: Vec<String> = match checked.map(|c| c.result) {
-        Ok(Err(ds)) => ds
+    match checked {
+        Ok(c) => (name, c.files, c.result.err().unwrap_or_default()),
+        Err(_) => (name, Vec::new(), Vec::new()),
+    }
+}
+
+/// How many errors of an imported module go in `relatedInformation`.
+const MAX_RELATED: usize = 10;
+
+/// The errors in the file `path` (its text `src` replaces the disk's) as
+/// the JSON array of LSP diagnostics, and for each `import` line whose
+/// module has errors one more, with those errors as related information.
+fn diagnostics(path: &str, src: &str) -> String {
+    let (name, files, ds) = check(path, src);
+    let mut list: Vec<String> = ds
+        .iter()
+        .filter(|d| d.file == name)
+        .map(|d| diagnostic(src, d))
+        .collect();
+    for (line, import, len) in import_lines(src) {
+        // The longest prefix of the import that is a module with errors.
+        let theirs = |k: usize| -> Vec<&Diag> {
+            ds.iter()
+                .filter(|d| d.file != name && in_module(&d.file, &import[..k]))
+                .collect()
+        };
+        let Some(k) = (1..=import.len()).rev().find(|&k| !theirs(k).is_empty()) else {
+            continue;
+        };
+        let theirs = theirs(k);
+        let related: Vec<String> = theirs
             .iter()
-            .filter(|d| d.file == name)
-            .map(|d| diagnostic(src, d))
-            .collect(),
-        _ => Vec::new(),
-    };
+            .take(MAX_RELATED)
+            .map(|d| {
+                let text = files
+                    .iter()
+                    .find(|f| f.name == d.file)
+                    .map_or("", |f| f.text.as_str());
+                let (start, end) = range(text, d);
+                format!(
+                    r#"{{"location":{{"uri":{},"range":{}}},"message":{}}}"#,
+                    json_str(&path_uri(&d.file)),
+                    range_json(start, end),
+                    json_str(&format!("{}: {}", d.code, d.msg))
+                )
+            })
+            .collect();
+        let message = format!(
+            "module `{}` has {} error{}",
+            import[..k].join("."),
+            theirs.len(),
+            if theirs.len() == 1 { "" } else { "s" }
+        );
+        let text = src.split('\n').nth(line as usize).unwrap_or("");
+        list.push(format!(
+            r#"{{"range":{},"severity":1,"source":"aye","message":{},"relatedInformation":[{}]}}"#,
+            range_json((line, 0), (line, utf16_col(text, len))),
+            json_str(&message),
+            related.join(",")
+        ));
+    }
+    format!("[{}]", list.join(","))
+}
+
+/// The code actions for the diagnostics of the document `uri` (`path`, text
+/// `src`) that touch the LSP range from `from` to `to` and have a fix-it: a
+/// `quickfix` whose edit applies the fix-it to the document.
+fn code_actions(uri: &str, path: &str, src: &str, from: (u32, u32), to: (u32, u32)) -> String {
+    let (name, _, ds) = check(path, src);
+    let list: Vec<String> = ds
+        .iter()
+        .filter(|d| d.file == name)
+        .filter_map(|d| {
+            let fix = d.fix.as_ref()?;
+            let (start, end) = range(src, d);
+            // The ranges touch, ends included.
+            if end < from || to < start {
+                return None;
+            }
+            let edits: Vec<String> = fix
+                .edits
+                .iter()
+                .map(|e| {
+                    format!(
+                        r#"{{"range":{},"newText":{}}}"#,
+                        range_json(position(src, e.start), position(src, e.end)),
+                        json_str(&e.replacement)
+                    )
+                })
+                .collect();
+            Some(format!(
+                r#"{{"title":{},"kind":"quickfix","diagnostics":[{}],"isPreferred":true,"edit":{{"changes":{{{}:[{}]}}}}}}"#,
+                json_str(&fix.help),
+                diagnostic(src, d),
+                json_str(uri),
+                edits.join(",")
+            ))
+        })
+        .collect();
     format!("[{}]", list.join(","))
 }
 
@@ -492,7 +666,7 @@ impl<W: Write> Server<W> {
                 )?;
             }
             ("initialize", Some(id)) => {
-                let result = r#"{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":true}},"documentFormattingProvider":true,"hoverProvider":true,"definitionProvider":true},"serverInfo":{"name":"aye","version":"0.1.0"}}"#;
+                let result = r#"{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":true}},"documentFormattingProvider":true,"codeActionProvider":{"codeActionKinds":["quickfix"]},"hoverProvider":true,"definitionProvider":true},"serverInfo":{"name":"aye","version":"0.1.0"}}"#;
                 send(&mut self.out, &response(id, result))?;
             }
             ("shutdown", Some(id)) => {
@@ -503,6 +677,29 @@ impl<W: Write> Server<W> {
                 let result = match uri.as_ref().and_then(|u| self.docs.get(u)) {
                     Some(doc) => formatting(&doc.text),
                     None => "null".to_string(),
+                };
+                send(&mut self.out, &response(id, &result))?;
+            }
+            ("textDocument/codeAction", Some(id)) => {
+                let range = params.and_then(|p| p.get("range"));
+                let at = |end: &str| {
+                    let p = range.and_then(|r| r.get(end))?;
+                    let n = |k: &str| u32::try_from(p.get(k).and_then(Json::as_i64)?).ok();
+                    Some((n("line")?, n("character")?))
+                };
+                let result = match (
+                    uri.as_ref().and_then(|u| self.docs.get(u).map(|d| (u, d))),
+                    at("start"),
+                    at("end"),
+                ) {
+                    (Some((u, doc)), Some(from), Some(to)) => {
+                        let path = uri_path(u);
+                        panic::catch_unwind(AssertUnwindSafe(|| {
+                            code_actions(u, &path, &doc.text, from, to)
+                        }))
+                        .unwrap_or_else(|_| "null".to_string())
+                    }
+                    _ => "null".to_string(),
                 };
                 send(&mut self.out, &response(id, &result))?;
             }
