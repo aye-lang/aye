@@ -62,13 +62,15 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     var req = Request {
         method: methodOf(hreq.method),
         path: pathOf(hreq.target),
+        route: "",
         headers: hreq.headers.items(),
         body: hreq.body,
         arena: alloc,
     }
     var res = Response.init(alloc)
-    if find(app.routes, req.method, req.path) |h| {
-        h(&req, &mut res) catch |e| {
+    if find(app.routes, req.method, req.path) |r| {
+        req.route = r.pattern
+        r.handler(&req, &mut res) catch |e| {
             fail(&mut res, e)
         }
     } else {
