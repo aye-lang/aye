@@ -1,0 +1,42 @@
+// A `catch` used as a statement drops the call's value, so its block need
+// not give one: it may be empty or end with a call, a `match` or a value.
+
+error E { Bad }
+
+fn get(n: i64) E!i64 {
+    if n < 0 {
+        return E.Bad
+    }
+    @println(n)
+    return n
+}
+
+fn note(e: E) {
+    @println("noted")
+}
+
+fn twice(n: i64) i64 {
+    return n * 2
+}
+
+pub fn main() {
+    get(1) catch |e| {}
+    get(-1) catch {}
+    get(-2) catch |e| {
+        note(e)
+    }
+    get(-3) catch |e| {
+        @println("logged")
+        twice(4)
+    }
+    get(-4) catch |e| {
+        match e {
+            .Bad => note(e)
+        }
+    }
+    get(-5) catch |e| {
+        note(e)
+        0
+    }
+    @println("done")
+}

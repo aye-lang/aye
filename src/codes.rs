@@ -404,7 +404,7 @@ pub fn main() {
 }
 E0023 = 23 {
     "mismatched types",
-    "A value has a different type than the one expected here. Aye has no implicit conversions: convert numbers with `as`, or change the declared type.",
+    "A value has a different type than the one expected here. Aye has no implicit conversions: convert numbers with `as`, or change the declared type. `mut` can be dropped but never added: a `[]u8` (a string literal, say) is not a `[]mut u8`. If the value is only read, declare it `[]u8`; a `catch` on a `[]mut u8` result then takes a `[]u8` fallback (`let s: []u8 = f() catch \"none\"`).",
     r#"pub fn main() {
     let x: i32 = true
 }
@@ -1234,7 +1234,7 @@ pub fn main() {
 }
 E0067 = 67 {
     "`catch` or `orelse` block without a value",
-    "When the call returns a value (`E!T` with T not `void`), a `catch` block gives the replacement value as its last line (`catch |e| { report(e); 0 }`), or leaves with `return`, `break` or `continue` (or ends in `unreachable`). A block that ends with a statement, such as a call that returns nothing, does neither. A replacement value without statements is `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { log(); 0 }`, `x orelse { ... return }`, or `x orelse 0`.",
+    "When the call returns a value (`E!T` with T not `void`), a `catch` block gives the replacement value as its last line (`catch |e| { report(e); 0 }`), or leaves with `return`, `break`, `continue` or `unreachable` on every path. A block that ends with a statement, such as a call that returns nothing, does neither. A replacement value without statements is `catch <expression>`, for example `catch 0` or `catch |e| match e { ... }`. The same holds for an `orelse` block: `x orelse { log(); 0 }`, `x orelse { ... return }`, or `x orelse 0`. Only a `catch` used as a statement drops the value, so its block need not give one: `f() catch |e| { report(e) }`.",
     r#"error E { Failed }
 
 fn f() E!u32 {

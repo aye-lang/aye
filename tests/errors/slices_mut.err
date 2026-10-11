@@ -2,4 +2,4 @@ slices_mut.aye:4:7: error[E0033]: cannot assign through a slice `[]i32`: its ele
 slices_mut.aye:13:9: error[E0033]: cannot assign to data behind a read-only pointer `*Buf` (use `*mut Buf`)
 slices_mut.aye:20:6: error[E0033]: cannot assign through a slice `[]i32`: its elements are read-only (use `[]mut i32`)
 slices_mut.aye:21:13: error[E0045]: a slice literal must be empty (`[]T{}`): put the elements in an array (`[N]T{...}`) and slice it
-slices_mut.aye:25:24: error[E0023]: mismatched types: expected `[]mut i32`, found `[]i32`
+slices_mut.aye:25:24: error[E0023]: mismatched types: expected `[]mut i32`, found `[]i32` (a `[]i32` cannot become a `[]mut i32`: if the value is only read, declare it `[]i32`, as in `let s: []i32 = ...`)

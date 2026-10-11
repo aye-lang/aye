@@ -1,0 +1,21 @@
+// A `[]u8` never becomes a `[]mut u8`: with no `[]u8` expected, a `catch`
+// on a `[]mut u8` payload needs a `[]mut u8` fallback.
+
+error E { Empty }
+
+fn name(buf: []mut u8) E![]mut u8 {
+    if buf.len == 0 {
+        return E.Empty
+    }
+    return buf
+}
+
+pub fn main() {
+    var store = [4]u8{0, ..}
+    let a = name(store[..]) catch |e| {
+        "none"
+    }
+    let b = name(store[..]) catch "none"
+    a[0] = 1
+    b[0] = 1
+}
