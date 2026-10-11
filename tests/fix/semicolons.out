@@ -1,0 +1,15 @@
+semicolons.aye:2:17: fixed: remove the `;`
+semicolons.aye:5:39: fixed: remove the `;`
+semicolons.aye:8:14: fixed: remove the `;`
+semicolons.aye:9:14: fixed: remove the `;`
+semicolons.aye:10:11: fixed: remove the `;`
+semicolons.aye:11:14: fixed: end the statement with a newline
+semicolons.aye:11:25: fixed: remove the `;`
+semicolons.aye:12:32: fixed: remove the `;`
+semicolons.aye:13:26: fixed: remove the `;`
+semicolons.aye:14:24: fixed: remove the `;`
+semicolons.aye:15:16: fixed: remove the `;`
+semicolons.aye:17:28: fixed: remove the `;`
+semicolons.aye:18:20: fixed: remove the `;`
+semicolons.aye:18:21: fixed: remove the `;`
+semicolons.aye:19:16: fixed: remove the `;`
