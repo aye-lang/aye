@@ -143,6 +143,21 @@ removed in cff3f60.
 - **Hit by:** std.http `Server`.
 - **Status:** open.
 
+#### 55. An `extern fn` cannot share its name with a `pub fn` of the module
+
+- **Need:** `std.fs.symlink` wrapping libc `symlink`.
+- **Workaround:** `extern("symlink") fn cSymlink(...)` (F1.2).
+- **Hit by:** std.fs (F1.2). **Status:** open; the link-name form works,
+  so this is a naming nuisance, not a blocker.
+
+#### 56. C prelude helpers cannot be redeclared as `extern fn`
+
+- **Need:** call `aye_c_path` or `aye_rt_free` from std.
+- **Workaround:** only helpers whose prototype matches exactly
+  (`aye_std_fail`) can be redeclared; the rest need a new helper or
+  stack buffers (F1.2 used two 4096-byte buffers for `symlink`).
+- **Hit by:** std.fs (F1.2). **Status:** open.
+
 ## Declined by design
 
 #### 5. A local cannot start uninitialized; `@zeroed` makes only C structs
