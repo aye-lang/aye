@@ -738,6 +738,60 @@ fn dev_broken() {
     wait_status(dev.port, "/about", "HTTP/1.1 500", limit).expect("no error page the second time");
 }
 
+/// The build id of the first `build` frame of `GET /_web/events` on `port`.
+fn events_id(port: u16) -> String {
+    first_build_id(&App {
+        child: Command::new("true").spawn().unwrap(),
+        port,
+    })
+}
+
+#[test]
+fn dev_reload_cycle() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-cycle");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+    // The app server's id.
+    let a = events_id(dev.port);
+    assert!(a.parse::<u64>().is_ok(), "{a:?}");
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "serving the error page", limit),
+        "no error page line"
+    );
+    let response = try_get(dev.port, "/").expect("no answer");
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert_eq!(response.matches(tag).count(), 1, "{response}");
+    let js = try_get(dev.port, "/_web/dev.js").expect("no script");
+    assert!(js.starts_with("HTTP/1.1 200 OK\n"), "{js}");
+    assert!(
+        header_value(&js, "Content-Type").starts_with("text/javascript"),
+        "{js}"
+    );
+    assert!(js.contains("location.reload()"), "{js}");
+    // The CLI's id for this broken build.
+    let b = events_id(dev.port);
+    assert!(b.parse::<u64>().is_ok(), "{b:?}");
+    assert_ne!(b, a, "the error server has its own id");
+    assert_eq!(
+        events_id(dev.port),
+        b,
+        "the same id while the build is broken"
+    );
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let c = events_id(dev.port);
+    assert_ne!(c, b, "the app server has another id after the fix");
+}
+
 #[test]
 fn web_units() {
     let out = Command::new(env!("CARGO_BIN_EXE_aye"))
