@@ -490,7 +490,7 @@ O2) and the tests under `tests/modules/embed*`:
   `otool -L` show).
 
 ## Backlog
-- F3.1a (done 2026-10-11, F31A): `web dev <app>` with a relative app path failed with "cannot start the server": `start` in `framework/dev/main.aye` passes `<app>/.web/server` to `std.process.spawn`, which resolves a bare path through PATH. Make the server path absolute (`std.path` join with the cwd, or prefix `./`) before spawning; same for the error-page fallback. Verify: `aye run framework/dev -- framework/examples/pages --port 0` prints `listening on` (found 2026-10-11 by hand; the tests pass absolute paths).
+- F3.1a (done 2026-10-11, 6a47ded): `web dev <app>` with a relative app path failed with "cannot start the server": `start` in `framework/dev/main.aye` passes `<app>/.web/server` to `std.process.spawn`, which resolves a bare path through PATH. Make the server path absolute (`std.path` join with the cwd, or prefix `./`) before spawning; same for the error-page fallback. Verify: `aye run framework/dev -- framework/examples/pages --port 0` prints `listening on` (found 2026-10-11 by hand; the tests pass absolute paths).
 
 Paused; cards get written if the framework lane is resumed. Source in
 brackets.
