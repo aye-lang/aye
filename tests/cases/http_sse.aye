@@ -1,0 +1,150 @@
+// std.http server-sent events (O3.6b): the `/events` handler calls
+// `res.stream()`, so the server writes the head of an event stream and keeps
+// the connection open. The main thread broadcasts a frame, another thread a
+// second one, && a second connection is answered meanwhile. A client that
+// leaves is dropped from `streams()`. `stop` closes the stream: the client
+// reads EOF.
+
+import std.heap.General
+import std.http
+import std.http.Header
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.mem
+import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.text
+import std.thread
+import std.time
+
+struct App {
+    unused: u32
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    if text.eql(req.path(), "/events") {
+        res.stream()
+        return
+    }
+    res.body = "pong"
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+fn sender(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let n = s.broadcast(gpa.allocator(), "tick", "two\nlines") catch |e| {
+        0
+    }
+    @print("thread wrote to ")
+    @println(n)
+}
+
+// Reads from `c` until `buf` ends with `tail`; prints what came, without the
+// CRs.
+fn readUntil(c: Conn, tail: []u8) !void {
+    var buf = @zeroed([1024]u8)
+    var got: usize = 0
+    while got < 1024 {
+        let n = try c.readTimeout(buf[got..], 5000)
+        if n == 0 {
+            break
+        }
+        got += n
+        if got >= tail.len && mem.eql(buf[got - tail.len..got], tail) {
+            break
+        }
+    }
+    var line = @zeroed([1024]u8)
+    var k: usize = 0
+    for i in 0..got {
+        if buf[i] == '\r' {
+            continue
+        }
+        line[k] = buf[i]
+        k += 1
+    }
+    @print(line[0..k])
+    @println("<end>")
+}
+
+// True when `broadcast` has dropped every stream but `want` within 5 s.
+fn waitStreams(s: *mut Server, want: usize) bool {
+    var gpa = General.init()
+    defer gpa.deinit()
+    for i in 0..100 {
+        _ = s.broadcast(gpa.allocator(), "ping", "") catch |e| {
+            0
+        }
+        if s.streams() == want {
+            return true
+        }
+        time.sleep(50)
+    }
+    return false
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var app = App { unused: 0 }
+    var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
+    let t = try thread.spawn(Server, run, &mut s)
+
+    // The head: no Content-Length, nothing after it until an event.
+    let c = try net.connect("127.0.0.1", s.port())
+    try c.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readUntil(c, "keep-alive\r\n\r\n")
+    @print("streams: ")
+    @println(s.streams())
+
+    // Another connection is answered while the stream is open.
+    let p = try net.connect("127.0.0.1", s.port())
+    try p.write("GET /ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    try readUntil(p, "pong")
+    p.close()
+
+    // A frame from the main thread, one from another thread.
+    var n = try s.broadcast(gpa.allocator(), "greet", "hello")
+    @print("main wrote to ")
+    @println(n)
+    try readUntil(c, "hello\n\n")
+    let w = try thread.spawn(Server, sender, &mut s)
+    w.join()
+    try readUntil(c, "lines\n\n")
+
+    // A second stream that leaves is dropped.
+    let d = try net.connect("127.0.0.1", s.port())
+    try d.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readUntil(d, "keep-alive\r\n\r\n")
+    @print("streams: ")
+    @println(s.streams())
+    d.close()
+    @print("dropped: ")
+    @println(waitStreams(&mut s, 1))
+
+    // `stop` closes the stream: EOF.
+    s.stop()
+    var buf = @zeroed([256]u8)
+    var eof = false
+    while true {
+        let r = try c.readTimeout(buf[..], 5000)
+        if r == 0 {
+            eof = true
+            break
+        }
+    }
+    @print("eof: ")
+    @println(eof)
+    c.close()
+    t.join()
+}

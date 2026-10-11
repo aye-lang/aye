@@ -1,0 +1,32 @@
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+
+<end>
+streams: 1
+HTTP/1.1 200 OK
+Connection: close
+Content-Length: 4
+
+pong<end>
+main wrote to 1
+event: greet
+data: hello
+
+<end>
+thread wrote to 1
+event: tick
+data: two
+data: lines
+
+<end>
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+
+<end>
+streams: 2
+dropped: true
+eof: true
