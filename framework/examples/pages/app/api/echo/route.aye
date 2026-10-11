@@ -1,0 +1,33 @@
+// An API route of the pages app: `GET /api/echo?q=...` answers
+// `{"q": ..., "cookie": ...}` with the query value `q` and the cookie
+// `name` (null for one that is missing); `POST /api/echo` with a form body
+// answers `{"msg": ...}` with the field `msg`.
+
+import std.json
+import web.Error
+import web.Request
+import web.Response
+
+pub fn get(req: *Request, res: *mut Response) Error!void {
+    var members = [2]json.Member{
+        json.Member { key: "q", value: textOrNull(try req.query("q")) },
+        json.Member { key: "cookie", value: textOrNull(req.cookie("name")) },
+    }
+    var v = json.Value.Object { members: members[..] }
+    try res.json(&v)
+}
+
+pub fn post(req: *Request, res: *mut Response) Error!void {
+    var members = [1]json.Member{
+        json.Member { key: "msg", value: textOrNull(try req.form("msg")) },
+    }
+    var v = json.Value.Object { members: members[..] }
+    try res.json(&v)
+}
+
+fn textOrNull(s: ?[]u8) json.Value {
+    if s |t| {
+        return json.Value.String { value: t }
+    }
+    return json.Value.Null
+}

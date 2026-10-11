@@ -79,6 +79,7 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     var req = Request {
         method: methodOf(hreq.method),
         path: pathOf(hreq.target),
+        rawQuery: http.queryOf(hreq.target),
         route: "",
         headers: hreq.headers.items(),
         body: hreq.body,
