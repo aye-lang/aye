@@ -417,6 +417,11 @@ pub fn html(path: &str, out_dir: &Path) -> Result<usize, String> {
         pages.push((module.clone(), page_file(module), page));
     }
     pages.sort_by(|a, b| a.0.cmp(&b.0));
+    if let Some((m, f, _)) = pages.iter().find(|p| p.1 == "index.html") {
+        return Err(format!(
+            "aye: module `{m}` has the page `{f}` of the module list"
+        ));
+    }
     for w in pages.windows(2) {
         if w[0].1 == w[1].1 {
             return Err(format!(
@@ -443,21 +448,30 @@ pub fn html(path: &str, out_dir: &Path) -> Result<usize, String> {
 }
 
 /// The name of the root module of a file or directory `path`: its stem or
-/// its own name, so that it makes a file name.
+/// its own name, so that it makes a file name. The stem `index` would be the
+/// module list's page, so a file `index.aye` is named after its directory.
 fn root_name(path: &str) -> String {
     let p = Path::new(path);
-    let name = if p.is_dir() {
-        p.canonicalize()
+    let dir_name = |d: &Path| {
+        d.canonicalize()
             .ok()
             .and_then(|c| c.file_name().map(|n| n.to_string_lossy().into_owned()))
-    } else {
-        p.file_stem().map(|n| n.to_string_lossy().into_owned())
     };
-    name.unwrap_or_else(|| "root".to_string())
+    let name = if p.is_dir() {
+        dir_name(p)
+    } else {
+        p.file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| n != "index")
+            .or_else(|| dir_name(p.parent().unwrap_or(Path::new("."))))
+    };
+    name.filter(|n| n != "index")
+        .unwrap_or_else(|| "root".to_string())
 }
 
 /// The page file of a module: its name with other characters than letters,
-/// digits, `.`, `_` and `-` replaced by `_`; `index` is the module list's.
+/// digits, `.`, `_` and `-` replaced by `_`: `std.text.html`. `index.html`
+/// is the module list's (`html` refuses a module that would use it).
 fn page_file(module: &str) -> String {
     let stem: String = module
         .chars()
@@ -469,11 +483,7 @@ fn page_file(module: &str) -> String {
             }
         })
         .collect();
-    if stem == "index" {
-        "index_module.html".to_string()
-    } else {
-        format!("{stem}.html")
-    }
+    format!("{stem}.html")
 }
 
 /// One module's documentation: its comment lines and its pub declarations.
@@ -522,6 +532,25 @@ fn parse_page(text: &str) -> Page {
         group.clear();
     }
     page
+}
+
+/// Split a signature into the lines to show and its documented members:
+/// each `///` line inside it (a member's doc comment) goes, with the member's
+/// line that follows, to the second list.
+fn split_member_docs(code: &str) -> (String, Vec<(String, Vec<String>)>) {
+    let (mut shown, mut members) = (Vec::new(), Vec::new());
+    let mut doc: Vec<String> = Vec::new();
+    for line in code.lines() {
+        if let Some(d) = line.trim_start().strip_prefix("///") {
+            doc.push(d.strip_prefix(' ').unwrap_or(d).to_string());
+            continue;
+        }
+        if !doc.is_empty() {
+            members.push((line.trim().to_string(), std::mem::take(&mut doc)));
+        }
+        shown.push(line);
+    }
+    (shown.join("\n"), members)
 }
 
 /// `text` with the characters HTML treats specially escaped.
@@ -603,6 +632,9 @@ pre { margin: .8rem 0; padding: .7rem 1rem; overflow-x: auto; background: var(--
 code { font-family: ui-monospace, monospace; }
 nav ul { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: .6rem 0 0; padding: 0; list-style: none; }
 nav [aria-current] { color: var(--fg); font-weight: 600; text-decoration: none; }
+dt { margin: .8rem 0 .2rem; }
+dd { margin: 0 0 0 1.5rem; }
+dd p { margin: .2rem 0; }
 header { padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
 ";
 
@@ -647,11 +679,23 @@ fn module_html(module: &str, page: &Page, modules: &[(&str, &str)]) -> String {
     body.push_str(&doc_html(&page.doc));
     for d in &page.decls {
         let id = escape(&decl_name(&d.code));
+        let (code, members) = split_member_docs(&d.code);
         body.push_str(&format!(
             "<h2 id=\"{id}\">{id}</h2>\n<pre><code>{}</code></pre>\n",
-            escape(&d.code)
+            escape(&code)
         ));
         body.push_str(&doc_html(&d.doc));
+        if !members.is_empty() {
+            body.push_str("<dl>\n");
+            for (sig, doc) in &members {
+                body.push_str(&format!(
+                    "<dt><code>{}</code></dt>\n<dd>\n{}</dd>\n",
+                    escape(sig),
+                    doc_html(doc)
+                ));
+            }
+            body.push_str("</dl>\n");
+        }
     }
     page_html(&format!("{name} - Aye documentation"), &nav, &body)
 }
@@ -725,7 +769,12 @@ mod tests {
     fn page_files_and_names() {
         assert_eq!(super::page_file("std.text"), "std.text.html");
         assert_eq!(super::page_file("a/b c"), "a_b_c.html");
-        assert_eq!(super::page_file("index"), "index_module.html");
+        assert_eq!(super::page_file("index"), "index.html");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/doc/shapes");
+        let file = |name: &str| root.join(name).to_string_lossy().into_owned();
+        assert_eq!(super::root_name(&file("shapes.aye")), "shapes");
+        assert_eq!(super::root_name(&file("index.aye")), "shapes");
+        assert_eq!(super::root_name(&root.to_string_lossy()), "shapes");
         assert_eq!(super::decl_name("pub fn eql(a: []u8) bool"), "eql");
         assert_eq!(super::decl_name("pub extern union U {"), "U");
         assert_eq!(super::decl_name("pub let MAX: i64 = 3"), "MAX");
