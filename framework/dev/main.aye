@@ -465,10 +465,11 @@ fn stopFallback(alloc: Allocator, f: Fallback) {
 /// Starts the server with its standard output piped, prints its first line
 /// and starts the thread that copies the rest.
 fn start(alloc: Allocator, server: []u8, port: []u8) Server {
-    var argv = [3][]u8{server, "--port", port}
-    var n: usize = 3
+    var argv = [4][]u8{server, "--port", port, "--dev"}
+    var n: usize = 4
     if port.len == 0 {
-        n = 1
+        argv[1] = "--dev"
+        n = 2
     }
     var child = process.spawn(alloc, argv[0..n], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
         die("cannot start the server", server)
