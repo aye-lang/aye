@@ -1,5 +1,5 @@
-// The scan of an app: which directories of `app/` have a `page.aye`, and the
-// URL pattern each one serves.
+// The scan of an app: which directories of `app/` have a `page.aye` or a
+// `route.aye`, the URL pattern each one serves and the handlers it has.
 
 import std.fs
 import std.fs.ReadDirError
@@ -11,12 +11,20 @@ import std.path
 import std.text
 import std.text.Builder
 
-/// A route found in `app/`: `dir` is the directory below `app/` (`blog/[slug]`;
-/// empty for `app/` itself), `url` the pattern it serves (`/blog/[slug]`).
+/// A directory of `app/` that serves a URL: `dir` is the directory below
+/// `app/` (`blog/[slug]`; empty for `app/` itself), `url` the pattern it
+/// serves (`/blog/[slug]`), `fns` the names of its handlers: `page` for a
+/// `page.aye`, and each of `get`, `post`, `put`, `patch`, `delete` that its
+/// `route.aye` exports.
 pub struct Page {
     dir: []u8
     url: []u8
+    fns: [][]u8
 }
+
+/// The names of the functions of a `route.aye`; each one answers the HTTP
+/// method of the same name.
+pub let methods = [5][]u8{"get", "post", "put", "patch", "delete"}
 
 /// Adds the pages in the directory `rel` below `root` (`<app>/app`) and in the
 /// directories below it to `out`.
@@ -24,10 +32,35 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
     let here = try path.join(alloc, root, rel)
     let found = try fs.readDir(alloc, here)
     defer found.deinit()
+    var fns = List([]u8).init(alloc)
     for e in found.items {
         if e.kind == fs.Kind.File && text.eql(e.name, "page.aye") {
-            try out.append(Page { dir: rel, url: try urlOf(alloc, rel) })
+            try fns.append("page")
         }
+    }
+    for e in found.items {
+        if e.kind == fs.Kind.File && text.eql(e.name, "route.aye") {
+            let file = try path.join(alloc, here, e.name)
+            let src = fs.readFile(alloc, file) catch |err| {
+                die("cannot read", file, "")
+                return
+            }
+            let start = fns.len()
+            for m in methods[..] {
+                if exports(alloc, src, m) {
+                    if text.eql(m, "get") && start > 0 {
+                        die("a page and a get in route.aye are the same route", here, "")
+                    }
+                    try fns.append(m)
+                }
+            }
+            if fns.len() == start {
+                die("route.aye exports none of get, post, put, patch, delete", here, "")
+            }
+        }
+    }
+    if fns.len() > 0 {
+        try out.append(Page { dir: rel, url: try urlOf(alloc, rel), fns: fns.items() })
     }
     for e in found.items {
         if e.kind == fs.Kind.Dir && !text.startsWith(e.name, ".") {
@@ -47,6 +80,15 @@ pub fn checkClashes(pages: []Page) {
             }
         }
     }
+}
+
+/// The number of routes (handlers) in `pages`.
+pub fn routeCount(pages: []Page) usize {
+    var n: usize = 0
+    for p in pages {
+        n += p.fns.len
+    }
+    return n
 }
 
 /// Is `seg` a `[name]` segment?
@@ -95,6 +137,28 @@ pub fn die(what: []u8, a: []u8, b: []u8) {
     }
     fs.stderr().write("\n") catch |e| {}
     os.exit(1)
+}
+
+// Does `src` have a line that starts with `pub fn <name>(`?
+fn exports(alloc: Allocator, src: []u8, name: []u8) bool {
+    var b = Builder.init(alloc)
+    b.append("pub fn ") catch |e| {
+        die("out of memory", "", "")
+    }
+    b.append(name) catch |e| {
+        die("out of memory", "", "")
+    }
+    b.append("(") catch |e| {
+        die("out of memory", "", "")
+    }
+    let needle = b.bytes()
+    var lines = text.split(src, "\n")
+    while lines.next() |line| {
+        if text.startsWith(line, needle) {
+            return true
+        }
+    }
+    return false
 }
 
 // `/` and the directory's segments; every segment is checked by `scan`.

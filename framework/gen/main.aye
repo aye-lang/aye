@@ -3,7 +3,10 @@
 //     aye run framework/gen -- <app> [--web <dir>]
 //
 // `<app>/app/` holds the routes as in Next.js: a directory with a `page.aye`
-// serves its path, `[name]` is one dynamic segment (`req.param("name")`).
+// serves its path with `page`; one with a `route.aye` serves it with the
+// functions `get`, `post`, `put`, `patch` and `delete` that the file exports
+// (a method without one gets 405). `[name]` is one dynamic segment
+// (`req.param("name")`).
 // `.web/` gets a `main.aye`, a `routes/` module with the route table, a link
 // `r/r<i>_<name>` to each route's directory, a link to every other directory
 // of the app except `public/` (`lib`), and `web`, a link to the web module
@@ -93,7 +96,7 @@ pub fn main() !void {
     try line.append("web gen: ")
     try line.append(out)
     try line.append(", ")
-    try line.appendUint(pages.len() as u64)
+    try line.appendUint(routeCount(pages.items()) as u64)
     try line.append(" routes\n")
     try fs.stdout().write(line.bytes())
 }
@@ -168,15 +171,38 @@ fn routesSource(alloc: Allocator, pages: []Page, names: [][]u8) ![]u8 {
     }
     try b.append("import web.Method\nimport web.Route\n\n")
     try b.append("pub let table = [")
-    try b.appendUint(pages.len as u64)
+    try b.appendUint(routeCount(pages) as u64)
     try b.append("]Route{\n")
     for i in 0..pages.len {
-        try b.append("    Route { method: Method.Get, pattern: \"")
-        try b.append(pages[i].url)
-        try b.append("\", handler: ")
-        try b.append(names[i])
-        try b.append(".page },\n")
+        for f in pages[i].fns {
+            try b.append("    Route { method: Method.")
+            try b.append(methodName(f))
+            try b.append(", pattern: \"")
+            try b.append(pages[i].url)
+            try b.append("\", handler: ")
+            try b.append(names[i])
+            try b.append(".")
+            try b.append(f)
+            try b.append(" },\n")
+        }
     }
     try b.append("}\n")
     return b.bytes()
+}
+
+// The `Method` variant a handler answers: `page` is a `get`.
+fn methodName(name: []u8) []u8 {
+    if text.eql(name, "post") {
+        return "Post"
+    }
+    if text.eql(name, "put") {
+        return "Put"
+    }
+    if text.eql(name, "patch") {
+        return "Patch"
+    }
+    if text.eql(name, "delete") {
+        return "Delete"
+    }
+    return "Get"
 }
