@@ -68,6 +68,15 @@
 //!   has no body, `/img/logo.svg` is served, `/nope.css`, a traversal path,
 //!   `/_web/dev.js` and `/_web/events` are 404 and no page gets the dev
 //!   script; `/_web/islands/counter.wasm` is served when the island was built.
+//! - `framework/build` (`build_prod`, `aye run framework/build -- <app> -o
+//!   <exe>`) runs `web gen --prod`, `aye check` and `aye build --no-link
+//!   libcurl` on a copy of the pages example. The executable runs from
+//!   another directory with the app tree moved away and `PATH` set to
+//!   `/usr/bin:/bin`: `/`, `/about`, `/style.css` and its hashed URL,
+//!   `/counter` and the island's `.wasm` are served, and `otool -L` (or
+//!   `ldd`) lists no libcurl. The test prints the binary's size. A page that
+//!   does not compile makes the command exit 1 with the compiler's text and
+//!   no file.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use aye::driver;
@@ -1356,5 +1365,133 @@ fn prod_serve() {
         assert!(body.starts_with(b"\0asm"), "{body:?}");
     } else {
         println!("skipped: no wasm32 clang; the island was not embedded");
+    }
+}
+
+/// Runs `aye run framework/build -- <app> -o <exe>` from the root of the
+/// checkout.
+fn run_build(app: &Path, exe: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(root().join("framework").join("build"))
+        .arg("--")
+        .arg(app)
+        .arg("-o")
+        .arg(exe)
+        .output()
+        .unwrap()
+}
+
+/// Like `start_in`, with `PATH` set to `/usr/bin:/bin` and nothing else in
+/// the environment: no `aye`, no toolchain.
+fn start_scrubbed(exe: &Path, cwd: &Path) -> App {
+    let mut child = Command::new(exe)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--port", "0"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let port = line
+        .trim()
+        .strip_prefix("listening on 127.0.0.1:")
+        .unwrap_or_else(|| panic!("unexpected first line: {line:?}"))
+        .parse()
+        .unwrap();
+    App { child, port }
+}
+
+#[test]
+fn build_prod() {
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let app = tmp.join("framework-build-prod-app");
+    let gone = tmp.join("framework-build-prod-gone");
+    let from = tmp.join("framework-build-prod-cwd");
+    let bad = tmp.join("framework-build-prod-bad");
+    for dir in [&app, &gone, &from, &bad] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    std::fs::create_dir_all(&from).unwrap();
+    let exe = from.join("pages-prod");
+
+    // A broken page ends the command with status 1, the compiler's text and
+    // no executable.
+    copy_dir(&root().join("framework/examples/pages"), &bad);
+    let page = bad.join("app/about/page.aye");
+    let mut source = std::fs::read_to_string(&page).unwrap();
+    source.push_str("\nfn broken() i32 { return missing }\n");
+    std::fs::write(&page, source).unwrap();
+    let out = run_build(&bad, &exe);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("about/page.aye"), "{stderr}");
+    assert!(stderr.contains("web build: "), "{stderr}");
+    assert!(!exe.exists());
+
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let out = run_build(&app, &exe);
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "web build failed:\n{stdout}{stderr}");
+    let size = std::fs::metadata(&exe).unwrap().len();
+    let want = format!("web build: {} ({size} bytes)\n", exe.display());
+    assert!(stdout.ends_with(&want), "{stdout:?} lacks {want:?}");
+    println!("production binary: {size} bytes");
+    let islands = app.join(".web/client/counter.wasm").is_file();
+    std::fs::rename(&app, &gone).unwrap();
+
+    let server = start_scrubbed(&exe, &from);
+    let split = |response: &str| response.split_once("\n\n").unwrap().1.to_string();
+    let home = request(&server, "GET", "/");
+    assert!(home.starts_with("HTTP/1.1 200 OK\n"), "{home}");
+    let about = request(&server, "GET", "/about");
+    assert!(about.starts_with("HTTP/1.1 200 OK\n"), "{about}");
+    assert!(about.contains("<h1>About</h1>"), "{about}");
+    let href = about
+        .split("<link rel=\"stylesheet\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no stylesheet link: {about}"));
+    assert!(
+        href.starts_with("/style.") && href != "/style.css",
+        "{href}"
+    );
+    let css = request(&server, "GET", "/style.css");
+    assert!(css.starts_with("HTTP/1.1 200 OK\n"), "{css}");
+    let hashed = request(&server, "GET", href);
+    assert!(hashed.starts_with("HTTP/1.1 200 OK\n"), "{hashed}");
+    assert_eq!(split(&hashed), split(&css));
+    let counter = request(&server, "GET", "/counter");
+    assert!(counter.starts_with("HTTP/1.1 200 OK\n"), "{counter}");
+    assert!(counter.contains("data-island=\"counter\""), "{counter}");
+    if islands {
+        let wasm = request_raw(&server, "GET", "/_web/islands/counter.wasm", "", "");
+        assert!(wasm.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    } else {
+        println!("skipped: no wasm32 clang; the island was not embedded");
+    }
+
+    // The dynamic libraries: libcurl is not among them.
+    let listing = Command::new("otool")
+        .arg("-L")
+        .arg(&exe)
+        .output()
+        .or_else(|_| Command::new("ldd").arg(&exe).output());
+    match listing {
+        Ok(listing) => {
+            let listing = String::from_utf8_lossy(&listing.stdout);
+            println!("libraries:\n{listing}");
+            assert!(!listing.contains("curl"), "{listing}");
+        }
+        Err(_) => println!("skipped: neither otool nor ldd"),
     }
 }
