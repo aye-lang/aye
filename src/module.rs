@@ -165,6 +165,7 @@ const BUILTINS: &[(&str, &str)] = &[
     ("std.heap", "Arena"),
     ("std.log", "err"),
     ("std.log", "info"),
+    ("std.log", "line"),
     ("std.testing", "allocator"),
 ];
 
@@ -784,24 +785,24 @@ impl Loader<'_> {
         let mut lock_bad = false;
         if has_url {
             urls.cache = self.cache.clone().or_else(fetch::cache_root);
-            match manifest::read_lock(&mf.dir) {
-                Err(msg) => {
-                    self.report(at(Error::new(E0119, Span::new(1, 1), msg)));
-                    lock_bad = true;
-                }
-                Ok(None) => {}
-                Ok(Some(lock)) => {
-                    let ltext = lock.text.clone();
-                    let lid = self.add_aux(lock);
-                    match manifest::parse_lock(&ltext) {
-                        Ok(old) => urls.old = old.into_iter().map(|(e, _)| e).collect(),
-                        Err(errs) => {
-                            for mut e in errs {
-                                e.span.file = lid;
-                                self.report(e);
-                            }
-                            lock_bad = true;
+        }
+        match manifest::read_lock(&mf.dir) {
+            Err(msg) => {
+                self.report(at(Error::new(E0119, Span::new(1, 1), msg)));
+                lock_bad = true;
+            }
+            Ok(None) => {}
+            Ok(Some(lock)) => {
+                let ltext = lock.text.clone();
+                let lid = self.add_aux(lock);
+                match manifest::parse_lock(&ltext) {
+                    Ok(old) => urls.old = old.into_iter().map(|(e, _)| e).collect(),
+                    Err(errs) => {
+                        for mut e in errs {
+                            e.span.file = lid;
+                            self.report(e);
                         }
+                        lock_bad = true;
                     }
                 }
             }
@@ -954,7 +955,7 @@ impl Loader<'_> {
         match manifest::write_lock(dir, &entries) {
             Ok(()) => {
                 for e in entries.iter().filter(|e| !old.contains(e)) {
-                    println!("aye.lock: {} sha256 {}", e.key, e.sha256);
+                    eprintln!("aye.lock: {} sha256 {}", e.key, e.sha256);
                 }
             }
             Err(msg) => {

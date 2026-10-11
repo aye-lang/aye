@@ -27,7 +27,7 @@
 use crate::ast::BinOp;
 use crate::diag::Span;
 use crate::oir::*;
-use crate::sema::{ConstVal, FloatTy, IntTy, Intrinsic, Layout, Type};
+use crate::sema::{ConstVal, FloatTy, IntTy, Intrinsic, Layout, LogPrefix, Type};
 use std::collections::HashSet;
 use std::fmt::Write;
 
@@ -2979,17 +2979,20 @@ impl Gen {
                     _ => format!("aye_print_s(({v}).ptr, ({v}).len, {newline})"),
                 }
             }
-            // A statement expression: flush stdout, then write the prefix,
-            // each piece and argument, and a newline to stderr.
+            // A statement expression: flush stdout, then write the prefix
+            // (none for `std.log.line`), each piece and argument, and a
+            // newline to stderr.
             Rvalue::Log {
-                error,
+                prefix,
                 pieces,
                 args,
             } => {
-                let mut s = format!(
-                    "({{ aye_rt_fflush(0); aye_rt_dprintf(2, \"{}: \");",
-                    if *error { "error" } else { "info" }
-                );
+                let mut s = String::from("({ aye_rt_fflush(0);");
+                match prefix {
+                    LogPrefix::Err => s.push_str(" aye_rt_dprintf(2, \"error: \");"),
+                    LogPrefix::Info => s.push_str(" aye_rt_dprintf(2, \"info: \");"),
+                    LogPrefix::None => {}
+                }
                 for (i, piece) in pieces.iter().enumerate() {
                     if !piece.is_empty() {
                         let _ = write!(

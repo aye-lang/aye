@@ -1,8 +1,9 @@
-// std.log: messages on stderr. Both are built into the compiler, because
+// std.log: messages on stderr. All three are built into the compiler, because
 // Aye has no variadic functions:
 //
 //     std.log.err(format, args...)    writes "error: <message>\n"
 //     std.log.info(format, args...)   writes "info: <message>\n"
+//     std.log.line(format, args...)   writes "<message>\n", no prefix
 //
 // `format` is a string literal; each `{}` in it is replaced by the next
 // argument: an integer, float, bool, []u8 or error value (its name).
