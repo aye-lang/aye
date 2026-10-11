@@ -1538,7 +1538,7 @@ fn build_prod() {
     let out = run_build(&bad, &exe);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("about/page.aye"), "{stderr}");
+    assert!(stderr.contains("_about_page/page.aye"), "{stderr}");
     assert!(stderr.contains("web build: "), "{stderr}");
     assert!(!exe.exists());
 

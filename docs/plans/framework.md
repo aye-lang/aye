@@ -436,6 +436,7 @@ the card that makes it:
 - model: sonnet
 - time box: 120 min
 - notes: Expect Linux differences in `std.fs` link handling and `stat` (the O2.5 notes). Fix only what is small and inside `framework/` or the test; anything in `std/` or `src/` is an O-card in the report. Stop rule: two failing runs of the same test → report.
+- done: 2026-10-11, Ubuntu 24.04 x86_64. `cargo test --release --test framework` exit 0, 20 passed, 0 skipped (build_prod, dev_island, dev_broken, dev_error, dev_script, dev_reload, dev_units, dev_start, dev_reload_cycle, island_build, hello, dev_reload_node, islands_glue, posts_comments, island_e2e, pages, gen_prod, web_units, posts_pages, prod_serve). `ldd` of the pages production binary (728608 bytes): `linux-vdso.so.1`, `libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6`, `libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6`, `/lib64/ld-linux-x86-64.so.2`; no libcurl. Run under `env -i`, `/`, `/about` and `/style.css` all answered 200. `scripts/downstream.sh` was skipped: the anyknown clone needs `gh auth`, unavailable in the cloud session.
 
 #### F5.9: the hello page's requests per second
 - lane: framework
@@ -490,6 +491,7 @@ O2) and the tests under `tests/modules/embed*`:
   `otool -L` show).
 
 ## Backlog
+- F1.2b: `web gen` should warn or fail on a stray `.aye` file in a route directory (a `helper.aye` beside `page.aye` is in no module since O1.26). Verify: a gen fixture with a stray file gives a clear message. (O1.26 leftover)
 - F3.1a (done 2026-10-11, 6a47ded): `web dev <app>` with a relative app path failed with "cannot start the server": `start` in `framework/dev/main.aye` passes `<app>/.web/server` to `std.process.spawn`, which resolves a bare path through PATH. Make the server path absolute (`std.path` join with the cwd, or prefix `./`) before spawning; same for the error-page fallback. Verify: `aye run framework/dev -- framework/examples/pages --port 0` prints `listening on` (found 2026-10-11 by hand; the tests pass absolute paths).
 
 Paused; cards get written if the framework lane is resumed. Source in

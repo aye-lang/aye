@@ -74,6 +74,8 @@
 //!   never writes a dependency).
 //! - `aye run`, `aye build -o`, `aye check`, `aye test --filter` and `aye
 //!   test --module` are also run through the built binary.
+//! - `aye build` of `tests/cases/embed_binary.aye` (embedded bytes with
+//!   trigraph spellings) prints nothing on stderr in every mode.
 //! - `tests/asan/X.aye`: built with `--cflags -fsanitize=address` in debug
 //!   and safe mode, the program reads freed memory and must die with a
 //!   report that contains each line of `X.asan` (`debug: ` and `safe: `
@@ -227,7 +229,13 @@ fn run_case_for(path: &Path, work: &Path, target: &'static Target) -> Result<(),
         &[Mode::Debug, Mode::Safe, Mode::Fast]
     };
     for &mode in modes {
-        let mut root = Root::single(&name(path), &src);
+        // `@embedFile` reads a file next to the source: keep the directory.
+        let shown = if src.contains("@embedFile") {
+            path.to_string_lossy().into_owned()
+        } else {
+            name(path)
+        };
+        let mut root = Root::single(&shown, &src);
         root.target = target;
         let c = driver::compile_root(root, mode).map_err(|d| join(&d))?;
         let exe = work.join(format!(
@@ -894,6 +902,38 @@ fn cli_run(work: &Path) -> Result<(), String> {
             "`aye run` failed: {}",
             String::from_utf8_lossy(&out.stderr)
         ));
+    }
+    Ok(())
+}
+
+/// `aye build` of a program that embeds bytes with trigraph spellings
+/// (`??(`) prints nothing on stderr in every mode, the program prints its
+/// golden, and `aye emit-c` writes the same C twice.
+fn cli_build_embed_binary(work: &Path) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = "tests/cases/embed_binary.aye";
+    let want = read(&root.join(src).with_extension("out")).unwrap();
+    for mode in ["debug", "safe", "fast"] {
+        let exe = work.join(format!("embed_binary_{mode}"));
+        let (_, err, code) = aye(
+            root,
+            &["build", src, "--mode", mode, "-o", exe.to_str().unwrap()],
+        )?;
+        if code != Some(0) || !err.is_empty() {
+            return Err(format!("[{mode}] `aye build` ({code:?}) printed:\n{err}"));
+        }
+        let out = Command::new(&exe).output().map_err(|e| e.to_string())?;
+        if !out.status.success() || String::from_utf8_lossy(&out.stdout) != want {
+            return Err(format!(
+                "[{mode}] the program printed:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            ));
+        }
+    }
+    let (c1, err, code) = aye(root, &["emit-c", src])?;
+    let (c2, _, _) = aye(root, &["emit-c", src])?;
+    if code != Some(0) || !err.is_empty() || c1 != c2 {
+        return Err(format!("`aye emit-c` is not deterministic: {code:?} {err}"));
     }
     Ok(())
 }
@@ -2025,6 +2065,11 @@ fn main() {
         add(&mut jobs, "cli/aye build -o".to_string(), move || {
             cli_build_link(w)
         });
+        add(
+            &mut jobs,
+            "cli/aye build embed_binary".to_string(),
+            move || cli_build_embed_binary(w),
+        );
         add(
             &mut jobs,
             "cli/aye build --no-link".to_string(),
