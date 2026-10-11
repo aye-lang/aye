@@ -2724,6 +2724,25 @@ mod tests {
             text.len()
         ));
         let _ = std::fs::remove_dir_all(&dir);
+        // An example with a URL dependency names `file:///tmp/lib.tar.gz`:
+        // that archive is made here, and the cache is inside `dir`.
+        let url = "file:///tmp/lib.tar.gz";
+        let fetched = text.contains(url);
+        let text = text.replace(url, &format!("file://{}/lib.tar.gz", dir.display()));
+        if fetched {
+            let src = dir.join("src/lib");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(src.join("lib.aye"), "pub fn one() i64 {\n    return 1\n}\n").unwrap();
+            let tar = std::process::Command::new("tar")
+                .arg("-czf")
+                .arg(dir.join("lib.tar.gz"))
+                .arg("-C")
+                .arg(dir.join("src"))
+                .arg("lib")
+                .status()
+                .unwrap();
+            assert!(tar.success());
+        }
         for part in text.split("// file: ").skip(1) {
             let (path, body) = part.split_once('\n').unwrap();
             let p = dir.join(path);
@@ -2733,6 +2752,7 @@ mod tests {
         let main = dir.join("main.aye");
         let mut root = driver::Root::load(main.to_str().unwrap()).unwrap();
         root.target = target;
+        root.cache = Some(dir.join("cache"));
         let r = driver::front_end(root, None).result.map(|_| ());
         let _ = std::fs::remove_dir_all(&dir);
         r
@@ -2756,10 +2776,6 @@ mod tests {
                 };
                 assert!(driver::find_target(&target(info.wrong)).is_err());
                 assert!(driver::find_target(&target(info.fix)).is_ok());
-                continue;
-            }
-            // E0122 needs a download: O4.3 reports it and checks its examples.
-            if info.code == E0122 {
                 continue;
             }
             // E0118's examples are checked for a target without `std.net`.

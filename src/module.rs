@@ -23,8 +23,8 @@ use crate::ast::{self, ArmBody, ExprKind, Item as AstItem, StmtKind, TypeExprKin
 use crate::codes::*;
 use crate::diag::{Error, Span};
 use crate::driver::Target;
-use crate::manifest::{self, ManifestFile, Source};
-use crate::{cimport, lexer, parser};
+use crate::manifest::{self, LockEntry, ManifestFile, Source};
+use crate::{cimport, fetch, lexer, parser};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
@@ -431,6 +431,18 @@ struct DepDir {
     dir: PathBuf,
 }
 
+/// The URL dependencies of a manifest while they are fetched.
+struct UrlDeps {
+    /// The manifest, for the spans of the errors.
+    file: u16,
+    /// The entries of `aye.lock` that was read.
+    old: Vec<LockEntry>,
+    /// The cache directory, if one can be found.
+    cache: Option<PathBuf>,
+    /// The archives had so far, with the line of the dependency.
+    pinned: Vec<(LockEntry, Span)>,
+}
+
 struct Loader<'a> {
     /// The root module's directory: `import a.b` is `base/a/b`.
     base: &'a Path,
@@ -438,6 +450,8 @@ struct Loader<'a> {
     deps: Vec<DepDir>,
     /// Keys of dependencies that could not be had (already reported).
     broken_deps: Vec<String>,
+    /// The cache of URL dependencies; `None` is the environment's.
+    cache: Option<PathBuf>,
     /// Add the doc comments' examples as tests (`aye test`).
     doc_tests: bool,
     /// What the program is built for: it lacks some std modules.
@@ -471,11 +485,13 @@ pub fn load(
     doc_tests: bool,
     target: &Target,
     manifest: Option<ManifestFile>,
+    cache: Option<PathBuf>,
 ) -> (Vec<SourceFile>, Result<ast::File, Vec<Error>>) {
     let mut l = Loader {
         base,
         deps: Vec::new(),
         broken_deps: Vec::new(),
+        cache,
         doc_tests,
         target,
         files: Vec::new(),
@@ -754,6 +770,42 @@ impl Loader<'_> {
                 return;
             }
         };
+        let keys: Vec<String> = manifest.deps.iter().map(|d| d.key.clone()).collect();
+        let has_url = manifest
+            .deps
+            .iter()
+            .any(|d| matches!(d.source, Source::Url(_)));
+        let mut urls = UrlDeps {
+            file: id,
+            old: Vec::new(),
+            cache: None,
+            pinned: Vec::new(),
+        };
+        let mut lock_bad = false;
+        if has_url {
+            urls.cache = self.cache.clone().or_else(fetch::cache_root);
+            match manifest::read_lock(&mf.dir) {
+                Err(msg) => {
+                    self.report(at(Error::new(E0119, Span::new(1, 1), msg)));
+                    lock_bad = true;
+                }
+                Ok(None) => {}
+                Ok(Some(lock)) => {
+                    let ltext = lock.text.clone();
+                    let lid = self.add_aux(lock);
+                    match manifest::parse_lock(&ltext) {
+                        Ok(old) => urls.old = old.into_iter().map(|(e, _)| e).collect(),
+                        Err(errs) => {
+                            for mut e in errs {
+                                e.span.file = lid;
+                                self.report(e);
+                            }
+                            lock_bad = true;
+                        }
+                    }
+                }
+            }
+        }
         for d in manifest.deps {
             let key = &d.key;
             if key == "std" || lexer::is_keyword(key) || !manifest::is_ident(key) {
@@ -766,24 +818,35 @@ impl Loader<'_> {
                 self.report(at(Error::new(E0120, d.span, msg)));
                 continue;
             }
-            let Source::Path(p) = &d.source else {
-                let msg = format!(
-                    "dependency `{key}`: URL dependencies are not supported yet; use a `path`"
-                );
-                self.report(at(Error::new(E0121, d.span, msg)));
-                self.broken_deps.push(d.key);
-                continue;
+            let dir = match &d.source {
+                Source::Path(p) => {
+                    let dir = normalize(&mf.dir.join(p));
+                    if !dir.is_dir() {
+                        let msg = format!(
+                            "dependency `{key}`: the path `{p}` is not a directory (looked for {})",
+                            dir.display()
+                        );
+                        self.report(at(Error::new(E0121, d.span, msg)));
+                        self.broken_deps.push(d.key);
+                        continue;
+                    }
+                    dir
+                }
+                Source::Url(url) => {
+                    let got = if lock_bad {
+                        None
+                    } else {
+                        self.fetch_dep(&mut urls, key, url, d.span)
+                    };
+                    match got {
+                        Some(dir) => dir,
+                        None => {
+                            self.broken_deps.push(d.key);
+                            continue;
+                        }
+                    }
+                }
             };
-            let dir = normalize(&mf.dir.join(p));
-            if !dir.is_dir() {
-                let msg = format!(
-                    "dependency `{key}`: the path `{p}` is not a directory (looked for {})",
-                    dir.display()
-                );
-                self.report(at(Error::new(E0121, d.span, msg)));
-                self.broken_deps.push(d.key);
-                continue;
-            }
             match ManifestFile::read(&dir) {
                 Err(msg) => {
                     self.report(at(Error::new(E0121, d.span, msg)));
@@ -819,6 +882,88 @@ impl Loader<'_> {
                 }
             }
             self.deps.push(DepDir { key: d.key, dir });
+        }
+        if has_url && !lock_bad {
+            self.write_lock(&mf.dir, urls, &keys);
+        }
+    }
+
+    /// The URL dependency `key`: in the cache, downloaded if need be. A
+    /// failure is reported and gives `None`.
+    fn fetch_dep(
+        &mut self,
+        urls: &mut UrlDeps,
+        key: &str,
+        url: &str,
+        span: Span,
+    ) -> Option<PathBuf> {
+        let mut span = span;
+        span.file = urls.file;
+        let locked = urls.old.iter().find(|e| e.key == key && e.url == url);
+        let Some(cache) = urls.cache.clone() else {
+            let msg = format!(
+                "dependency `{key}`: there is no cache directory; set AYE_CACHE, XDG_CACHE_HOME or HOME"
+            );
+            self.report(Error::new(E0121, span, msg));
+            return None;
+        };
+        match fetch::fetch(&cache, url, locked.map(|e| e.sha256.as_str())) {
+            Ok(got) => {
+                let entry = LockEntry {
+                    key: key.to_string(),
+                    url: url.to_string(),
+                    sha256: got.sha256,
+                };
+                urls.pinned.push((entry, span));
+                Some(got.dir)
+            }
+            Err(fetch::Fail::Unavailable(why)) => {
+                let msg = format!("dependency `{key}`: {why}");
+                self.report(Error::new(E0121, span, msg));
+                None
+            }
+            Err(fetch::Fail::Mismatch { got }) => {
+                let want = locked.map(|e| e.sha256.as_str()).unwrap_or_default();
+                let msg = format!(
+                    "dependency `{key}`: {url} hashes to {got}, but aye.lock pins {want}; if the change is intended, delete the line of `{key}` in aye.lock and build again"
+                );
+                self.report(Error::new(E0122, span, msg));
+                None
+            }
+        }
+    }
+
+    /// Write `aye.lock` if its entries changed: what was pinned now, and the
+    /// old entries of the keys that are still in `[deps]` but not pinned
+    /// (they failed). Entries of other keys are dropped.
+    fn write_lock(&mut self, dir: &Path, urls: UrlDeps, keys: &[String]) {
+        let file = urls.file;
+        let span = urls.pinned.first().map(|(_, s)| *s);
+        let mut entries: Vec<LockEntry> = urls.pinned.into_iter().map(|(e, _)| e).collect();
+        for e in &urls.old {
+            if keys.contains(&e.key) && !entries.iter().any(|n| n.key == e.key) {
+                entries.push(e.clone());
+            }
+        }
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        let mut old = urls.old;
+        old.sort_by(|a, b| a.key.cmp(&b.key));
+        if entries == old {
+            return;
+        }
+        match manifest::write_lock(dir, &entries) {
+            Ok(()) => {
+                for e in entries.iter().filter(|e| !old.contains(e)) {
+                    println!("aye.lock: {} sha256 {}", e.key, e.sha256);
+                }
+            }
+            Err(msg) => {
+                let span = span.unwrap_or(Span {
+                    file,
+                    ..Span::new(1, 1)
+                });
+                self.report(Error::new(E0121, span, msg));
+            }
         }
     }
 

@@ -1,0 +1,7 @@
+// The top module of a URL dependency: the folder of the archive. Inside it
+// `import parse` is tinyjson/parse.
+import parse
+
+pub fn count(text: []u8) i64 {
+    return parse.digits(text)
+}

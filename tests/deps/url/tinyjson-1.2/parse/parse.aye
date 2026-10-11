@@ -1,0 +1,9 @@
+pub fn digits(text: []u8) i64 {
+    var n: i64 = 0
+    for i in 0..text.len {
+        if text[i] >= '0' && text[i] <= '9' {
+            n += 1
+        }
+    }
+    return n
+}

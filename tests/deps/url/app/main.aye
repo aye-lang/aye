@@ -1,0 +1,9 @@
+// An app with a URL dependency (aye.toml.in becomes aye.toml in the test,
+// with the path of the tarball).
+import tinyjson
+import tinyjson.parse
+
+pub fn main() {
+    @println(tinyjson.count("a1b22c333"))
+    @println(parse.digits("42"))
+}

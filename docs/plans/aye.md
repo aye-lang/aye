@@ -104,21 +104,7 @@ sources `tests/spec.rs` reads; they merge one after the other.
 - time box: 45 min
 - notes: three runs each, report the median.
 
-## Cards: O4 dependencies (current; design in decisions.md "Dependencies (O4)")
-
-#### O4.3: URL dependencies, aye.lock, offline cache
-- lane: aye
-- goal: `tinyjson = { url = "file:///.../tinyjson-1.2.tar.gz" }` (and `https://`) is downloaded with `curl -fsSL --proto =https,file --proto-redir =https` into `<cache>/tmp/`, hashed with SHA-256 in Rust, unpacked with `tar -xzf` (one top folder stripped), renamed into `<cache>/sha256/<hex>/`. `aye.lock` is written when the entry is missing or its url changed (sorted, temp file + rename, stdout `aye.lock: tinyjson sha256 <hex>`). Locked mismatch is E0122 (lock and cache untouched); locked and cached rebuilds never run `curl`; a failed download is E0121; a non-https/file scheme or non-`.tar.gz`/`.tgz` suffix is E0119. Cache root: `$AYE_CACHE`, else `$XDG_CACHE_HOME/aye`, else `~/.cache/aye`. Add E0122 to the code table. Delete the remaining "Not implemented yet" sentence in spec §12.
-- serves: O7
-- files: `src/fetch.rs` (new: curl/tar, cache, lock write), `src/sha256.rs` (new; FIPS 180 vectors as unit tests), `src/manifest.rs` (lock read/write), `src/driver.rs`, `src/codes.rs`, `tests/deps.rs` (new test target in `Cargo.toml`), `docs/spec.md` §12
-- golden layout: `tests/deps/url/app/{main.aye,aye.toml.in}` (`url = "file://@TARBALL@"`), `tests/deps/url/app.out`, `tests/deps/url/tinyjson-1.2/{tinyjson.aye,parse/parse.aye}` packed at test time; `tests/deps.rs`: (1) first build matches `app.out` and the lock has `sha256 = "[0-9a-f]{64}"`, (2) delete the tarball and rebuild offline, (3) zero the lock hash, clear the cache, restore the tarball → E0122 with the lock unchanged, (4) missing file with no cache → E0121, (5) `http://` → E0119
-- verify: `cargo test --release --test deps` exit 0; `cargo test --release --lib` exit 0; `cargo test --release --test spec` exit 0
-- depends on: O4.2
-- parallel with: anything not touching `src/driver.rs`
-- where: local (or cloud: no network needed, `file://` only)
-- model: sonnet
-- time box: 45 min
-- notes: never pass `-P` to tar; tests must not touch the network or the real `~/.cache`.
+## Cards: O4 dependencies (O4.1–O4.3 done; design in decisions.md "Dependencies (O4)")
 
 ## Cards: O2 targets (O2.1–O2.4 done; leftovers in the backlog)
 
@@ -145,6 +131,11 @@ brackets.
 - O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
 - O1.17b closed (decisions.md "Round 2"): macOS syspolicyd assesses 2-3 new executables at a time, golden links 396, ~150 s of serial stall; `-Wl,-no_adhoc_codesign` kills the binary, `-mmacosx-version-min` no effect, mode overlap inside the noise. Decision: macOS golden stays; heavy verification runs on Linux (cloud lane, golden 84 s there); the user may try the Developer Tools exemption for the terminal app.
+- O4.3a the `aye.lock: <key> sha256 <hex>` notice goes to stderr, not stdout (it precedes program output on the first `aye run` and the C text of `aye emit-c`; O4.3 report). Verify: `tests/deps.rs` step 1 checks stderr; `app.out` unchanged.
+- O4.3b `aye.lock` is read only when the manifest has a URL dep, so a malformed stale lock is silent (O4.3 report); read it whenever it exists. Verify: an `errors` case with a bad lock and no URL deps gives E0119.
+- O1.18a `std.log.line(format, args...)`: stderr, newline, no prefix; `std.log` is a compiler builtin (`src/sema.rs`, `module.rs`, `oir.rs`, `cgen.rs`, `codes.rs`), so this waits for O1.19 and O4.3 to merge; also the `error: `/`info: ` prefix clause in the §15 `std.log` line and a 2-line example in `### std.log`. Verify: a `tests/cases` golden with `.stderr`; `aye spec | wc -c` under 28000.
+- O1.19 E0006 for `return`/`break` as a match-arm expression names the fix (wrap in a block) or allows it (2026-10-11 eval, the only compile error in 15 runs). Verify: an `errors/` golden with the hint; `codes` example.
+- O1.20 `aye check <missing file>` says to write the file first (eval: http_hello probes `aye check` on a missing file every run; low value). Verify: a CLI golden.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
