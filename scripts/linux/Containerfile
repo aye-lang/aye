@@ -2,6 +2,7 @@
 # RUSTUP_HOME and CARGO_HOME must match scripts/setup-ubuntu.sh.
 FROM ubuntu:24.04
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo SDL_VIDEODRIVER=dummy
+ENV AYE_WASI_CLANG=/opt/wasi-sdk/bin/clang AYE_WASI_SYSROOT=/opt/wasi-sdk/share/wasi-sysroot AYE_WASI_RESOURCE_DIR=/opt/wasi-sdk/resource
 COPY scripts/setup-ubuntu.sh /tmp/setup-ubuntu.sh
 RUN sh /tmp/setup-ubuntu.sh && rm /tmp/setup-ubuntu.sh
 WORKDIR /work
