@@ -1,0 +1,20 @@
+// The home page of the posts app: `/` lists the posts in the order of the file.
+
+import lib.posts
+import web.Error
+import web.Request
+import web.Response
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let all = try posts.all()
+    let html = res.html()
+    try html.raw("<h1>Posts</h1><ul>")
+    for post in all {
+        try html.raw("<li><a href=\"/posts/")
+        try html.text(post.slug)
+        try html.raw("\">")
+        try html.text(post.title)
+        try html.raw("</a></li>")
+    }
+    try html.raw("</ul>")
+}

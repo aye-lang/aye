@@ -1,0 +1,32 @@
+// A post of the posts app: `/posts/<slug>` shows the post and its comments. A
+// slug that names no post is `Error.NotFound`, answered with `not-found.aye`.
+
+import lib.posts
+import std.text.Builder
+import web.Error
+import web.Request
+import web.Response
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let post = posts.bySlug(req.param("slug")) orelse return Error.NotFound
+    let found = try posts.comments(req.arena, post.slug)
+    let html = res.html()
+    try html.raw("<article><h1>")
+    try html.text(post.title)
+    try html.raw("</h1>")
+    try html.raw(post.body_html)
+    try html.raw("</article><h2>")
+    var count = Builder.init(req.arena)
+    try count.appendUint(found.len as u64)
+    try count.append(" comments")
+    try html.raw(count.bytes())
+    try html.raw("</h2><ul class=\"comments\">")
+    for c in found {
+        try html.raw("<li><strong>")
+        try html.text(c.name)
+        try html.raw("</strong> ")
+        try html.text(c.text)
+        try html.raw("</li>")
+    }
+    try html.raw("</ul>")
+}

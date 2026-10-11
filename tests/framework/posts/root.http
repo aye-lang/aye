@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 334
+
+<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><h1>Posts</h1><ul><li><a href="/posts/hello">Hello, world</a></li><li><a href="/posts/less-is-more">Less &lt; More</a></li><li><a href="/posts/on-files">Posts live in a file</a></li></ul></body></html>

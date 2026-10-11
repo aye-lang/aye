@@ -1,0 +1,6 @@
+HTTP/1.1 404 Not Found
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 189
+
+<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><h1>Not Found</h1><p>Nothing at /nope.</p></body></html>

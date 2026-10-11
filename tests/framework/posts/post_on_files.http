@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 349
+
+<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><article><h1>Posts live in a file</h1><p>The server reads this file on the first request that needs it.</p><p>Comments are kept in memory only.</p></article><h2>0 comments</h2><ul class="comments"></ul></body></html>

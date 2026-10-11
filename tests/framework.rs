@@ -1446,3 +1446,47 @@ fn prod_serve() {
         println!("skipped: no wasm32 clang; the island was not embedded");
     }
 }
+
+/// A method, a path and the file of `tests/framework/posts/` with its
+/// response, for the posts app.
+const POSTS_CASES: &[(&str, &str, &str)] = &[
+    ("GET", "/", "root.http"),
+    ("GET", "/posts/hello", "post_hello.http"),
+    ("GET", "/posts/less-is-more", "post_less_is_more.http"),
+    ("GET", "/posts/on-files", "post_on_files.http"),
+    ("GET", "/posts/nope", "post_missing.http"),
+    ("GET", "/nope", "missing.http"),
+];
+
+#[test]
+fn posts_pages() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-posts-app");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/posts"), &app);
+    run_gen(&app, &[]);
+    let web = app.join(".web");
+    let check = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .arg("check")
+        .arg(&web)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "aye check .web failed:\n{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let exe = build_dir("posts", &web);
+    let data = app.join("data/posts.json");
+    let server = start_with(&exe, &["--posts", data.to_str().unwrap()]);
+    for (method, path, file) in POSTS_CASES {
+        let want =
+            std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap();
+        assert_eq!(
+            scrub(&request(&server, method, path)),
+            want,
+            "{method} {path}"
+        );
+    }
+}

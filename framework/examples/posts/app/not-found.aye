@@ -1,0 +1,11 @@
+// The page of a path that nothing answers: status 404, in the root layout.
+
+import web.Error
+import web.Html
+import web.Request
+
+pub fn notFound(req: *Request, h: *mut Html) Error!void {
+    try h.raw("<h1>Not Found</h1><p>Nothing at ")
+    try h.text(req.path)
+    try h.raw(".</p>")
+}
