@@ -52,7 +52,7 @@ first part of FD1/FD2 (literal routes, a page, the 404).
 |---|---|---|---|
 | F0 | Design | `docs/framework.md` answers the open choices | done (user questions open) |
 | F1 | Hello-world route served by an Aye HTTP server | `cargo test --release --test framework` | done (F1.1, 2026-10-10) |
-| F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c in flight, then F1.2, F1.3 |
+| F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c done, F1.2 in flight, then F1.3 |
 | F3 | Dev server (FD5) | edit → new response, scripted | paused |
 | F4 | Client code (FD6) | an island under Node 22 and in Chrome | paused |
 | F5 | Production build, numbers, the example app (FD7–FD9) | FD7–FD9 checks | paused |
@@ -66,8 +66,6 @@ None open; F1.1 is in `done.md`.
 Paused; cards get written if the framework lane is resumed. Source in
 brackets.
 
-- F1.1b 405 with an `Allow` header for a known path and the wrong method (`docs/framework.md` §2); verify: a `POST /` case in `tests/framework.rs`.
-- F1.1c `req.header(name)` and `HEAD` answered from `get` (`docs/framework.md` §2); verify: a `HEAD /` case in `tests/framework.rs`.
 - F1.2 `web gen <app>` scans `app/` (Next.js names, `[slug]`) and writes `.web/`; `/`, `/about`, unknown path (needs O1.5, symlinks) (old F1 table; `docs/framework.md` F1).
 - F1.3 one API route returning JSON with a dynamic segment, 405 for POST (needs O3.1) (old F1 table).
 - F2–F5 rows: written when the lane resumes; the Aye steps each phase needs are in `docs/framework.md`, "Aye-lane steps by phase".
