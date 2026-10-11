@@ -19,6 +19,7 @@
 | M10 Threads | done | 2026-10-10 | nothing; the TSan golden runs with Homebrew clang (P2.9a) |
 | M11 cimport | done | 2026-10-07 | nothing |
 | M12 Coroutines | done | 2026-10-07 | nothing |
+| O13 server gate (O7.2) | done | 2026-10-11 | nothing; 3 of 3 passed, 1 `aye check` each (stamp 20261011-181047) |
 
 Each milestone ends with an acceptance program that must pass `cargo test`. A
 milestone is done when its acceptance tests pass. Anything not listed is out of
@@ -416,3 +417,23 @@ thread each, handing control back and forth through two channels.
   browser, `fast` mode: iterating a generator 1e6 times took 4.7 to 7.7 s
   and takes 0.31 s; 100k two-value generators 4.3 s, now 0.39 s; 100k
   async chains of three functions 13 to 15 s, now 2.7 s.
+
+## O13: server gate (O7.2)
+
+- **Task:** `tests/eval/rest_json/`: a JSON REST service on `std.http` and
+  `std.json` (`GET /items`, `POST /items`, `GET /items/<id>`, 404 and 400
+  errors, `Content-Type: application/json`). `check.sh` builds `main.aye`,
+  starts it on a free port, runs 12 scripted `curl` cases and compares the
+  bodies as parsed JSON. `python3 scripts/eval.py --self-test` passes.
+- **Run:** 2026-10-11, `python3 scripts/eval.py --runs 3 --tasks rest_json`,
+  model `sonnet`, fresh agents with `aye spec` and `aye doc --signatures`.
+  Transcripts: `target/eval/20261011-181047/` (untracked).
+
+| Run | Pass | Turns | `aye check` calls | Rounds with compile errors |
+| --- | --- | --- | --- | --- |
+| 1 | yes | 10 | 1 | 0 |
+| 2 | yes | 10 | 1 | 0 |
+| 3 | yes | 11 | 1 | 0 |
+
+- **Result:** O13 holds: 3 of 3 runs passed `check.sh` (the `curl` sequence)
+  with one `aye check` call each, and that call was clean (limit: two rounds).

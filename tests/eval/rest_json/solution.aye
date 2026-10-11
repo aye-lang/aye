@@ -1,0 +1,138 @@
+import std
+import std.heap.Arena
+import std.heap.General
+import std.http
+import std.http.Header
+import std.http.Request
+import std.http.Response
+import std.json
+import std.list.List
+import std.mem.Allocator
+import std.sync.Mutex
+import std.text.Builder
+
+struct App {
+    lock: Mutex
+    names: List([]u8)
+    keep: Allocator
+}
+
+fn appendItem(b: *mut Builder, id: usize, name: []u8) !void {
+    try b.append("{\"id\":")
+    try b.appendUint(id as u64)
+    try b.append(",\"name\":")
+    var s = json.Value.String { value: name }
+    try json.write(b, &s)
+    try b.append("}")
+}
+
+fn list(app: *mut App, alloc: Allocator) ![]u8 {
+    var b = Builder.init(alloc)
+    try b.append("{\"items\":[")
+    app.lock.lock()
+    defer app.lock.unlock()
+    let names = app.names.items()
+    for i in 0..names.len {
+        if i > 0 {
+            try b.append(",")
+        }
+        try appendItem(&mut b, i + 1, names[i])
+    }
+    try b.append("]}")
+    return b.bytes()
+}
+
+fn create(app: *mut App, body: []u8, res: *mut Response, alloc: Allocator) !void {
+    var arena = Arena.init(alloc)
+    var v = json.parse(&mut arena, body) catch |e| {
+        res.status = 400
+        res.body = "{\"error\":\"bad request\"}"
+        return
+    }
+    let name = v.get("name") orelse {
+        res.status = 400
+        res.body = "{\"error\":\"bad request\"}"
+        return
+    }
+    let text = name.asString() orelse {
+        res.status = 400
+        res.body = "{\"error\":\"bad request\"}"
+        return
+    }
+    let copy = try app.keep.alloc(0 as u8, text.len)
+    std.mem.copy(copy, text)
+    app.lock.lock()
+    defer app.lock.unlock()
+    try app.names.append(copy)
+    var b = Builder.init(alloc)
+    try appendItem(&mut b, app.names.len(), copy)
+    res.status = 201
+    res.body = b.bytes()
+}
+
+fn one(app: *mut App, idText: []u8, res: *mut Response, alloc: Allocator) !void {
+    let id = std.text.parseInt(idText) catch |e| {
+        res.status = 404
+        res.body = "{\"error\":\"not found\"}"
+        return
+    }
+    app.lock.lock()
+    defer app.lock.unlock()
+    if id < 1 || id > app.names.len() as i64 {
+        res.status = 404
+        res.body = "{\"error\":\"not found\"}"
+        return
+    }
+    var b = Builder.init(alloc)
+    try appendItem(&mut b, id as usize, app.names.items()[(id - 1) as usize])
+    res.body = b.bytes()
+}
+
+fn route(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) !void {
+    if std.text.eql(req.target, "/items") {
+        if std.text.eql(req.method, "GET") {
+            res.body = try list(app, alloc)
+            return
+        }
+        if std.text.eql(req.method, "POST") {
+            try create(app, req.body, res, alloc)
+            return
+        }
+    } else if std.text.startsWith(req.target, "/items/") && std.text.eql(req.method, "GET") {
+        try one(app, req.target[7..], res, alloc)
+        return
+    }
+    res.status = 404
+    res.body = "{\"error\":\"not found\"}"
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    let hs = alloc.alloc(Header { name: "Content-Type", value: "application/json" }, 1) catch |e| {
+        res.status = 500
+        return
+    }
+    res.headers = hs
+    route(app, req, res, alloc) catch |e| {
+        res.status = 500
+        res.body = "{\"error\":\"internal\"}"
+    }
+}
+
+fn serve(alloc: Allocator) !void {
+    let args = try std.os.args(alloc)
+    defer alloc.free(args)
+    if args.len != 2 {
+        std.log.err("usage: items <port>")
+        return
+    }
+    let port = try std.text.parseInt(args[1])
+    var app = App { lock: Mutex.init(), names: List([]u8).init(alloc), keep: alloc }
+    var s = try http.listen(App, "127.0.0.1", port as u16, &mut app, handle)
+    try s.run(alloc)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    try serve(gpa.allocator())
+}
