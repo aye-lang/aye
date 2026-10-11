@@ -153,18 +153,49 @@ void aye_fs_free(void *p) {
     *(void **)p = aye_fs_lists[c];
     aye_fs_lists[c] = p;
 }
+/* the same allocator under its libc names, for `extern fn malloc` and C */
+void *aye_fs_malloc_c(size_t) __asm__("malloc");
+void aye_fs_free_c(void *) __asm__("free");
+void *aye_fs_calloc_c(size_t, size_t) __asm__("calloc");
+void *aye_fs_realloc_c(void *, size_t) __asm__("realloc");
+void *aye_fs_malloc_c(size_t n) { return aye_fs_malloc(n); }
+void aye_fs_free_c(void *p) { aye_fs_free(p); }
+void *aye_fs_calloc_c(size_t n, size_t m) {
+    size_t total;
+    if (__builtin_mul_overflow(n, m, &total)) return 0;
+    void *p = aye_fs_malloc(total);
+    if (p) aye_fs_memset(p, 0, total);
+    return p;
+}
+void *aye_fs_realloc_c(void *p, size_t n) {
+    if (!p) return aye_fs_malloc(n);
+    size_t old = (size_t)1 << *(size_t *)((uint8_t *)p - 16);
+    if (n <= old) return p;
+    void *q = aye_fs_malloc(n);
+    if (!q) return 0;
+    aye_fs_memcpy(q, p, old);
+    aye_fs_free(p);
+    return q;
+}
 /* printf and dprintf: `%s %.*s %c %d %u %x %g %%` with `l` and `ll`,
    written to `env.aye_write` in pieces of at most 128 bytes. */
 typedef struct {
     int fd;
     size_t n;
     char buf[128];
+    char *dst; /* snprintf: into dst (cap bytes), counting what the whole text needs */
+    size_t cap, total;
 } aye_fs_out;
 static void aye_fs_flush(aye_fs_out *o) {
     if (o->n) aye_js_write(o->fd, o->buf, o->n);
     o->n = 0;
 }
 static void aye_fs_put(aye_fs_out *o, const char *s, size_t n) {
+    if (o->dst) {
+        for (size_t i = 0; i < n && o->total + i + 1 < o->cap; i++) o->dst[o->total + i] = s[i];
+        o->total += n;
+        return;
+    }
     if (n >= sizeof o->buf) {
         aye_fs_flush(o);
         aye_js_write(o->fd, s, n);
@@ -243,6 +274,24 @@ static void aye_fs_putg(aye_fs_out *o, double x) {
     }
     aye_fs_put(o, t, (size_t)n);
 }
+/* `%.Nf`: the value times 10^N rounded half up as an integer (so not
+   exact at ties); `%g` text above 2^63 */
+static void aye_fs_putf(aye_fs_out *o, double x, int prec) {
+    if (x != x || x > 1.7976931348623157e308 || x < -1.7976931348623157e308) return aye_fs_putg(o, x);
+    if (x < 0 || (x == 0 && 1 / x < 0)) {
+        aye_fs_put(o, "-", 1);
+        x = -x;
+    }
+    double scale = aye_fs_pow10(prec), s = x * scale + 0.5;
+    if (prec > 40 || s >= 9.2e18) return aye_fs_putg(o, x);
+    unsigned long long v = (unsigned long long)s, d = (unsigned long long)scale;
+    aye_fs_putu(o, v / d, 10);
+    if (!prec) return;
+    aye_fs_put(o, ".", 1);
+    char t[48];
+    for (int i = prec - 1; i >= 0; i--, v /= 10) t[i] = (char)('0' + v % 10);
+    aye_fs_put(o, t, (size_t)prec);
+}
 static void aye_fs_vformat(aye_fs_out *o, const char *f, __builtin_va_list ap) {
     for (; *f; f++) {
         if (*f != '%') {
@@ -254,9 +303,14 @@ static void aye_fs_vformat(aye_fs_out *o, const char *f, __builtin_va_list ap) {
         }
         f++;
         int prec = -1, l = 0;
-        if (*f == '.' && f[1] == '*') {
-            prec = __builtin_va_arg(ap, int);
-            f += 2;
+        if (*f == '.') {
+            f++;
+            if (*f == '*') {
+                prec = __builtin_va_arg(ap, int);
+                f++;
+            } else {
+                for (prec = 0; *f >= '0' && *f <= '9'; f++) prec = prec * 10 + (*f - '0');
+            }
         }
         while (*f == 'l') l++, f++;
         switch (*f) {
@@ -285,10 +339,22 @@ static void aye_fs_vformat(aye_fs_out *o, const char *f, __builtin_va_list ap) {
             break;
         }
         case 'g': aye_fs_putg(o, __builtin_va_arg(ap, double)); break;
+        case 'f': aye_fs_putf(o, __builtin_va_arg(ap, double), prec < 0 ? 6 : prec); break;
         case '%': aye_fs_put(o, "%", 1); break;
         }
     }
     aye_fs_flush(o);
+}
+/* writes `size - 1` bytes at most and a NUL; returns the length the whole text needs */
+int aye_fs_snprintf(char *, size_t, const char *, ...) __asm__("snprintf");
+int aye_fs_snprintf(char *buf, size_t size, const char *f, ...) {
+    aye_fs_out o = {.dst = buf, .cap = size};
+    __builtin_va_list ap;
+    __builtin_va_start(ap, f);
+    aye_fs_vformat(&o, f, ap);
+    __builtin_va_end(ap);
+    if (size) buf[o.total < size ? o.total : size - 1] = 0;
+    return (int)o.total;
 }
 int aye_fs_printf(const char *f, ...) {
     aye_fs_out o = {1, 0};
@@ -310,6 +376,51 @@ int aye_fs_puts(const char *s) {
     aye_js_write(1, s, aye_fs_strlen(s));
     aye_js_write(1, "\n", 1);
     return 1;
+}
+/* small stdlib and string functions that programs declare with `extern fn` */
+int aye_fs_abs(int) __asm__("abs");
+long aye_fs_labs(long) __asm__("labs");
+int aye_fs_abs(int x) { return x < 0 ? -x : x; }
+long aye_fs_labs(long x) { return x < 0 ? -x : x; }
+typedef struct {
+    int quot, rem;
+} aye_fs_div_t;
+aye_fs_div_t aye_fs_div(int, int) __asm__("div");
+aye_fs_div_t aye_fs_div(int a, int b) { return (aye_fs_div_t){a / b, a % b}; }
+char *aye_fs_strchr(const char *, int) __asm__("strchr");
+char *aye_fs_strchr(const char *s, int c) {
+    for (;; s++) {
+        if (*s == (char)c) return (char *)s;
+        if (!*s) return 0;
+    }
+}
+/* heap sort: any element size, no allocation */
+static void aye_fs_swap(uint8_t *a, uint8_t *b, size_t n) {
+    while (n--) {
+        uint8_t t = *a;
+        *a++ = *b;
+        *b++ = t;
+    }
+}
+static void aye_fs_sift(uint8_t *base, size_t i, size_t n, size_t size, int (*cmp)(const void *, const void *)) {
+    for (;;) {
+        size_t c = 2 * i + 1;
+        if (c >= n) return;
+        if (c + 1 < n && cmp(base + c * size, base + (c + 1) * size) < 0) c++;
+        if (cmp(base + i * size, base + c * size) >= 0) return;
+        aye_fs_swap(base + i * size, base + c * size, size);
+        i = c;
+    }
+}
+void aye_fs_qsort(void *, size_t, size_t, int (*)(const void *, const void *)) __asm__("qsort");
+void aye_fs_qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *)) {
+    uint8_t *b = base;
+    if (n < 2 || !size) return;
+    for (size_t i = n / 2; i--;) aye_fs_sift(b, i, n, size, cmp);
+    for (size_t e = n - 1; e; e--) {
+        aye_fs_swap(b, b + e * size, size);
+        aye_fs_sift(b, 0, e, size, cmp);
+    }
 }
 /* libm: what wasm has an instruction for is defined here; `sin`, `cos`,
    `tan`, `exp`, `log`, `log2`, `log10`, `pow`, `fmod`, `atan2`, `asin`,

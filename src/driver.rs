@@ -1115,6 +1115,23 @@ pub fn link_flags(links: &[String]) -> Vec<String> {
 /// Compile generated C to an executable with clang, linked with the
 /// program's libraries.
 pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
+    // The C goes to a file, not to clang's stdin: a pipe holds 64 KiB, and
+    // clang may exit (a bad flag) before it has read all of the source,
+    // which would kill this process with SIGPIPE.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let src = std::env::temp_dir().join(format!(
+        "aye-{}-{}.c",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::write(&src, &p.c).map_err(|e| e.to_string())?;
+    let result = cc_file(p, &src, out, mode);
+    let _ = std::fs::remove_file(&src);
+    result
+}
+
+/// `cc` for the C source in the file `src`.
+fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode) -> Result<(), String> {
     let freestanding = p.target.os == Os::Freestanding;
     let mut cmd = p.target.clang()?;
     cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing"]);
@@ -1142,9 +1159,10 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
         .args(&p.cflags)
-        .args(["-x", "c", "-", "-o"])
-        .arg(out)
-        .stdin(Stdio::piped());
+        .args(["-x", "c"])
+        .arg(src)
+        .arg("-o")
+        .arg(out);
     // std.math calls libm.
     if !freestanding {
         cmd.arg("-lm");
@@ -1158,16 +1176,9 @@ pub fn cc(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
         cmd.args(["-Wno-unused-command-line-argument", "-x", "none"])
             .args(flags);
     }
-    let mut child = cmd
-        .spawn()
+    let status = cmd
+        .status()
         .map_err(|e| format!("failed to run clang: {e}"))?;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(p.c.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {
         if !p.links.is_empty() {
             return Err(format!(
