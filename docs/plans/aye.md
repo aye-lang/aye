@@ -139,9 +139,9 @@ brackets.
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
 - O5.2a `aye test`: compile the next module root while the current root's tests run (compile dominates `aye test browser`, 8.9 s; O5.2 report). Verify: `aye test browser` wall time drops.
 - O5.2b per-test `ms` is inflated under `-j` by the first-exec cost of a fresh binary (~0.5 s on macOS, same cause as O1.17b and O5.1b); warm the binary once before fanning out. Verify: `treetests` times under 50 ms after the first.
-- O6.1 `aye lsp` diagnostics and formatting over JSON-RPC (old O6 table).
 - O6.2 `aye lsp` hover with `///` and go to definition (old O6 table).
-- O6.3 `aye doc --html <path>` (old O6 table; the website X3 uses it).
+- O6.3a `aye doc --html` leftovers (O6.3 report): struct member `///` comments stay inside the signature block instead of becoming paragraphs; root page name is the path stem (`index` → `index_module.html`); the website (X3, `site/`) should use it for the std reference. Verify: a `shapes` fixture change plus the site build.
+- O6.1a `aye lsp` follow-ups (O6.1 report): end spans on `Diag` (the `token_len` lookup is a stopgap), a severity field, diagnostics of imported files as `relatedInformation`, fix-its as `textDocument/codeAction`, a debounce for large roots. Verify: tests/lsp.rs cases.
 - O7.1 `docs/aye-bench.md` complete: req/s rerun, `browser/` build times, binary sizes (old O7 table).
 - O7.2 server gate O13, recorded in `docs/milestones.md` (old O7 table).
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).
