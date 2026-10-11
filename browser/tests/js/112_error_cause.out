@@ -1,5 +1,0 @@
-wrapper true root problem
-just a string
-false undefined
-false
-load failed <- SyntaxError

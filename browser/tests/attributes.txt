@@ -1,3 +1,0 @@
-attributes
-
-entities in values [An image] odd names

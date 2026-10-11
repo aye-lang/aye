@@ -1,3 +1,0 @@
-Before
-
-Everything <b>after</b> is &amp; text </plaintext> <p>still text

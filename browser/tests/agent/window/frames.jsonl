@@ -1,5 +1,0 @@
-{"id":1,"cmd":"navigate","url":"browser/tests/agent/iframes.html"}
-{"id":2,"cmd":"type","ref":"e2","text":"ada"}
-{"id":3,"cmd":"click","ref":"e3"}
-{"id":4,"cmd":"click","ref":"e5"}
-{"id":5,"cmd":"snapshot"}

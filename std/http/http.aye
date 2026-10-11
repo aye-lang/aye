@@ -1493,7 +1493,7 @@ fn readResponse(alloc: Allocator, opts: ClientOptions, conn: Stream, method: []u
 }
 
 // TLS through libcurl: the easy interface in connect-only mode, hand-declared
-// like `browser/net/http.aye`. Only called where `@hasLink("libcurl")`.
+// like `browser/net/http.aye` in aye-lang/anyknown. Only called where `@hasLink("libcurl")`.
 
 extern struct Curl {}
 

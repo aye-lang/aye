@@ -10,14 +10,13 @@ file for the area you work in, and skim the others.
 
 - [`aye.md`](aye.md): Aye language idioms. Errors, optionals,
   allocators, builtins, C interop, coroutines, safety and build modes.
-- [`browser.md`](browser.md): conventions and pitfalls of the browser
-  code in `browser/`.
 - [`workflow.md`](workflow.md): developing, testing, merging, and
   working with several agents at once.
 
 The language itself is in `docs/spec.md` (`aye spec`), the choices
-behind it in `docs/decisions.md`, and the browser plan in
-`docs/browser.md`. This directory does not repeat them; it records what
+behind it in `docs/decisions.md`. The browser's own practices are in
+`docs/practices/browser.md` of
+[aye-lang/anyknown](https://github.com/aye-lang/anyknown). This directory does not repeat them; it records what
 went wrong and what to do instead.
 
 ## Entry format

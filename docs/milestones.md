@@ -1,5 +1,9 @@
 # Stage0 milestones
 
+The browser (`browser/`, `docs/browser.md`, `cargo test --test browser`) named in
+these milestones moved to [aye-lang/anyknown](https://github.com/aye-lang/anyknown) in P8.3.
+The texts keep their original paths.
+
 | Milestone | Status | Date | What is left |
 | --- | --- | --- | --- |
 | M1 Data modeling | done | 2026-10-05 | nothing |
@@ -116,7 +120,7 @@ pass.
 # Stage0 milestones, part 2: enough language for the browser
 
 M1 to M5 made Aye usable for small CLIs. M6 to M10 add what the anyknown
-browser (`docs/browser.md`) needs: bit operations for hashing and decoding,
+browser (`docs/browser.md` in aye-lang/anyknown) needs: bit operations for hashing and decoding,
 constants, integer `match` for tokenizers, real C interop for SDL2,
 FreeType and libcurl, and a std with lists, maps and text. The same rules
 apply: acceptance tests first, a milestone is done when they pass, and

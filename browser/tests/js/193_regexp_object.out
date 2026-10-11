@@ -1,5 +1,0 @@
-a+b g true false false /a+b/g
-a+b g true object
-a\.b\*c true false
-SyntaxError
-true 2

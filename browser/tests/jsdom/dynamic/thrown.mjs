@@ -1,1 +1,0 @@
-throw 'module threw';

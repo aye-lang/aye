@@ -2,9 +2,9 @@
 
 Goal: finish the language (Aye, formerly Ore: command `aye`,
 extension `.aye`) to the done criteria in [`plans/aye.md`](plans/aye.md),
-then resume the anyknown browser in its own repo. The language lane gets
-most slots. The browser is frozen (maintenance only) and is the
-language's biggest integration test. The framework does one slice (F1)
+then resume the anyknown browser in its own repo (aye-lang/anyknown). The
+language lane gets most slots. The browser is frozen (maintenance only) and
+is the language's biggest integration test, run as the downstream check. The framework does one slice (F1)
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
@@ -72,7 +72,7 @@ Then, in order:
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
 | Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O6.1a (lsp) in flight; then O3.9a, O1.20, O6.2a, O6.3a | local; cloud routines for Linux |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | P8 split: P8.1 done (builds out of tree) | P8.2 done, anyknown CI green on both OSes; P8.3 in flight (delete the moved files here, `scripts/downstream.sh`) | local (archives in `target/sites/`, screenshots) |
+| Browser ([`plans/anyknown.md`](plans/anyknown.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/anyknown` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the anyknown repo | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F2 done except FD7 `@embedFile`; next F3 cards (write them: forms, sessions/cookies, dev reload per `docs/framework.md`) | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
@@ -80,7 +80,7 @@ Order of dispatch (2026-10-08): names and style first. The rename
 done, and so is Linux development (X1); next, lane cards in lane
 priority (F1.1 merged 2026-10-10; Aye-lane cards next). Project steps go when their condition
 holds. The browser resumes when Aye criteria O6–O9 are met, in the
-same step that splits `browser/` into its own repo (P8.2; P8.1 made it build out of tree).
+same step that split `browser/` into its own repo (P8.2; P8.3 removed it here).
 
 ## Project
 
@@ -118,16 +118,18 @@ its area. Nothing else of the plan.
 5. **Before finishing a branch** run the checklist in
    [`practices/workflow.md`](practices/workflow.md), "Checklist before
    finishing a branch" (merge `main` in, `cargo build --release`, the
-   test targets the card touches, `aye check browser` and
-   `browser/build.sh` when the compiler or std changed). **Not the full
+   test targets the card touches, and `sh scripts/downstream.sh` when the
+   merge touches `src/` or `std/`). **Not the full
    suite**: main runs `cargo test --release` once after each merge, one
    run at a time (2026-10-10: parallel full suites took 34+ minutes).
-   Docs-only cards skip the build and tests.
-6. **Do not edit** `docs/plan.md`, `docs/plans/*`, `docs/browser.md`,
-   `docs/browser-sites.md`, or `docs/milestones.md` unless the card names
-   it; main updates them once per batch
-   ([workflow.md, "Parallel streams do not edit docs/browser.md"](practices/workflow.md#parallel-streams-do-not-edit-docsbrowsermd)).
-   New compiler gaps go in `browser/COMPILER_GAPS.md`.
+   Docs-only cards skip the build and tests. The downstream check
+   replaces the old browser criterion M1 (`cargo test --release --test
+   browser` after every merge), which `cargo test` no longer covers
+   ([`plans/anyknown.md`](plans/anyknown.md)).
+6. **Do not edit** `docs/plan.md`, `docs/plans/*` or `docs/milestones.md`
+   unless the card names it; main updates them once per batch
+   ([workflow.md, "Parallel streams do not edit a shared status document"](practices/workflow.md#parallel-streams-do-not-edit-a-shared-status-document)).
+   New compiler gaps go in `browser/COMPILER_GAPS.md` of aye-lang/anyknown.
 7. **Linux lane (cloud).** A card with `where: cloud` runs in a Claude
    cloud session (a Linux VM from GitHub `aye-lang/aye`), never through
    the local Apple `container`: Linux-only bugs, the WASI toolchain on
@@ -139,9 +141,9 @@ its area. Nothing else of the plan.
 8. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
    step (cause written down, fix proposed); the fix is the next card.
 8. **Browser symptoms:** before dispatching a browser fix, confirm the
-   symptom on current `main` (`page_load.py check --screens`). P3.4 and
+   symptom on current anyknown `main` (`page_load.py check --screens`). P3.4 and
    P3.5 chased symptoms that no longer reproduced.
-9. **Site expectations only tighten** (`browser/tools/sites.json`). A
+9. **Site expectations only tighten** (`browser/tools/sites.json` in aye-lang/anyknown). A
    site that loses content is a regression to fix, never a reason to
    change its expected strings (P3.20 did, for GitHub).
 10. **Report:** commits (hash and one line each), the verify result, the
@@ -153,7 +155,8 @@ its area. Nothing else of the plan.
     request to `main` whose body is the report (rule 10). Never push to
     `main` or merge; main merges one PR at a time and runs the macOS
     checklist. The VM is Linux, so `scripts/linux.sh` is not used
-    there; the checklist's `browser/build.sh` runs as is.
+    there; `scripts/downstream.sh` runs as is (it needs a GitHub login for
+    the private anyknown repo).
 
 Merging (main's side):
 
@@ -222,6 +225,6 @@ goes to the backlog or to `done.md` as dropped.
   locally via `scripts/linux.sh`, after X1; the user's cloud).
   Windows is out of scope. M10's ThreadSanitizer run is not possible on
   this Mac.
-- **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md`.
+- **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md` (in aye-lang/anyknown).
 - **Step ids** are never renumbered: P/O (aye), P (browser), F
   (framework), X (project). Language choices: [`decisions.md`](decisions.md).

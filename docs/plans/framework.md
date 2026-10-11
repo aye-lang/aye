@@ -5,7 +5,7 @@ Aye in the spirit of Next.js, under `framework/` (new). **F1.1 is done
 (2026-10-10, ef6f47b):** the hello-world route was the acceptance test of
 `std.http`. Everything after it is paused. The design is
 [`docs/framework.md`](../framework.md) (F0.1, it answers the open
-choices); gaps go to `browser/COMPILER_GAPS.md` with the F step under
+choices); gaps go to `browser/COMPILER_GAPS.md` (in aye-lang/anyknown) with the F step under
 **Hit by**. Finished steps: [`done.md`](done.md).
 
 ## Done criteria
