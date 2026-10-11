@@ -341,8 +341,10 @@ impl Lexer {
     fn run(&mut self) {
         while self.peek().is_some() {
             if let Err(e) = self.token() {
+                // A `;` is lexed past, so one pass finds every `;` of a line.
+                let skip = e.code != E0002;
                 self.errors.push(e);
-                while self.peek().is_some_and(|c| c != '\n') {
+                while skip && self.peek().is_some_and(|c| c != '\n') {
                     self.bump();
                 }
             }
@@ -637,6 +639,43 @@ impl Lexer {
         Ok(c)
     }
 
+    /// E0002 for the `;` just consumed at `span`, with its fix: delete it at
+    /// the end of a line (or before `}`), else turn it and the blanks after
+    /// it into a newline and the indentation of the line.
+    fn semicolon(&self, span: Span) -> Error {
+        let e = Error::new(
+            E0002,
+            span,
+            "unexpected `;` (Aye ends statements at newlines)",
+        );
+        let blanks = self.chars[self.pos..]
+            .iter()
+            .take_while(|c| matches!(c, ' ' | '\t'))
+            .count();
+        let ends_line = match self.chars.get(self.pos + blanks) {
+            None | Some('\n' | '\r' | '}' | ';') => true,
+            Some('/') => self.chars.get(self.pos + blanks + 1) == Some(&'/'),
+            Some(_) => false,
+        };
+        if ends_line {
+            return e.fix("remove the `;`", span, span.right(1), "");
+        }
+        let line_start = self.chars[..self.pos - 1]
+            .iter()
+            .rposition(|&c| c == '\n')
+            .map_or(0, |i| i + 1);
+        let indent: String = self.chars[line_start..]
+            .iter()
+            .take_while(|c| matches!(c, ' ' | '\t'))
+            .collect();
+        e.fix(
+            "end the statement with a newline",
+            span,
+            span.right(1 + blanks as u32),
+            format!("\n{indent}"),
+        )
+    }
+
     fn punct(&mut self, span: Span) -> Result<Tok> {
         let c = self.bump().unwrap();
         let next = self.peek();
@@ -719,11 +758,7 @@ impl Lexer {
             ('/', _) => Tok::Slash,
             ('%', _) => Tok::Percent,
             (';', _) => {
-                return Err(Error::new(
-                    E0002,
-                    span,
-                    "unexpected `;` (Aye ends statements at newlines)",
-                ));
+                return Err(self.semicolon(span));
             }
             ('\\', _) => {
                 return Err(Error::new(
@@ -902,6 +937,33 @@ mod tests {
     fn rejects_semicolon() {
         let e = lex("let x = 1;").unwrap_err();
         assert_eq!(e[0].span, Span::new(1, 10));
+    }
+
+    #[test]
+    fn semicolon_fixes() {
+        let e = lex("let x = 1;\n  let a = 1;  let b = 2;;").unwrap_err();
+        let fixes: Vec<_> = e
+            .iter()
+            .map(|e| {
+                let ed = &e.fix.as_ref().unwrap().edits[0];
+                (
+                    ed.start.line,
+                    ed.start.col,
+                    ed.end.col,
+                    ed.replacement.clone(),
+                )
+            })
+            .collect();
+        let want = [
+            (1, 10, 11, ""),
+            (2, 12, 15, "\n  "),
+            (2, 24, 25, ""),
+            (2, 25, 26, ""),
+        ];
+        assert_eq!(
+            fixes,
+            want.map(|(l, s, e, r)| (l, s, e, r.to_string())).to_vec()
+        );
     }
 
     #[test]

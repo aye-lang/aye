@@ -124,8 +124,6 @@ brackets.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O2.5a std casts on wasm32: audit the remaining `as usize` casts of 64-bit values in std (O2.5 found 23, all small values today) and `aye cimport` output (`size_t`→`usize`, `long`→`c_long`) under `--target wasm32-wasip1`. Verify: a `cimport` golden built for wasm.
 - O2.5b Linux container gets the WASI toolchain (`scripts/setup-ubuntu.sh`), so the wasip1 goldens run there too. Verify: `scripts/linux.sh` golden prints the wasm32-wasip1 summary.
-- **O5.2c (first tomorrow)** `aye test --time-limit` does not trigger on Linux: `tests/tests/time_limit.aye` prints `FAILED (N ms)` instead of `FAILED (time limit: ...)` (O2.7's Linux golden run, `scripts/linux.sh`). Likely `RLIMIT_CPU` delivers SIGXCPU and the driver's classification misses it, or rusage is read differently. Verify: `scripts/linux.sh cargo test --release --test golden` exit 0.
-- **O3.1b** `std.json` cannot read back `DBL_MAX` on Linux: glibc `ecvt` rounds the 17th digit (`1.7976931348623160e+308`); make `aye_std_ecvt` use `snprintf("%.*e")` on Linux as wasip1 does. Verify: `json_roundtrip` with `1.7976931348623157e308` passes on Linux.
 - O2.7a freestanding golden: support for expected exit 1 (5 cases: `error_branch_trace`, `parse_*`, `trace_handled`) and prelude stubs for `abs`/`labs`/`div`/`strchr`/`qsort`/`malloc` (6 cases). Verify: sweep 78 → 89.
 - O2.8 Linux triples from a non-matching host: the link needs a sysroot (O2.2 report), so `aye build --target x86_64-linux` on a Mac fails at `ld`; add a compile-only path (clang `-c`, or `--emit obj`) or a documented sysroot env var. Verify: a golden that compiles hello for both Linux triples on macOS.
 - O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
@@ -133,7 +131,7 @@ brackets.
 - O1.17b first-exec stall, round 2 (cause known, `decisions.md` "First-exec stall"): try `-Wl,-no_adhoc_codesign` and `-mmacosx-version-min`; count the executables golden links; if nothing hides the stall, run a case's debug/safe/fast binaries in parallel in `tests/golden.rs`. Verify: golden wall time under 250 s on a quiet machine.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
 - O1.15a `aye doc std.<x>` for an unknown module prints the same module list and suggestion as E0081 (`src/doc.rs`; O1.15 report). Verify: a CLI golden.
-- O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
+- O1.16a `aye fix` for `;` inside `(` or `[` (e.g. a C-style `for (a; b; c)`) still applies the newline fix, which is wrong there; the lexer does not track bracket depth (O1.16 report). Verify: a `tests/fix` case leaves such a `;` alone or suggests nothing.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O4.1 manifest and `aye.lock` design; `docs/framework.md` already fixed "declarative file, not a `build.aye` run" (old O4 table).
