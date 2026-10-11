@@ -43,7 +43,9 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 
 /// Listens on 127.0.0.1:`port` (0 picks a free port), prints `listening on
 /// 127.0.0.1:<port>`, and serves `routes` until the process ends. A path
-/// that no route has gets 404.
+/// that no route has gets 404; a path with other methods only gets 405 and
+/// an `Allow` header. `HEAD` is answered from the `Get` route with the same
+/// headers and an empty body.
 pub fn run(alloc: Allocator, port: u16, routes: []Route) ServeError!void {
     var app = App { routes: routes }
     var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
@@ -60,16 +62,30 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     var req = Request {
         method: methodOf(hreq.method),
         path: pathOf(hreq.target),
+        route: "",
+        headers: hreq.headers.items(),
         body: hreq.body,
         arena: alloc,
     }
     var res = Response.init(alloc)
-    if find(app.routes, req.method, req.path) |h| {
-        h(&req, &mut res) catch |e| {
+    if find(app.routes, req.method, req.path) |r| {
+        req.route = r.pattern
+        r.handler(&req, &mut res) catch |e| {
             fail(&mut res, e)
         }
     } else {
-        fail(&mut res, Error.NotFound)
+        let allowed = allow(alloc, app.routes, req.path) catch |e| {
+            hres.status = 500
+            return
+        }
+        if allowed |methods| {
+            fail(&mut res, Error.MethodNotAllowed)
+            res.header("Allow", methods) catch |e| {
+                res.headers.clear()
+            }
+        } else {
+            fail(&mut res, Error.NotFound)
+        }
     }
     let hs = alloc.alloc(http.Header { name: "Content-Type", value: res.contentType }, 1 + res.headers.len()) catch |e| {
         hres.status = 500
@@ -80,7 +96,11 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     }
     hres.status = res.status
     hres.headers = hs
-    hres.body = res.page.bytes()
+    if req.method == Method.Head {
+        hres.body = []u8{}
+    } else {
+        hres.body = res.page.bytes()
+    }
 }
 
 // Turns the response into the plain page of the status that `e` means.
@@ -108,6 +128,9 @@ fn statusOf(e: Error) u16 {
 fn methodOf(m: []u8) Method {
     if text.eql(m, "GET") {
         return Method.Get
+    }
+    if text.eql(m, "HEAD") {
+        return Method.Head
     }
     if text.eql(m, "POST") {
         return Method.Post

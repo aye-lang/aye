@@ -91,6 +91,17 @@ Proposed cards:
   to the spec core or the §15 line. Verify: json_total x3 output tokens under 4k
   per run.
 
+### rest_json (2026-10-11, O13 server gate)
+
+3 of 3 runs passed, 10-11 turns, 1 clean `aye check` call each (no
+compile-error round), 34-37 s; `target/eval/20261011-181047/`. Each run read
+`aye spec`, `aye doc --signatures std.http` and `std.json`, then 3-4 named
+sections (`aye spec std.sync`, `std.list`, `std.heap`, `aye doc --signatures
+std.text`; run 3 also `std.os`). That reading, 6-8 Bash calls before the
+first Write, is what cost the turns; the one Write and the one check were
+cheap. The prompt names `aye doc --signatures`, because the harness system
+prompt lists only `aye spec`, `check` and `explain`.
+
 ## Findings (2026-10-10, 3 runs per task, `main` c96dc27)
 
 15 of 15 runs passed; median 12 turns and 1 `aye check` call per run

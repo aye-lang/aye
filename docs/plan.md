@@ -51,8 +51,10 @@ Then, in order:
    O4.3a/b and O1.18a done. **O11 holds** (conformance prints
    passed/total per area and target, 100% native and wasm32-wasip1 with
    the impossible entries listed, since O2.3). Phase O6.x (LSP, O10):
-   O6.1, O6.2 and O6.3 done: **O10 holds** once the O6.2 merge passes
-   the suite (checked below). O2.8b done; a cloud routine re-runs the
+   O6.1, O6.2 and O6.3 done: **O10 holds** (checked on 7babce6: lsp
+   diagnostics, format, hover, definition, `aye doc --html`, each tested). **O13 holds** (O7.2, 2026-10-11: rest_json
+   3/3, one check each). **O12 holds** (O7.1, PR #3: Aye fast 39.1k req/s vs Node 10.7k;
+   Go 99k, see O3.9). All of O6–O13 now hold. O2.8b done; a cloud routine re-runs the
    Linux suite on the no-IPv6 VM. Eval 2026-10-11: 15/15, mean turns 15.1 → 11.1, tokens −35%, 0 refused
    calls (`docs/aye-eval.md`). Next: O1.18–O1.20 (eval costs), P-flaky,
    then the O6.x LSP phase.
@@ -69,9 +71,9 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O5.2d; then O7.x benchmarks | local; the user's cloud when available |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
-| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O5.2e (parallel cc), then O3.9 | local; cloud routines for Linux |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold); O6–O9 hold, so it may resume | pick the first M4 card when a slot is free | local (archives in `target/sites/`, screenshots) |
+| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F1.1b/c, then F1.2, F1.3, then F2 cards | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
 (X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are

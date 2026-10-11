@@ -1696,6 +1696,7 @@ std.fs.readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries   the entri
 std.fs.mkdir(path: []u8) PathError!void                  create a directory (the parent must exist)
 std.fs.remove(path: []u8) PathError!void                 delete a file, symlink or empty directory
 std.fs.rename(from: []u8, to: []u8) PathError!void       rename or move; replaces an existing "to"
+std.fs.symlink(target: []u8, link: []u8) PathError!void  create a symlink at link holding target
 std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File

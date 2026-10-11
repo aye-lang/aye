@@ -1,16 +1,78 @@
 // web.Request: what a handler reads of the HTTP request.
 
+import std.http
 import std.mem.Allocator
+import std.text
 
-/// The request methods a route can name. Any other method is `Other`.
-pub enum Method { Get, Post, Put, Patch, Delete, Other }
+/// The request methods a route can name. Any other method is `Other`. A
+/// `HEAD` request is answered from the route's `Get`, so no route names
+/// `Head`.
+pub enum Method { Get, Head, Post, Put, Patch, Delete, Other }
 
-/// One request, as a handler sees it. `path` has no query string; `path`
-/// and `body` point into the connection's buffer. `arena` lives until the
+/// One request, as a handler sees it. `path` has no query string; `path`,
+/// `headers` and `body` point into the connection's buffer. `route` is the
+/// pattern of the matched route (`/blog/[slug]`). `arena` lives until the
 /// response is written: handlers allocate from it and never free.
 pub struct Request {
     method: Method
     path: []u8
+    route: []u8
+    headers: []http.Header
     body: []u8
     arena: Allocator
+
+    /// The part of the path that the `[name]` segment of the route matched.
+    /// A `name` that is no segment of the route is a bug: it panics.
+    pub fn param(self: *Self, name: []u8) []u8 {
+        var ps = text.split(trimSlash(self.route), "/")
+        var xs = text.split(trimSlash(self.path), "/")
+        while ps.next() |p| {
+            let x = xs.next() orelse unreachable
+            if isParam(p) && text.eql(p[1..p.len - 1], name) {
+                return x
+            }
+        }
+        unreachable
+    }
+
+    /// The value of the first header called `name`, compared without regard
+    /// to ASCII case; null when there is none.
+    pub fn header(self: *Self, name: []u8) ?[]u8 {
+        for h in self.headers {
+            if text.eqlIgnoreCase(h.name, name) {
+                return h.value
+            }
+        }
+        return null
+    }
+}
+
+test "header ignores case" {
+    let hs = [2]http.Header{
+        http.Header { name: "Host", value: "example.test" },
+        http.Header { name: "X-Test", value: "yes" },
+    }
+    let req = Request {
+        method: Method.Get,
+        path: "/",
+        route: "/",
+        headers: hs[..],
+        body: "",
+        arena: @testAllocator(),
+    }
+    @expectEqual("yes", req.header("x-test").?)
+    @expectEqual("example.test", req.header("HOST").?)
+    @expect(req.header("accept") == null)
+}
+
+test "param reads a [name] segment" {
+    let req = Request {
+        method: Method.Get,
+        path: "/blog/hello/",
+        route: "/blog/[slug]",
+        headers: []http.Header{},
+        body: "",
+        arena: @testAllocator(),
+    }
+    @expectEqual("hello", req.param("slug"))
 }
