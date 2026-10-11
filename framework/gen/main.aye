@@ -6,7 +6,10 @@
 // serves its path with `page`; one with a `route.aye` serves it with the
 // functions `get`, `post`, `put`, `patch` and `delete` that the file exports
 // (a method without one gets 405). `[name]` is one dynamic segment
-// (`req.param("name")`). A path that no route has is looked up in
+// (`req.param("name")`), `[...name]` the last one or more segments joined by
+// `/` (nothing may be below it), and `(group)` adds no segment to the path
+// (a `layout.aye` in it still wraps what is below it). Segments are
+// percent-decoded after the path is split. A path that no route has is looked up in
 // `<app>/public/`; `main.aye` passes the absolute path of that directory to
 // `web.run` (a link would depend on the working directory).
 // A `layout.aye` (`pub fn layout`) wraps every page below its directory, the

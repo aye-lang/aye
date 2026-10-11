@@ -9,7 +9,8 @@
 //!   (`framework/gen`, run with `aye run`) writes its `.web/`, which is
 //!   checked, built and started the same way. `tests/framework/pages/X.http`
 //!   are the responses to the requests in `PAGES_CASES` (pages in the root
-//!   layout and a nested one, the `not-found.aye` page for a path and for a
+//!   layout and a nested one, a `[...path]` catch-all with percent-decoding,
+//!   a `(marketing)` group whose layout wraps `/pricing`, the `not-found.aye` page for a path and for a
 //!   page that returns `Error.NotFound`, an API `route.aye` with JSON, a
 //!   `{"error":"NotFound"}` and a 405, and the files of `public/` with
 //!   their conditional requests). The `ETag` and `Last-Modified` values of a
@@ -49,6 +50,11 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/api/items/9", "api_item_missing.http"),
     ("POST", "/api/items/1", "api_item_post.http"),
     ("GET", "/blog/missing", "blog_missing.http"),
+    ("GET", "/docs/a/b%20c", "docs_rest.http"),
+    ("GET", "/docs/a/b/c", "docs_slash.http"),
+    ("GET", "/docs", "docs_missing.http"),
+    ("GET", "/pricing", "pricing.http"),
+    ("GET", "/%70ricing", "pricing.http"),
     ("GET", "/nope", "missing.http"),
     ("GET", "/style.css", "style_css.http"),
     ("HEAD", "/style.css", "style_css_head.http"),

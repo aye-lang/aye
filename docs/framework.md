@@ -120,6 +120,10 @@ C stays as what F1.1 hand-writes before the generator exists.
 Mapping of segments: a literal directory is a literal segment; `[name]`
 is one segment bound to `name`; `[...name]` is the rest (one or more
 segments); `(group)` directories are left out of the URL, as in Next.js.
+A `(group)` directory's `layout.aye` still wraps the pages below it, and
+`[...name]` must be the last segment. Segments are percent-decoded after
+the path is split at `/` (so `%2F` is not a separator), for matching and
+in `param`; `param("rest")` joins a catch-all's segments with `/`.
 Matching order: literal before `[name]` before `[...name]`. A `name`
 that is not an Aye identifier is a generator error. The symlink names
 are `r<index>_<sanitized path>`, so they are identifiers and never

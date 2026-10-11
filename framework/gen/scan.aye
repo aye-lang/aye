@@ -17,7 +17,7 @@ import std.text.Builder
 
 /// A directory of `app/` with a role: `dir` is the directory below `app/`
 /// (`blog/[slug]`; empty for `app/` itself), `url` the pattern it serves
-/// (`/blog/[slug]`), `fns` the names of its handlers: `page` for a
+/// (`/blog/[slug]`; a `(group)` directory adds no segment), `fns` the names of its handlers: `page` for a
 /// `page.aye`, and each of `get`, `post`, `put`, `patch`, `delete` that its
 /// `route.aye` exports. `layout` is true when it has a `layout.aye` (that
 /// exports `layout`), `notFound` when it has a `not-found.aye` (that exports
@@ -76,6 +76,9 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
     for e in found.items {
         if e.kind == fs.Kind.Dir && !text.startsWith(e.name, ".") {
             checkSegment(e.name)
+            if isRest(lastSegment(rel)) {
+                die("a [...name] directory has no directories below it", here, e.name)
+            }
             try scan(alloc, root, try path.join(alloc, rel, e.name), out)
         }
     }
@@ -125,9 +128,19 @@ pub fn routeCount(pages: []Page) usize {
     return n
 }
 
-/// Is `seg` a `[name]` segment?
+/// Is `seg` a `[name]` segment? (It is true for a `[...name]` segment too.)
 pub fn isParam(seg: []u8) bool {
     return seg.len > 2 && seg[0] == '[' && seg[seg.len - 1] == ']'
+}
+
+/// Is `seg` a `[...name]` segment?
+pub fn isRest(seg: []u8) bool {
+    return seg.len > 5 && seg[0] == '[' && seg[1] == '.' && seg[2] == '.' && seg[3] == '.' && seg[seg.len - 1] == ']'
+}
+
+/// Is `seg` a `(group)` segment?
+pub fn isGroup(seg: []u8) bool {
+    return seg.len > 2 && seg[0] == '(' && seg[seg.len - 1] == ')'
 }
 
 /// The identifier a directory is linked as: `blog/[slug]` becomes
@@ -171,6 +184,15 @@ pub fn die(what: []u8, a: []u8, b: []u8) {
     }
     fs.stderr().write("\n") catch |e| {}
     os.exit(1)
+}
+
+// The last segment of `dir` ("" for ""), the part after `parentOf`.
+fn lastSegment(dir: []u8) []u8 {
+    let parent = parentOf(dir)
+    if parent.len == 0 {
+        return dir
+    }
+    return dir[parent.len + 1..]
 }
 
 // `dir` without its last segment ("" for a single segment).
@@ -254,21 +276,36 @@ fn exports(alloc: Allocator, sigs: []u8, name: []u8) bool {
     return false
 }
 
-// `/` and the directory's segments; every segment is checked by `scan`.
+// `/` and the directory's segments, without the `(group)` ones; every
+// segment is checked by `scan`.
 fn urlOf(alloc: Allocator, rel: []u8) ![]u8 {
     var b = Builder.init(alloc)
-    try b.append("/")
-    try b.append(rel)
+    var parts = text.split(rel, "/")
+    while parts.next() |seg| {
+        if seg.len == 0 || isGroup(seg) {
+            continue
+        }
+        try b.append("/")
+        try b.append(seg)
+    }
+    if b.len() == 0 {
+        try b.append("/")
+    }
     return b.bytes()
 }
 
-// The directory names `[...rest]` and `(group)` are Next.js's, not built yet;
+// A directory name is a literal segment, `[name]`, `[...name]` or `(group)`;
 // the name inside `[...]` must be an identifier, as `req.param` names it.
 fn checkSegment(seg: []u8) {
-    if text.startsWith(seg, "[...") || seg[0] == '(' {
-        die("not supported yet", seg, "")
-    }
-    if seg[0] == '[' {
+    if seg[0] == '(' {
+        if !isGroup(seg) {
+            die("not a (group) segment", seg, "")
+        }
+    } else if text.startsWith(seg, "[...") {
+        if !isRest(seg) || !isIdent(seg[4..seg.len - 1]) {
+            die("not a [...name] segment with an identifier name", seg, "")
+        }
+    } else if seg[0] == '[' {
         if !isParam(seg) || !isIdent(seg[1..seg.len - 1]) {
             die("not a [name] segment with an identifier name", seg, "")
         }
@@ -312,21 +349,24 @@ pub fn order(pages: []mut Page) {
     }
 }
 
-// Segment by segment: a literal before a `[name]`, then (unless
-// `sameShape`, which treats every `[name]` as equal to every other) by
-// bytes; a shorter pattern before a longer one. Negative, 0, positive.
+// Segment by segment: a literal before a `[name]` before a `[...name]`, then
+// (unless `sameShape`, which treats every `[name]` as equal to every other,
+// and every `[...name]`) by bytes; a shorter pattern before a longer one.
+// Negative, 0, positive.
 fn compare(a: []u8, b: []u8, sameShape: bool) i32 {
     var xs = text.split(a, "/")
     var ys = text.split(b, "/")
     while xs.next() |x| {
         let y = ys.next() orelse return 1
-        if isParam(x) != isParam(y) {
-            if isParam(x) {
+        let rx = rank(x)
+        let ry = rank(y)
+        if rx != ry {
+            if rx > ry {
                 return 1
             }
             return -1
         }
-        if isParam(x) && sameShape {
+        if rx > 0 && sameShape {
             continue
         }
         let c = cmpBytes(x, y)
@@ -336,6 +376,17 @@ fn compare(a: []u8, b: []u8, sameShape: bool) i32 {
     }
     if ys.next() != null {
         return -1
+    }
+    return 0
+}
+
+// 0 for a literal segment, 1 for `[name]`, 2 for `[...name]`.
+fn rank(seg: []u8) i32 {
+    if isRest(seg) {
+        return 2
+    }
+    if isParam(seg) {
+        return 1
     }
     return 0
 }
