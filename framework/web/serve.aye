@@ -12,16 +12,19 @@ import std.net.ListenError
 import std.os
 import std.text
 import std.text.Builder
+import std.thread
 
 /// Why `run` gave up: it could not listen, write or allocate.
-pub error ServeError = ListenError || WriteError || AllocError
+pub error ServeError = ListenError || WriteError || AllocError || thread.SpawnError
 
 /// What every connection thread reads: the route table, the directory of
-/// static files and the page for a path that nothing answers.
+/// static files, the page for a path that nothing answers, and whether the
+/// server runs with `--dev` (see `dev.aye`).
 struct App {
     routes: []Route
     public: []u8
     notFound: ?Handler
+    dev: bool
 }
 
 /// The port after `--port` in the program's arguments, or `fallback`.
@@ -52,7 +55,11 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// headers and `Content-Length`, and no body (`std.http.Server` leaves it out). When no route matches a `GET` or `HEAD`, the
 /// file of that path under `public` is served (see `serveFile`); `public` is
 /// the path of the directory, absolute or relative to the working directory,
-/// or empty for none.
+/// or empty for none. With `--dev` in the program's arguments, every HTML
+/// page gets `<script src="/_web/dev.js">` before `</body>` (or at its end),
+/// `GET /_web/dev.js` serves that script and `GET /_web/events` is an event
+/// stream that sends `event: build` with the build id (the start time in
+/// milliseconds) every 200 ms; without `--dev` those two paths are not special.
 pub fn run(alloc: Allocator, port: u16, routes: []Route, public: []u8) ServeError!void {
     try serve(alloc, port, routes, public, null)
 }
@@ -65,8 +72,12 @@ pub fn runApp(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFou
 }
 
 fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFound: ?Handler) ServeError!void {
-    var app = App { routes: routes, public: public, notFound: notFound }
+    let dev = devArg(alloc)
+    var app = App { routes: routes, public: public, notFound: notFound, dev: dev }
     var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
+    if dev {
+        try devBeats(alloc, &mut server, try devBuildId(alloc))
+    }
     var line = Builder.init(alloc)
     defer line.deinit()
     try line.append("listening on 127.0.0.1:")
@@ -86,8 +97,18 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
         body: hreq.body,
         arena: alloc,
     }
+    if app.dev && req.method == Method.Get && text.eql(req.path, "/_web/events") {
+        hres.status = 200
+        hres.stream()
+        return
+    }
     var res = Response.init(alloc)
-    if find(app.routes, req.method, req.path) |r| {
+    if app.dev && (req.method == Method.Get || req.method == Method.Head) && text.eql(req.path, "/_web/dev.js") {
+        res.contentType = "text/javascript; charset=utf-8"
+        res.page.raw(devScript()) catch |e| {
+            fail(&mut res, e)
+        }
+    } else if find(app.routes, req.method, req.path) |r| {
         req.route = r.pattern
         r.handler(&req, &mut res) catch |e| {
             if r.kind == Kind.Api {
@@ -114,6 +135,11 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
             }
         } else {
             fail(&mut res, Error.NotFound)
+        }
+    }
+    if app.dev && devIsHtml(&res) {
+        devInject(&mut res) catch |e| {
+            fail(&mut res, Error.OutOfMemory)
         }
     }
     let hs = alloc.alloc(http.Header { name: "Content-Type", value: res.contentType }, 1 + res.headers.len()) catch |e| {

@@ -340,7 +340,14 @@ behind a `Mutex`. A database layer is a later decision, if ever.
 - **Not with the browser:** islands and dev reload need `WebAssembly`
   and `EventSource`, which the browser lacks. They are checked with a
   Node 22 script (SSE client, `.wasm` instantiation) and by hand in
-  Chrome.
+  Chrome. The dev reload script is `tests/framework/dev_reload.mjs`
+  (run by the `dev_reload_node` test). By hand, per release of `web dev`:
+  1. `aye run framework/dev -- framework/examples/pages`, open the printed
+     address in Chrome.
+  2. Change the heading in `app/about/page.aye` and save: the open
+     `/about` page reloads by itself and shows the new heading.
+  3. Break the file (`raw(5)`): the page reloads to the error page; fix it:
+     the page reloads to the working page.
 
 **Recommendation:** transcripts first (F1.1 starts them), the browser
 from F5.

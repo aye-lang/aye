@@ -21,12 +21,27 @@
 //!   the `ETag` of a first `GET` back as `If-None-Match`. `web gen`
 //!   reads the exports of the files with `aye doc --signatures`, so it runs
 //!   with `AYE` set to the `aye` under test.
+//! - `framework/dev` (`web dev`) is run with `aye run` on a copy of the pages
+//!   example, in its own process group: it generates, checks and builds the
+//!   app, starts the server and relays its `listening on` line. Killing the
+//!   group must leave no server behind. When the test edits
+//!   `app/about/page.aye` of its copy, the CLI prints `restarting`, starts
+//!   the server again on the same port and relays the new `listening on`
+//!   line; a change in `public/` restarts nothing.
+//! - `tests/framework/dev_reload.mjs` (Node 22; the test is skipped when
+//!   `node` is missing or older) plays the browser against `web dev`: it
+//!   runs the page's `/_web/dev.js` in a fake `window` with an SSE client.
+//!   When the test breaks `app/about/page.aye`, the script reloads once (to
+//!   the error page); when the test fixes it, it reloads a second time.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -168,6 +183,133 @@ impl Drop for App {
     }
 }
 
+/// The CLI of `web dev`, run in its own process group; the group is killed
+/// when it is dropped, as the server is a grandchild.
+struct Dev {
+    child: Child,
+    port: u16,
+    /// The lines the CLI prints after the first `listening on` line.
+    lines: Receiver<String>,
+}
+
+impl Dev {
+    /// Sends SIGTERM to the whole process group (`kill` complains when the
+    /// group is already gone, which `Drop` does not mind).
+    fn kill_group(&self) {
+        let _ = Command::new("kill")
+            .args(["-s", "TERM", "--", &format!("-{}", self.child.id())])
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+impl Drop for Dev {
+    fn drop(&mut self) {
+        self.kill_group();
+        let _ = self.child.wait();
+    }
+}
+
+/// Copies the directory `from` to `to` (which must not exist), leaving out
+/// `.web`.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if name == ".web" {
+            continue;
+        }
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &to.join(name));
+        } else {
+            std::fs::copy(entry.path(), to.join(name)).unwrap();
+        }
+    }
+}
+
+/// A port that nothing listens on.
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Runs `aye run framework/dev -- <app> --port <port>` and reads its output
+/// until the `listening on` line.
+fn start_dev(app: &Path, port: u16) -> Dev {
+    start_dev_until(app, port, &format!("listening on 127.0.0.1:{port}"))
+}
+
+/// Like `start_dev`, and reads until the line `want`.
+fn start_dev_until(app: &Path, port: u16, want: &str) -> Dev {
+    let child = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .args(["run", "framework/dev", "--"])
+        .arg(app)
+        .args(["--port", &port.to_string()])
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut dev = Dev {
+        child,
+        port,
+        lines: mpsc::channel().1,
+    };
+    let mut lines = BufReader::new(dev.child.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        let n = lines.read_line(&mut line).unwrap();
+        assert!(n > 0, "web dev ended before it printed {want:?}");
+        if line.trim().ends_with(want) {
+            break;
+        }
+    }
+    // Keep reading so that the CLI never blocks on a full pipe.
+    let (tx, rx) = mpsc::channel();
+    dev.lines = rx;
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        while lines.read_line(&mut line).is_ok_and(|n| n > 0) {
+            if tx.send(line.trim().to_string()).is_err() {
+                return;
+            }
+            line.clear();
+        }
+    });
+    dev
+}
+
+/// Waits at most `limit` for a line of the CLI that contains `want`; the
+/// lines before it are dropped.
+fn wait_line(dev: &Dev, want: &str, limit: Duration) -> bool {
+    wait_recv(&dev.lines, want, limit)
+}
+
+/// Waits at most `limit` for a line from `lines` that contains `want`; the
+/// lines before it are dropped.
+fn wait_recv(lines: &Receiver<String>, want: &str, limit: Duration) -> bool {
+    let end = Instant::now() + limit;
+    while let Some(left) = end.checked_duration_since(Instant::now()) {
+        match lines.recv_timeout(left) {
+            Ok(line) if line.contains(want) => return true,
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => return false,
+            Err(RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    false
+}
+
+/// Does something listen on `port`?
+fn listening(port: u16) -> bool {
+    TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
 /// Builds `framework/examples/<name>` into the target directory.
 fn build(name: &str) -> PathBuf {
     build_dir(name, &root().join("framework").join("examples").join(name))
@@ -194,8 +336,14 @@ fn build_dir(name: &str, dir: &Path) -> PathBuf {
 
 /// Starts `exe --port 0` and reads the port from its first line.
 fn start(exe: &Path) -> App {
+    start_with(exe, &[])
+}
+
+/// Like `start`, with `extra` arguments after `--port 0`.
+fn start_with(exe: &Path, extra: &[&str]) -> App {
     let mut child = Command::new(exe)
         .args(["--port", "0"])
+        .args(extra)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -336,12 +484,440 @@ fn pages() {
     }
 }
 
+/// The build id in the first `build` frame of `GET /_web/events` on `app`:
+/// the status line and headers are checked on the way. Reads for up to 5 s.
+fn first_build_id(app: &App) -> String {
+    let mut s = TcpStream::connect(("127.0.0.1", app.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    write!(
+        s,
+        "GET /_web/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+    )
+    .unwrap();
+    let limit = Instant::now() + Duration::from_secs(5);
+    let mut got = String::new();
+    while Instant::now() < limit {
+        let mut buf = [0u8; 512];
+        match s.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => got.push_str(&String::from_utf8_lossy(&buf[..n]).replace("\r\n", "\n")),
+            Err(_) => {}
+        }
+        if let Some(at) = got.find("event: build\ndata: ") {
+            let rest = &got[at + "event: build\ndata: ".len()..];
+            if let Some(end) = rest.find("\n\n") {
+                assert!(got.starts_with("HTTP/1.1 200 OK\n"), "{got:?}");
+                assert_eq!(header_value(&got, "Content-Type"), "text/event-stream");
+                return rest[..end].to_string();
+            }
+        }
+    }
+    panic!("no build frame: {got:?}");
+}
+
+#[test]
+fn dev_script() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-script");
+    let _ = std::fs::remove_dir_all(&dir);
+    copy_dir(&root().join("framework/examples/pages"), &dir);
+    let generated = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(root().join("framework").join("gen"))
+        .arg("--")
+        .arg(&dir)
+        .arg("--web")
+        .arg(root().join("framework").join("web"))
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "web gen failed:\n{}{}",
+        String::from_utf8_lossy(&generated.stdout),
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let exe = build_dir("dev-script-server", &dir.join(".web"));
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+
+    let app = start_with(&exe, &["--dev"]);
+    let about = request(&app, "GET", "/about");
+    assert_eq!(about.matches(tag).count(), 1, "{about}");
+    assert!(about.contains(&format!("{tag}</body>")), "{about}");
+    assert!(request(&app, "GET", "/").contains(tag));
+    let js = request(&app, "GET", "/_web/dev.js");
+    assert!(js.starts_with("HTTP/1.1 200 OK\n"), "{js}");
+    assert!(
+        header_value(&js, "Content-Type").starts_with("text/javascript"),
+        "{js}"
+    );
+    assert!(js.contains("new EventSource(\"/_web/events\")"), "{js}");
+    assert!(js.contains("location.reload()"), "{js}");
+    let api = request(&app, "GET", "/api/items/1");
+    assert!(!api.contains(tag), "{api}");
+    let id = first_build_id(&app);
+    assert!(id.parse::<u64>().is_ok(), "{id:?}");
+    assert_eq!(first_build_id(&app), id, "same id on a second connection");
+
+    std::thread::sleep(Duration::from_millis(20));
+    let again = start_with(&exe, &["--dev"]);
+    assert_ne!(first_build_id(&again), id, "another id after a restart");
+
+    let plain = start(&exe);
+    assert!(!request(&plain, "GET", "/about").contains(tag));
+    assert!(request(&plain, "GET", "/_web/dev.js").starts_with("HTTP/1.1 404 "));
+    assert!(request(&plain, "GET", "/_web/events").starts_with("HTTP/1.1 404 "));
+}
+
+#[test]
+fn dev_start() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-start");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let want = std::fs::read_to_string(root().join("tests/framework/pages/about.http")).unwrap();
+    let server = App {
+        child: Command::new("true").spawn().unwrap(),
+        port: dev.port,
+    };
+    // The CLI starts the server with `--dev`: the page has the script tag
+    // and the length of it, and is the transcript otherwise.
+    let got = request(&server, "GET", "/about");
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+    assert!(got.contains(&format!("{tag}</body>")), "{got}");
+    let body = |s: &str| s.split_once("\n\n").unwrap().1.replace(tag, "");
+    assert_eq!(body(&got), body(&want));
+    dev.kill_group();
+    let mut gone = false;
+    for _ in 0..50 {
+        if !listening(dev.port) {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(gone, "the server still listens after the group was killed");
+}
+
+#[test]
+fn dev_reload() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-reload");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let server = App {
+        child: Command::new("true").spawn().unwrap(),
+        port: dev.port,
+    };
+    assert!(request(&server, "GET", "/about").contains("<h1>About</h1>"));
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("<h1>About</h1>", "<h1>About us</h1>")).unwrap();
+    let limit = Duration::from_secs(120);
+    assert!(
+        wait_line(&dev, "restarting (app/about/page.aye changed)", limit),
+        "no restart line"
+    );
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(
+        wait_line(&dev, &want, limit),
+        "no {want:?} after the restart"
+    );
+    assert!(request(&server, "GET", "/about").contains("<h1>About us</h1>"));
+
+    let css = app.join("public/style.css");
+    let style = std::fs::read_to_string(&css).unwrap();
+    std::fs::write(&css, format!("{style}\n/* edited */\n")).unwrap();
+    assert!(
+        !wait_line(&dev, "restarting", Duration::from_secs(1)),
+        "a change in public/ restarted the server"
+    );
+    assert!(request(&server, "GET", "/style.css").contains("/* edited */"));
+}
+
+/// `GET path` on `port`, read until the server closes, with `\r\n` as `\n`;
+/// null while nothing answers (or the answer is cut off).
+fn try_get(port: u16, path: &str) -> Option<String> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8(buf).ok()?.replace("\r\n", "\n"))
+}
+
+/// Polls `GET path` every 200 ms, for at most `limit`, until the response
+/// starts with `status_line`; null on a timeout.
+fn wait_status(port: u16, path: &str, status_line: &str, limit: Duration) -> Option<String> {
+    let end = Instant::now() + limit;
+    while Instant::now() < end {
+        if let Some(response) = try_get(port, path) {
+            if response.starts_with(status_line) {
+                return Some(response);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    None
+}
+
+#[test]
+fn dev_error() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-error");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    assert!(
+        wait_status(dev.port, "/about", "HTTP/1.1 200", limit).is_some(),
+        "no page before the break"
+    );
+
+    // A type error: `raw` takes text.
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "restarting (app/about/page.aye changed)", limit),
+        "no restart line"
+    );
+    let response =
+        wait_status(dev.port, "/", "HTTP/1.1 500", limit).expect("no error page after the break");
+    assert_eq!(
+        header_value(&response, "Content-Type"),
+        "text/html; charset=utf-8"
+    );
+    assert!(
+        response.contains("app/about/page.aye:"),
+        "no mapped path in {response}"
+    );
+    assert!(
+        response.contains("mismatched types"),
+        "no message in {response}"
+    );
+    assert!(!response.contains(".web/"), "a .web path in {response}");
+    // Every path gets the page.
+    let other = try_get(dev.port, "/about").unwrap();
+    assert!(other.starts_with("HTTP/1.1 500"), "{other}");
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let response = wait_status(dev.port, "/about", "HTTP/1.1 200", Duration::from_secs(10))
+        .expect("no page after the fix");
+    assert!(response.contains("<h1>About</h1>"), "{response}");
+}
+
+#[test]
+fn dev_broken() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-broken");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    let broken = source.replace("raw(\"<h1>About</h1>\")", "raw(5)");
+    std::fs::write(&page, &broken).unwrap();
+
+    // The first build fails: the CLI serves the error page from the start.
+    let port = free_port();
+    let dev = start_dev_until(
+        &app,
+        port,
+        &format!("serving the error page: 127.0.0.1:{port}"),
+    );
+    let limit = Duration::from_secs(120);
+    let response = try_get(dev.port, "/about").expect("no answer");
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert!(response.contains("app/about/page.aye:"), "{response}");
+    assert!(response.contains("mismatched types"), "{response}");
+
+    std::fs::write(&page, &source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let response = wait_status(dev.port, "/about", "HTTP/1.1 200", Duration::from_secs(10))
+        .expect("no page after the fix");
+    assert!(response.contains("<h1>About</h1>"), "{response}");
+
+    // Broken a second time while the server runs.
+    std::fs::write(&page, &broken).unwrap();
+    wait_status(dev.port, "/about", "HTTP/1.1 500", limit).expect("no error page the second time");
+}
+
+/// The build id of the first `build` frame of `GET /_web/events` on `port`.
+fn events_id(port: u16) -> String {
+    first_build_id(&App {
+        child: Command::new("true").spawn().unwrap(),
+        port,
+    })
+}
+
+#[test]
+fn dev_reload_cycle() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-cycle");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+    // The app server's id.
+    let a = events_id(dev.port);
+    assert!(a.parse::<u64>().is_ok(), "{a:?}");
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "serving the error page", limit),
+        "no error page line"
+    );
+    let response = try_get(dev.port, "/").expect("no answer");
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert_eq!(response.matches(tag).count(), 1, "{response}");
+    let js = try_get(dev.port, "/_web/dev.js").expect("no script");
+    assert!(js.starts_with("HTTP/1.1 200 OK\n"), "{js}");
+    assert!(
+        header_value(&js, "Content-Type").starts_with("text/javascript"),
+        "{js}"
+    );
+    assert!(js.contains("location.reload()"), "{js}");
+    // The CLI's id for this broken build.
+    let b = events_id(dev.port);
+    assert!(b.parse::<u64>().is_ok(), "{b:?}");
+    assert_ne!(b, a, "the error server has its own id");
+    assert_eq!(
+        events_id(dev.port),
+        b,
+        "the same id while the build is broken"
+    );
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let c = events_id(dev.port);
+    assert_ne!(c, b, "the app server has another id after the fix");
+}
+
+/// The Node 22 script that plays the browser, killed when dropped; `lines`
+/// are what it prints.
+struct Browser {
+    child: Child,
+    lines: Receiver<String>,
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Is `node` there, and version 22 or newer?
+fn node_22() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|out| {
+            let version = String::from_utf8_lossy(&out.stdout).into_owned();
+            version
+                .trim()
+                .strip_prefix('v')?
+                .split('.')
+                .next()?
+                .parse::<u32>()
+                .ok()
+        })
+        .is_some_and(|major| major >= 22)
+}
+
+#[test]
+fn dev_reload_node() {
+    if !node_22() {
+        println!("skipped: node not found");
+        return;
+    }
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-node");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let mut child = Command::new("node")
+        .arg(root().join("tests/framework/dev_reload.mjs"))
+        .arg(format!("http://127.0.0.1:{}/", dev.port))
+        .args(["2", "120"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let mut browser = Browser { child, lines };
+    assert!(
+        wait_recv(&browser.lines, "connected", limit),
+        "the script did not connect to the app server"
+    );
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "serving the error page", limit),
+        "no error page line"
+    );
+    assert!(
+        wait_recv(&browser.lines, "reloads=1", limit),
+        "no reload to the error page"
+    );
+    assert!(
+        wait_recv(&browser.lines, "connected", limit),
+        "the script did not connect to the error server"
+    );
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    assert!(
+        wait_recv(&browser.lines, "reloads=2", limit),
+        "no reload to the fixed page"
+    );
+    let status = browser.child.wait().unwrap();
+    assert!(status.success(), "the script ended with {status}");
+}
+
 #[test]
 fn web_units() {
     let out = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(root())
         .arg("test")
         .arg(root().join("framework").join("examples").join("hello"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("; 0 failed;"),
+        "aye test failed:\n{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn dev_units() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .arg("test")
+        .arg(root().join("framework").join("dev"))
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
