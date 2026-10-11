@@ -1,4 +1,5 @@
-// `web dev`: generates, checks and builds an app and runs its server.
+// `web dev`: generates, checks and builds an app, runs its server and runs
+// it again when the app changes.
 //
 //     aye run framework/dev -- <app> [--port N]
 //
@@ -8,25 +9,57 @@
 // `<app>/.web/server --port N` (no `--port` when there is none here) as a
 // child. The server's first line, `listening on 127.0.0.1:<port>`, is
 // printed to the standard output, a thread copies the rest of its output
-// there, and its standard error is this program's. The program ends with
-// the server's status (128 plus the signal when a signal ended it). A step
-// that fails has printed its own output; the program then ends with status
-// 1. The `aye` program is `$AYE`, else the one on `PATH`. Killing this
-// program does not stop the server: signal the process group.
+// there, and its standard error is this program's. Then every 250 ms the
+// program reads the modification times of the `.aye` files below `<app>`
+// (not `.web/` and not `public/`, see `watch.aye`). When one is added,
+// removed or changed it prints `web dev: restarting (<path> changed)`, ends
+// the server (SIGTERM, then waits), builds again and starts a new server on
+// the same port (the one of the first `listening on` line when there was no
+// `--port`). A step that fails has printed its own output; the program
+// then has no server and goes on watching. A server that ends by itself is
+// reported and not started again before a change. SIGINT or SIGTERM to this
+// program ends the server and then the program (status 0); the program
+// otherwise runs until it is killed. The `aye` program is `$AYE`, else the
+// one on `PATH`. A SIGKILL to this program does not stop the server: signal
+// the process group.
 
 import std.fs
+import std.heap.Arena
 import std.heap.General
 import std.mem.Allocator
 import std.os
 import std.path
 import std.process
 import std.process.Stdio
+import std.sync.Atomic
 import std.text
+import std.text.Builder
 import std.thread
+import std.time
+
+extern fn signal(sig: i32, handler: fn(i32)) usize
+
+/// How often the files are looked at, in milliseconds.
+let pollMs: u64 = 250
+
+/// 1 once a signal asked this program to end.
+var stopped = Atomic(u32) { value: 0 }
+
+/// 1 once the server has closed its output, that is, has ended.
+var ended = Atomic(u32) { value: 0 }
 
 /// What the thread that copies the server's output needs.
 struct Copy {
     from: fs.File
+}
+
+/// A running server: the process, the thread that copies its output, that
+/// thread's argument, and the first line the server printed.
+struct Server {
+    child: process.Child
+    copier: thread.Thread
+    job: []mut Copy
+    line: []mut u8
 }
 
 pub fn main() !void {
@@ -59,46 +92,127 @@ pub fn main() !void {
     }
     let web = try path.join(alloc, app, ".web")
     let server = try path.join(alloc, web, "server")
-    let gen = [7][]u8{bin, "run", "framework/gen", "--", app, "--web", "framework/web"}
-    step(alloc, gen[..], "web gen")
-    let check = [3][]u8{bin, "check", web}
-    step(alloc, check[..], "aye check")
-    let build = [5][]u8{bin, "build", web, "-o", server}
-    step(alloc, build[..], "aye build")
+    signal(2, onSignal)
+    signal(15, onSignal)
 
-    var child = start(alloc, server, port)
-    let out = child.stdout.?
-    // The first line, a byte at a time, so that nothing after it is taken.
-    var byte = [1]u8{0}
-    while true {
-        let n = out.read(byte[..]) catch |err| {
-            break
+    // Two arenas for the snapshots: the one that was last taken and the one
+    // for the next look.
+    var arenas = [2]Arena{Arena.init(alloc), Arena.init(alloc)}
+    var cur: usize = 0
+    var before = read(arenas[0].allocator(), app) orelse {
+        die("cannot read", app)
+        unreachable
+    }
+    var running: ?Server = null
+    running = up(alloc, bin, app, web, server, port)
+    if running |s| {
+        port = keepPort(alloc, s, port)
+    }
+    while stopped.load() == 0 {
+        time.sleep(pollMs)
+        if running |s| {
+            if ended.load() == 1 {
+                stop(alloc, s)
+                running = null
+                note("server ended", "")
+            }
         }
-        if n == 0 {
-            break
-        }
-        fs.stdout().write(byte[..]) catch |err| {
-            break
-        }
-        if byte[0] == '\n' {
-            break
+        let other = 1 - cur
+        if read(arenas[other].allocator(), app) |now| {
+            if changed(before, now) |p| {
+                note("restarting", p)
+                if running |s| {
+                    stop(alloc, s)
+                    running = null
+                }
+                arenas[cur].deinit()
+                arenas[cur] = Arena.init(alloc)
+                before = now
+                cur = other
+                running = up(alloc, bin, app, web, server, port)
+                if running |s| {
+                    port = keepPort(alloc, s, port)
+                }
+            } else {
+                arenas[other].deinit()
+                arenas[other] = Arena.init(alloc)
+            }
+        } else {
+            arenas[other].deinit()
+            arenas[other] = Arena.init(alloc)
         }
     }
-    var job = Copy { from: out }
-    let t = thread.spawn(Copy, copy, &mut job) catch |err| {
-        die("cannot start a thread", "")
-        return
+    if running |s| {
+        stop(alloc, s)
     }
+    os.exit(0)
+}
+
+/// Runs when SIGINT or SIGTERM reaches this program.
+fn onSignal(sig: i32) {
+    stopped.store(1)
+}
+
+/// The snapshot of `app`, null when it cannot be read (a directory went
+/// away while it was read; the next look finds it again).
+fn read(alloc: Allocator, app: []u8) ?Snapshot {
+    return snapshot(alloc, app) catch |err| {
+        return null
+    }
+}
+
+/// Generates, checks and builds the app, then starts the server. Null when
+/// a step failed.
+fn up(alloc: Allocator, bin: []u8, app: []u8, web: []u8, server: []u8, port: []u8) ?Server {
+    let gen = [7][]u8{bin, "run", "framework/gen", "--", app, "--web", "framework/web"}
+    if !step(alloc, gen[..], "web gen") {
+        return null
+    }
+    let check = [3][]u8{bin, "check", web}
+    if !step(alloc, check[..], "aye check") {
+        return null
+    }
+    let build = [5][]u8{bin, "build", web, "-o", server}
+    if !step(alloc, build[..], "aye build") {
+        return null
+    }
+    return start(alloc, server, port)
+}
+
+/// The port to start the next server on: `port`, or the one in the first
+/// line of `s` when `port` is empty. `s.line` is kept only for that.
+fn keepPort(alloc: Allocator, s: Server, port: []u8) []u8 {
+    if port.len > 0 {
+        alloc.free(s.line)
+        return port
+    }
+    var colon: usize = 0
+    var found = false
+    var i: usize = 0
+    while i < s.line.len {
+        if s.line[i] == ':' {
+            colon = i
+            found = true
+        }
+        i += 1
+    }
+    if !found {
+        return ""
+    }
+    return text.trim(s.line[colon + 1..s.line.len])
+}
+
+/// Ends the server (SIGTERM), waits for it and for the thread that copies
+/// its output.
+fn stop(alloc: Allocator, s: Server) {
+    var child = s.child
+    child.kill() catch |err| {}
     let status = child.wait() catch |err| {
-        die("cannot wait for the server", server)
-        return
+        process.Status { code: 0, signal: 0 }
     }
-    t.join()
-    out.close()
-    if status.signal != 0 {
-        os.exit(128 + status.signal)
-    }
-    os.exit(status.code)
+    s.copier.join()
+    child.stdout.?.close()
+    alloc.free(s.job)
 }
 
 /// Copies what the server writes to this program's standard output until the
@@ -108,48 +222,106 @@ fn copy(job: *mut Copy) {
     defer gpa.deinit()
     let alloc = gpa.allocator()
     let buf = alloc.alloc(0 as u8, 4096) catch |err| {
+        ended.store(1)
         return
     }
+    defer alloc.free(buf)
     while true {
         let n = job.from.read(buf) catch |err| {
-            return
+            break
         }
         if n == 0 {
-            return
+            break
         }
         fs.stdout().write(buf[0..n]) catch |err| {
-            return
+            break
         }
     }
+    ended.store(1)
 }
 
-/// Runs `argv` with this program's standard streams; ends the program with
-/// status 1 when it fails.
-fn step(alloc: Allocator, argv: [][]u8, what: []u8) {
+/// Runs `argv` with this program's standard streams. When it fails, says so
+/// and gives false.
+fn step(alloc: Allocator, argv: [][]u8, what: []u8) bool {
     var child = process.spawn(alloc, argv, Stdio.Inherit, Stdio.Inherit, Stdio.Inherit) catch |err| {
         die("cannot run", argv[0])
-        return
+        return false
     }
     let status = child.wait() catch |err| {
         die("cannot wait for", what)
-        return
+        return false
     }
     if !status.success() {
-        die("failed", what)
+        note("failed", what)
+        return false
     }
+    return true
 }
 
-/// Starts the server with its standard output piped.
-fn start(alloc: Allocator, server: []u8, port: []u8) process.Child {
+/// Starts the server with its standard output piped, prints its first line
+/// and starts the thread that copies the rest.
+fn start(alloc: Allocator, server: []u8, port: []u8) Server {
     var argv = [3][]u8{server, "--port", port}
     var n: usize = 3
     if port.len == 0 {
         n = 1
     }
-    return process.spawn(alloc, argv[0..n], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
+    var child = process.spawn(alloc, argv[0..n], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
         die("cannot start the server", server)
         unreachable
     }
+    let out = child.stdout.?
+    // The first line, a byte at a time, so that nothing after it is taken.
+    var line = Builder.init(alloc)
+    defer line.deinit()
+    var byte = [1]u8{0}
+    while true {
+        let got = out.read(byte[..]) catch |err| {
+            break
+        }
+        if got == 0 {
+            break
+        }
+        line.appendByte(byte[0]) catch |err| {
+            break
+        }
+        if byte[0] == '\n' {
+            break
+        }
+    }
+    fs.stdout().write(line.bytes()) catch |err| {}
+    ended.store(0)
+    let job = alloc.alloc(Copy { from: out }, 1) catch |err| {
+        die("out of memory", "")
+        unreachable
+    }
+    let t = thread.spawn(Copy, copy, &mut job[0]) catch |err| {
+        die("cannot start a thread", "")
+        unreachable
+    }
+    let owned = line.toOwned() catch |err| {
+        die("out of memory", "")
+        unreachable
+    }
+    return Server { child: child, copier: t, job: job, line: owned }
+}
+
+/// Prints `web dev: <what> (<a> changed)`, or just `web dev: <what>` and, for
+/// a failed step, `: <a>`.
+fn note(what: []u8, a: []u8) {
+    fs.stdout().write("web dev: ") catch |e| {}
+    fs.stdout().write(what) catch |e| {}
+    if a.len > 0 {
+        if text.eql(what, "restarting") {
+            fs.stdout().write(" (") catch |e| {}
+            fs.stdout().write(a) catch |e| {}
+            fs.stdout().write(" changed)") catch |e| {}
+        } else {
+            fs.stdout().write(": ") catch |e| {}
+            fs.stdout().write(a) catch |e| {}
+        }
+    }
+    fs.stdout().write("\n") catch |e| {}
 }
 
 fn die(what: []u8, a: []u8) {
