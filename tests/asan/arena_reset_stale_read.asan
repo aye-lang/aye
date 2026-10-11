@@ -1,0 +1,2 @@
+READ of size 8
+ERROR: AddressSanitizer: use-after-poison

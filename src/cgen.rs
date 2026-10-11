@@ -745,7 +745,11 @@ AYE_RT size_t aye_general_deinit(aye_General *g) {
 }
 
 /* Arena: bump allocation in chunks from the backing allocator. `free` does
-   nothing; `deinit` frees every chunk. */
+   nothing; `deinit` frees every chunk; `reset` frees every chunk but the
+   first (the oldest, last in the list) and rewinds it. Under
+   AddressSanitizer `reset` poisons the kept chunk and each allocation
+   unpoisons its bytes, so a stale pointer from before `reset` is reported
+   where it is used. */
 typedef struct aye_arena_chunk { struct aye_arena_chunk *next; size_t size; } aye_arena_chunk;
 typedef struct aye_Arena { aye_Allocator backing; aye_arena_chunk *chunks; size_t used; } aye_Arena;
 #define AYE_ARENA_CHUNK 4096
@@ -756,6 +760,7 @@ AYE_RT void *aye_arena_alloc(void *self, size_t size, size_t align, int line, in
         size_t off = (a->used + align - 1) & ~(align - 1);
         if (off <= c->size && size <= c->size - off) {
             a->used = off + size;
+            AYE_ASAN_UNPOISON((char *)(c + 1) + off, size);
             return (char *)(c + 1) + off;
         }
     }
@@ -775,9 +780,22 @@ AYE_RT aye_Allocator aye_arena_allocator(aye_Arena *a) { return (aye_Allocator){
 AYE_RT void aye_arena_deinit(aye_Arena *a, int line, int col) {
     for (aye_arena_chunk *c = a->chunks, *next; c; c = next) {
         next = c->next;
+        AYE_ASAN_UNPOISON(c + 1, c->size);
         aye_free(a->backing, c, sizeof(aye_arena_chunk) + c->size, line, col);
     }
     a->chunks = 0;
+    a->used = 0;
+}
+AYE_RT void aye_arena_reset(aye_Arena *a, int line, int col) {
+    aye_arena_chunk *c = a->chunks;
+    if (!c) return;
+    while (c->next) {
+        aye_arena_chunk *next = c->next;
+        aye_free(a->backing, c, sizeof(aye_arena_chunk) + c->size, line, col);
+        c = next;
+    }
+    AYE_ASAN_POISON(c + 1, c->size);
+    a->chunks = c;
     a->used = 0;
 }
 
@@ -3244,6 +3262,7 @@ impl Gen {
             Intrinsic::ArenaInit => format!("aye_arena_init({})", a[0]),
             Intrinsic::ArenaAllocator => format!("aye_arena_allocator({})", a[0]),
             Intrinsic::ArenaDeinit => format!("aye_arena_deinit({}, {lc})", a[0]),
+            Intrinsic::ArenaReset => format!("aye_arena_reset({}, {lc})", a[0]),
             Intrinsic::Destroy => {
                 format!("aye_free({0}, (void *){1}, sizeof(*{1}), {lc})", a[0], a[1])
             }

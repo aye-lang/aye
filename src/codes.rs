@@ -1330,7 +1330,7 @@ pub fn main() {
 }
 E0071 = 71 {
     "unknown method",
-    "The type has no method with this name. Methods are the functions declared in a struct body; `dyn I` has the methods of interface `I`; `Allocator` has `create`, `destroy`, `alloc` and `free`, and `General` and `Arena` have `init`, `allocator` and `deinit`. Check the spelling, or declare the method in the struct.",
+    "The type has no method with this name. Methods are the functions declared in a struct body; `dyn I` has the methods of interface `I`; `Allocator` has `create`, `destroy`, `alloc` and `free`, `General` and `Arena` have `init`, `allocator` and `deinit`, and `Arena` also has `reset`. Check the spelling, or declare the method in the struct.",
     r#"struct Counter {
     n: i32
 }
