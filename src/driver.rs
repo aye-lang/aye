@@ -177,13 +177,16 @@ impl Target {
 
     /// The clang command for this target, with the flags that select it:
     /// `--target`, and for WASI the sysroot and resource directory
-    /// (`AYE_WASI_SYSROOT`, `AYE_WASI_RESOURCE_DIR`, else Homebrew's
+    /// (`AYE_WASI_SYSROOT`, `AYE_WASI_RESOURCE_DIR`, `AYE_WASI_CLANG`, else Homebrew's
     /// `wasi-libc` and `wasi-runtimes`) and Homebrew's `llvm` clang, whose
     /// Apple counterpart has no wasm backend.
     fn clang(&self) -> Result<Command, String> {
         let mut cmd = if self.is_wasm() {
             let brew = brew_prefix("llvm").map(|p| p.join("bin/clang"));
-            Command::new(brew.filter(|c| c.exists()).unwrap_or("clang".into()))
+            match std::env::var_os("AYE_WASI_CLANG") {
+                Some(c) => Command::new(c),
+                None => Command::new(brew.filter(|c| c.exists()).unwrap_or("clang".into())),
+            }
         } else {
             Command::new("clang")
         };

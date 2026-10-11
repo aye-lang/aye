@@ -44,6 +44,28 @@ if ! command -v cargo >/dev/null 2>&1; then
     done
 fi
 
+# wasi-sdk (clang with the wasm32 backend, WASI sysroot and resource
+# directory) for the wasm32-wasip1 target. Apple's clang has no wasm
+# backend and Ubuntu's clang ships no WASI libc. The env file below is
+# read by login shells; `. /etc/profile.d/aye-wasi.sh` in others.
+WASI_SDK_VERSION=34
+case "$(uname -m)" in
+    x86_64) WASI_SDK_ARCH=x86_64 ;;
+    aarch64|arm64) WASI_SDK_ARCH=arm64 ;;
+    *) echo "setup-ubuntu: no wasi-sdk for $(uname -m)" >&2; exit 1 ;;
+esac
+if [ ! -x /opt/wasi-sdk/bin/clang ]; then
+    WASI_TMP=$(mktemp -d)
+    curl -fsSL -o "$WASI_TMP/wasi-sdk.tar.gz" \
+        "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$WASI_SDK_VERSION/wasi-sdk-$WASI_SDK_VERSION.0-$WASI_SDK_ARCH-linux.tar.gz"
+    $SUDO mkdir -p /opt/wasi-sdk
+    $SUDO tar xzf "$WASI_TMP/wasi-sdk.tar.gz" -C /opt/wasi-sdk --strip-components=1
+    rm -rf "$WASI_TMP"
+fi
+WASI_RES=$(ls -d /opt/wasi-sdk/lib/clang/* | head -n 1)
+printf 'export AYE_WASI_CLANG=/opt/wasi-sdk/bin/clang\nexport AYE_WASI_SYSROOT=/opt/wasi-sdk/share/wasi-sysroot\nexport AYE_WASI_RESOURCE_DIR=%s\n' "$WASI_RES" \
+    | $SUDO tee /etc/profile.d/aye-wasi.sh >/dev/null
+
 $SUDO apt-get clean
 $SUDO rm -rf /var/lib/apt/lists/*
 echo "setup-ubuntu: done"
