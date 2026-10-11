@@ -315,6 +315,16 @@ pub fn main() !void {
 [`tests/example1/app`](tests/example1/app) is the design doc's Example 1
 (`readConfig`) as a directory module.
 
+A program can depend on other trees through an `aye.toml` next to its root
+module: `util = { path = "../util" }` or
+`tinyjson = { url = "https://example.com/tinyjson-1.2.tar.gz" }`, and
+`import tinyjson` then names that tree (see `aye spec deps`). A URL
+dependency (`https://` or `file://`, a `.tar.gz` or `.tgz`) is downloaded
+once into the cache (`$AYE_CACHE`, else `$XDG_CACHE_HOME/aye`, else
+`~/.cache/aye`) and pinned in `aye.lock` by the SHA-256 of the archive;
+commit the lock. A later build uses the cache and needs no network, and an
+archive that hashes differently is E0122.
+
 ## Example
 
 ```aye
@@ -432,7 +442,7 @@ Not yet supported (reported as errors): `comptime` values other than types
 and compile-time execution beyond type functions, error payloads, error
 unions outside return types, `match` on strings, pointer arithmetic, enums
 as `dyn` values, closures, C bit fields (`@cimport` makes such records
-opaque), `build.aye` and package dependencies, renaming imports. std has
+opaque), `build.aye`, dependencies of dependencies, renaming imports. std has
 `coro`, `crypto`, `diag`, `encoding`, `fs`, `heap`, `http`, `json`, `list`,
 `log`, `map`, `math`, `mem`, `net`, `os`, `path`, `pool`, `process`, `sort`,
 `sync`, `testing`, `text`, `thread` and `time`; `aye spec` indexes them and

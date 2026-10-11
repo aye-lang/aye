@@ -1434,9 +1434,6 @@ pub fn main() {
 
 ### Dependencies
 
-URL dependencies and `aye.lock` are not implemented yet (O4.3); `url` is
-an error (E0121) until then.
-
 A program with dependencies has an `aye.toml` in its root module's
 directory. It is a small subset of TOML: `#` comments, `name = "..."`
 (an identifier: the default executable name), then `[deps]` with one line
