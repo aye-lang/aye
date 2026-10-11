@@ -1,0 +1,157 @@
+// std.http.Server (O3.9a): a slow client does not hold up the other
+// connections of its worker. The server has one worker. A client sends two
+// pipelined requests, a 4 MiB body (more than the kernel buffers on
+// loopback: 1 to 2 MiB on macOS) and then a short one with `Connection:
+// close`, reads nothing for 300 ms, and then reads 16 KiB at a time with a
+// pause between reads. A second client gets 20 answers on one keep-alive
+// connection before the slow client has read anything. The slow client
+// then gets the whole body, the second response after it, and the end of
+// the connection. Only pass or fail is printed, no times.
+
+import std.heap.General
+import std.http
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.mem
+import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.text
+import std.thread
+import std.time
+
+let BIG: usize = 4194304
+let HEAD1: []u8 = "HTTP/1.1 200 OK\r\nContent-Length: 4194304\r\n\r\n"
+let TAIL: []u8 = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nafter"
+
+struct App {
+    unused: u32
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    if text.eql(req.path(), "/big") {
+        let x: u8 = 'x'
+        let body = alloc.alloc(x, BIG) catch |e| {
+            res.status = 500
+            return
+        }
+        res.body = body
+        return
+    }
+    if text.eql(req.path(), "/after") {
+        res.body = "after"
+        return
+    }
+    res.body = "ok"
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+// The slow client: what it read, the last bytes of it, and when it had
+// read half of the big body.
+struct Slow {
+    port: u16
+    total: usize
+    tail: [256]u8
+    tailLen: usize
+    firstMs: u64
+    closed: bool
+}
+
+fn slowMain(s: *mut Slow) {
+    let c = net.connect("127.0.0.1", s.port) catch |e| {
+        return
+    }
+    defer c.close()
+    c.write("GET /big HTTP/1.1\r\nHost: x\r\n\r\nGET /after HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n") catch |e| {
+        return
+    }
+    var buf = @zeroed([16384]u8)
+    // Read nothing for a while: the server's socket buffer fills up.
+    time.sleep(300)
+    s.firstMs = time.monotonicMs()
+    while true {
+        time.sleep(1)
+        let n = c.readTimeout(buf[..], 5000) catch |e| {
+            return
+        }
+        if n == 0 {
+            s.closed = true
+            return
+        }
+        s.total += n
+        // Keep the last 256 bytes in `tail`.
+        for i in 0..n {
+            if s.tailLen == 256 {
+                for k in 1..256 {
+                    s.tail[k - 1] = s.tail[k]
+                }
+                s.tailLen = 255
+            }
+            s.tail[s.tailLen] = buf[i]
+            s.tailLen += 1
+        }
+    }
+}
+
+// Sends `GET /k` and reads until the answer ends with "ok"; true when it
+// is a 200.
+fn oneKeepAlive(c: Conn) !bool {
+    try c.write("GET /k HTTP/1.1\r\nHost: x\r\n\r\n")
+    var buf = @zeroed([512]u8)
+    var got: usize = 0
+    while got < 512 {
+        let n = try c.readTimeout(buf[got..], 5000)
+        if n == 0 {
+            break
+        }
+        got += n
+        if got >= 2 && mem.eql(buf[got - 2..got], "ok") {
+            break
+        }
+    }
+    return got >= 12 && mem.eql(buf[0..12], "HTTP/1.1 200") && mem.eql(buf[got - 2..got], "ok")
+}
+
+pub fn main() !void {
+    var app = App { unused: 0 }
+    var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
+    s.workers = 1
+    let t = try thread.spawn(Server, run, &mut s)
+
+    var slow = Slow { port: s.port(), total: 0, tail: @zeroed([256]u8), tailLen: 0, firstMs: 0, closed: false }
+    let st = try thread.spawn(Slow, slowMain, &mut slow)
+    // Let the server answer the big request first.
+    time.sleep(50)
+
+    let fast = try net.connect("127.0.0.1", s.port())
+    var ok: u32 = 0
+    for i in 0..20 {
+        if try oneKeepAlive(fast) {
+            ok += 1
+        }
+    }
+    let fastMs = time.monotonicMs()
+    fast.close()
+    st.join()
+
+    @print("fast client answered ")
+    @println(ok)
+    @print("fast client done before the slow one read: ")
+    @println(slow.firstMs != 0 && fastMs < slow.firstMs)
+    @print("slow client got both responses: ")
+    let tail = slow.tail[0..slow.tailLen]
+    @println(slow.total == HEAD1.len + BIG + TAIL.len && tail.len >= TAIL.len && mem.eql(tail[tail.len - TAIL.len..], TAIL))
+    @print("slow client saw the close: ")
+    @println(slow.closed)
+
+    s.stop()
+    t.join()
+}
