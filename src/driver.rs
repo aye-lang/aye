@@ -834,9 +834,12 @@ fn run_one(
         // SAFETY: `setrlimit` is async-signal-safe, as `pre_exec` requires.
         unsafe {
             cmd.pre_exec(move || {
+                // The hard limit stays above the soft one: with the two
+                // equal, Linux sends `SIGKILL` at the limit (and accounts the
+                // CPU a little under it), with it above, `SIGXCPU`.
                 let l = Rlimit {
                     cur: time_limit,
-                    max: time_limit,
+                    max: time_limit + 1,
                 };
                 setrlimit(RLIMIT_CPU, &l);
                 Ok(())
