@@ -143,6 +143,38 @@ pub fn isGroup(seg: []u8) bool {
     return seg.len > 2 && seg[0] == '(' && seg[seg.len - 1] == ')'
 }
 
+/// Does the directory of `p` have a `page.aye`?
+pub fn hasPage(p: Page) bool {
+    for f in p.fns {
+        if text.eql(f, "page") {
+            return true
+        }
+    }
+    return false
+}
+
+/// Does the directory of `p` have a `route.aye`?
+pub fn hasRoute(p: Page) bool {
+    for f in p.fns {
+        if !text.eql(f, "page") {
+            return true
+        }
+    }
+    return false
+}
+
+/// The name of the generated module of one file of a directory: `base` (from
+/// `linkName`) and the role of the file, `page`, `route`, `layout` or
+/// `notfound`. Each file is a module of its own, so a local of `page.aye`
+/// cannot clash with a function of `route.aye` (Aye has no shadowing).
+pub fn moduleName(alloc: Allocator, base: []u8, role: []u8) AllocError![]u8 {
+    var b = Builder.init(alloc)
+    try b.append(base)
+    try b.append("_")
+    try b.append(role)
+    return b.bytes()
+}
+
 /// The identifier a directory is linked as: `blog/[slug]` becomes
 /// `blog_slug`, `app/` itself `root`. Letters and digits stay; each run of
 /// other characters becomes one `_`.

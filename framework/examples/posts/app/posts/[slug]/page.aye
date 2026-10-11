@@ -12,16 +12,14 @@ import web.Request
 import web.Response
 import web.island
 
-// The post is `entry`: a local named `post` would shadow the `post` of
-// `route.aye`, which the generated module of this directory shares.
 pub fn page(req: *Request, res: *mut Response) Error!void {
-    let entry = posts.bySlug(req.param("slug")) orelse return Error.NotFound
-    let found = try posts.comments(req.arena, entry.slug)
+    let post = posts.bySlug(req.param("slug")) orelse return Error.NotFound
+    let found = try posts.comments(req.arena, post.slug)
     let html = res.html()
     try html.raw("<article><h1>")
-    try html.text(entry.title)
+    try html.text(post.title)
     try html.raw("</h1>")
-    try html.raw(entry.body_html)
+    try html.raw(post.body_html)
     try html.raw("</article>")
     try island(html, "likes", "{\"count\":0}", view.render)
     try html.raw("<h2 id=\"comments\">")
@@ -38,7 +36,7 @@ pub fn page(req: *Request, res: *mut Response) Error!void {
         try html.raw("</li>")
     }
     try html.raw("</ul><form method=\"post\" action=\"/posts/")
-    try html.text(entry.slug)
+    try html.text(post.slug)
     try html.raw("\"><label>Name <input name=\"name\" maxlength=\"80\" value=\"")
     if req.cookie("name") |sent| {
         try html.text(try http.percentDecode(req.arena, sent))

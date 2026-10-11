@@ -9,12 +9,13 @@
 //
 // The loader names the paths that `web gen` made, not the app's own:
 //
-//     .web/r/r6_blog_slug/page.aye   becomes   app/blog/[slug]/page.aye
+//     .web/r/r6_blog_slug_page/page.aye   becomes   app/blog/[slug]/page.aye
 //     .web/lib/posts.aye             becomes   lib/posts.aye
 //     <app>/app/about/page.aye       becomes   app/about/page.aye
 //
 // `std.fs` cannot read a link, so a `.web/r/<name>` link is followed back by
-// name: `web gen` names the link of `app/<dir>` `r<N>_<dir>` with each run of
+// name: `web gen` names the directory of a file of `app/<dir>`
+// `r<N>_<dir>_<role>` (`page`, `route`, `layout`, `notfound`) with each run of
 // characters that are not letters or digits turned into one `_` (`root` for
 // `app/` itself), and the directories of `<app>/app` are searched for the one
 // with that name. A path elsewhere (`.web/main.aye`, `.web/routes/...`, a file
@@ -266,7 +267,18 @@ fn linkedDir(tmp: Allocator, appDir: []u8, name: []u8) ?[]u8 {
     let root = path.join(tmp, appDir, "app") catch |e| {
         return null
     }
-    return search(tmp, root, "", name[i + 1..])
+    return search(tmp, root, "", withoutRole(name[i + 1..]))
+}
+
+/// `rest` without the `_<role>` that `web gen` adds for the file of a link
+/// (`blog_slug_page` is `blog_slug`).
+fn withoutRole(rest: []u8) []u8 {
+    for role in [4][]u8{"_page", "_route", "_layout", "_notfound"} {
+        if text.endsWith(rest, role) {
+            return rest[..rest.len - role.len]
+        }
+    }
+    return rest
 }
 
 /// The directory under `root` + `rel` whose link name is `want`.
@@ -371,7 +383,7 @@ test "two diagnostics of a saved check output get app paths" {
 }
 
 test "text is escaped and help, root and other paths are shown" {
-    let report = "{\"file\":\".web\",\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E1\",\"file\":\".web/r/r0_root/page.aye\",\"line\":3,\"col\":2,\"message\":\"found <script> & \\\"x\\\"\",\"help\":\"use `<b>`\"},{\"severity\":\"warning\",\"code\":\"W1\",\"file\":\".web/lib/posts.aye\",\"line\":1,\"col\":1,\"message\":\"m\"},{\"severity\":\"error\",\"code\":\"E2\",\"file\":\"/elsewhere/x.aye\",\"line\":4,\"col\":1,\"message\":\"n\"}]}"
+    let report = "{\"file\":\".web\",\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E1\",\"file\":\".web/r/r0_root_page/page.aye\",\"line\":3,\"col\":2,\"message\":\"found <script> & \\\"x\\\"\",\"help\":\"use `<b>`\"},{\"severity\":\"warning\",\"code\":\"W1\",\"file\":\".web/lib/posts.aye\",\"line\":1,\"col\":1,\"message\":\"m\"},{\"severity\":\"error\",\"code\":\"E2\",\"file\":\"/elsewhere/x.aye\",\"line\":4,\"col\":1,\"message\":\"n\"}]}"
     let page = try errorPage(@testAllocator(), report, "no/such/app")
     defer @testAllocator().free(page)
     @expect(has(page, "<h1>3 errors</h1>"))
@@ -411,11 +423,11 @@ test "link names map back to directories" {
     defer arena.deinit()
     let tmp = arena.allocator()
     let app = "framework/examples/pages"
-    @expectEqual("", linkedDir(tmp, app, "r0_root").?)
-    @expectEqual("blog/[slug]", linkedDir(tmp, app, "r6_blog_slug").?)
-    @expectEqual("(marketing)/pricing", linkedDir(tmp, app, "r9_marketing_pricing").?)
-    @expect(linkedDir(tmp, app, "r1_nothing") == null)
+    @expectEqual("", linkedDir(tmp, app, "r0_root_page").?)
+    @expectEqual("blog/[slug]", linkedDir(tmp, app, "r6_blog_slug_route").?)
+    @expectEqual("(marketing)/pricing", linkedDir(tmp, app, "r9_marketing_pricing_layout").?)
+    @expect(linkedDir(tmp, app, "r1_nothing_page") == null)
     @expect(linkedDir(tmp, app, "blog") == null)
-    @expectEqual("app/blog/x.aye", try appPath(tmp, "framework/examples/pages/.web/r/r5_blog/x.aye", app))
+    @expectEqual("app/blog/x.aye", try appPath(tmp, "framework/examples/pages/.web/r/r5_blog_page/x.aye", app))
     @expectEqual("app/about/x.aye", try appPath(tmp, "framework/examples/pages/app/about/x.aye", app))
 }
