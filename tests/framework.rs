@@ -1481,11 +1481,17 @@ fn run_build(app: &Path, exe: &Path) -> std::process::Output {
 /// Like `start_in`, with `PATH` set to `/usr/bin:/bin` and nothing else in
 /// the environment: no `aye`, no toolchain.
 fn start_scrubbed(exe: &Path, cwd: &Path) -> App {
+    start_scrubbed_with(exe, cwd, &[])
+}
+
+/// Like `start_scrubbed`, with `extra` arguments after `--port 0`.
+fn start_scrubbed_with(exe: &Path, cwd: &Path, extra: &[&str]) -> App {
     let mut child = Command::new(exe)
         .current_dir(cwd)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .args(["--port", "0"])
+        .args(extra)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1758,4 +1764,127 @@ fn posts_likes() {
     assert_eq!(page.matches("data-island=\"likes\"").count(), 1, "{page}");
     assert_eq!(page.matches("/_web/islands.js").count(), 1, "{page}");
     assert_eq!(island_text_at(server.port, "/posts/hello"), "text=♥ 2");
+}
+
+/// `response` as the dev server would send it: the hashed stylesheet `href`
+/// of the production build is `/style.css` again and `Content-Length` is
+/// the length of the body that results.
+fn unhash(response: &str) -> String {
+    let Some((head, body)) = response.split_once("\n\n") else {
+        return response.to_string();
+    };
+    let Some(href) = body
+        .split("<link rel=\"stylesheet\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|href| href.starts_with("/style.") && *href != "/style.css")
+    else {
+        return response.to_string();
+    };
+    let body = body.replace(href, "/style.css");
+    let head: String = head
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.starts_with("Content-Length: ") {
+                format!("Content-Length: {}\n", body.len())
+            } else if line.ends_with('\n') {
+                line.to_string()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    format!("{head}\n{body}")
+}
+
+/// The production binary of the posts app, built by `web build`, run from
+/// another directory with the app tree gone and `PATH` scrubbed, on a copy
+/// of the data file: the transcripts of the dev build hold, apart from the
+/// hashed stylesheet `href`.
+#[test]
+fn posts_prod() {
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let app = tmp.join("framework-posts-prod-app");
+    let gone = tmp.join("framework-posts-prod-gone");
+    let from = tmp.join("framework-posts-prod-cwd");
+    let data = tmp.join("framework-posts-prod-data");
+    for dir in [&app, &gone, &from, &data] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let exe = from.join("posts-prod");
+    copy_dir(&root().join("framework/examples/posts"), &app);
+    let out = run_build(&app, &exe);
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "web build failed:\n{stdout}{stderr}");
+    let islands = app.join(".web/client/likes.wasm").is_file();
+    let css = std::fs::read_to_string(app.join("public/style.css")).unwrap();
+    let file = data.join("posts.json");
+    std::fs::copy(app.join("data/posts.json"), &file).unwrap();
+    std::fs::rename(&app, &gone).unwrap();
+
+    let server = start_scrubbed_with(&exe, &from, &["--posts", file.to_str().unwrap()]);
+    let want = |file: &str| {
+        std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap()
+    };
+    for (method, path, file) in POSTS_CASES {
+        assert_eq!(
+            unhash(&scrub(&request(&server, method, path))),
+            want(file),
+            "{method} {path}"
+        );
+    }
+
+    // The stylesheet, plain and under its hashed name, is the file's text.
+    let home = request(&server, "GET", "/");
+    let href = home
+        .split("<link rel=\"stylesheet\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no stylesheet link: {home}"));
+    assert!(
+        href.starts_with("/style.") && href != "/style.css",
+        "{href}"
+    );
+    for path in ["/style.css", href] {
+        let response = request(&server, "GET", path);
+        assert!(response.starts_with("HTTP/1.1 200 OK\n"), "{response}");
+        assert!(
+            response.contains("Content-Type: text/css; charset=utf-8\n"),
+            "{response}"
+        );
+        assert_eq!(response.split_once("\n\n").unwrap().1, css, "{path}");
+    }
+
+    if islands {
+        let wasm = request_raw(&server, "GET", "/_web/islands/likes.wasm", "", "");
+        let (head, body) = split_binary(&wasm);
+        assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+        assert!(head.contains("Content-Type: application/wasm\n"), "{head}");
+        assert!(body.starts_with(b"\0asm"));
+    } else {
+        println!("skipped: no wasm32 clang; the island was not embedded");
+    }
+
+    // A comment: the redirect and the page that follows it.
+    let post = request_with(
+        &server,
+        "POST",
+        "/posts/hello",
+        FORM,
+        "name=Ann+B&body=%3Cb%3Ehi%3C%2Fb%3E%21",
+    );
+    assert_eq!(unhash(&scrub(&post)), want("comment_post.http"));
+    let page = request_with(
+        &server,
+        "GET",
+        "/posts/hello",
+        "Cookie: name=Ann%20B\r\n",
+        "",
+    );
+    assert_eq!(unhash(&scrub(&page)), want("comment_page.http"));
 }
