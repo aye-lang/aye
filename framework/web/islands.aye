@@ -3,7 +3,31 @@
 // `/_web/islands/<name>.wasm` and runs the island's `mount` over that
 // element's subtree.
 
+import std.heap.Arena
+import std.mem.AllocError
 import std.text
+import std.text.Builder
+
+/// The tag the server puts in a page that has an island.
+pub let islandsTag = "<script src=\"/_web/islands.js\" defer></script>"
+
+/// Writes an island into the page `h`: `<div data-island="<name>"
+/// data-props="<props>">`, the markup that `render` appends for `props`, and
+/// `</div>`. `name` and `props` (JSON text) are escaped like `h.text`. The
+/// island's `render` comes from a module that does not import `web` (it also
+/// builds for wasm32), so it writes into the `Builder`, `h.buf`. The page
+/// is marked, and the server adds `islandsTag` before `</body>` (see
+/// `injectTag`), once however many islands the page has.
+pub fn island(h: *mut Html, name: []u8, props: []u8, render: fn(*mut Builder, []u8) AllocError!void) Error!void {
+    try h.raw("<div data-island=\"")
+    try h.text(name)
+    try h.raw("\" data-props=\"")
+    try h.text(props)
+    try h.raw("\">")
+    try render(&mut h.buf, props)
+    try h.raw("</div>")
+    h.islands = true
+}
 
 /// The script that `/_web/islands.js` serves. For each element with a
 /// `data-island` attribute it fetches `/_web/islands/<name>.wasm` and
@@ -33,4 +57,51 @@ test "the islands script finds the data-island elements" {
     } else {
         @expect(false)
     }
+}
+
+fn echo(b: *mut Builder, props: []u8) AllocError!void {
+    try b.append("<i>")
+    try b.append(props)
+    try b.append("</i>")
+}
+
+test "island writes the div, the markup and marks the page" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var h = Html { buf: Builder.init(arena.allocator()), islands: false }
+    try island(&mut h, "counter", "{\"start\":3}", echo)
+    @expectEqual("<div data-island=\"counter\" data-props=\"{&quot;start&quot;:3}\"><i>{\"start\":3}</i></div>", h.bytes())
+    @expectEqual(true, h.islands)
+}
+
+test "a page without an island stays unmarked" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var h = Html { buf: Builder.init(arena.allocator()), islands: false }
+    try h.raw("<p>hi</p>")
+    @expectEqual(false, h.islands)
+}
+
+test "two islands give one script tag" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var res = Response.init(arena.allocator())
+    let h = res.html()
+    try h.raw("<body>")
+    try island(h, "a", "1", echo)
+    try island(h, "b", "2", echo)
+    try h.raw("</body>")
+    @expectEqual(true, res.page.islands)
+    try injectTag(&mut res, islandsTag)
+    let page = res.page.bytes()
+    var n: usize = 0
+    var i: usize = 0
+    while i + islandsTag.len <= page.len {
+        if text.eql(page[i..i + islandsTag.len], islandsTag) {
+            n += 1
+        }
+        i += 1
+    }
+    @expectEqual(1, n)
+    @expect(text.endsWith(page, "</div><script src=\"/_web/islands.js\" defer></script></body>"))
 }

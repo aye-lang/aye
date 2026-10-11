@@ -37,7 +37,7 @@ pub fn errorPage(alloc: Allocator, report: []u8, appDir: []u8) Error![]mut u8 {
     var arena = Arena.init(alloc)
     defer arena.deinit()
     let tmp = arena.allocator()
-    var html = Html { buf: Builder.init(alloc) }
+    var html = Html { buf: Builder.init(alloc), islands: false }
     defer html.buf.deinit()
 
     var list: []json.Value = []json.Value{}

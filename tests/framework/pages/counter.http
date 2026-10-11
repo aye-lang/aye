@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 375
+
+<!doctype html><html><head><title>Pages</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Home</a> <a href="/about">About</a> <a href="/blog/hello">Blog</a></nav><h1>Counter</h1><div data-island="counter" data-props="{&quot;start&quot;:3}"><button>+1</button> <span>Count: 3</span></div><script src="/_web/islands.js" defer></script></body></html>

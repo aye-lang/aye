@@ -6,6 +6,9 @@ import std.text.Builder
 /// text with `& < > "` escaped.
 pub struct Html {
     buf: Builder
+    /// True once `web.island` has written an island; the server then adds
+    /// the islands script to the page.
+    islands: bool
 
     /// Appends `s` unchanged.
     pub fn raw(self: *mut Self, s: []u8) Error!void {

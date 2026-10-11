@@ -132,7 +132,7 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
         res.page.raw(devScript()) catch |e| {
             fail(&mut res, e)
         }
-    } else if island(app, &req, &mut res) {
+    } else if islandAsset(app, &req, &mut res) {
     } else if find(app.routes, req.method, req.path) |r| {
         req.route = r.pattern
         r.handler(&req, &mut res) catch |e| {
@@ -164,6 +164,11 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     }
     if app.dev && devIsHtml(&res) {
         devInject(&mut res) catch |e| {
+            fail(&mut res, Error.OutOfMemory)
+        }
+    }
+    if res.page.islands && devIsHtml(&res) {
+        injectTag(&mut res, islandsTag) catch |e| {
             fail(&mut res, Error.OutOfMemory)
         }
     }
@@ -202,7 +207,7 @@ fn served(app: *mut App, req: *Request, res: *mut Response) bool {
 // Is `req` a `GET` or `HEAD` of `/_web/islands.js`, or of a file of
 // `app.client` under `/_web/islands/`? Then `res` is its answer. A path that
 // leaves `client` gets 400.
-fn island(app: *mut App, req: *Request, res: *mut Response) bool {
+fn islandAsset(app: *mut App, req: *Request, res: *mut Response) bool {
     if req.method != Method.Get && req.method != Method.Head {
         return false
     }

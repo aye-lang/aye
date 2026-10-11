@@ -65,6 +65,12 @@ pub fn devIsHtml(res: *Response) bool {
 /// Puts the script tag in the page of `res`: before the last `</body>`, or
 /// at the end when the page has none.
 pub fn devInject(res: *mut Response) AllocError!void {
+    try injectTag(res, scriptTag)
+}
+
+/// Puts `tag` in the page of `res`: before the last `</body>`, or at the end
+/// when the page has none. `devInject` and the islands script use it.
+pub fn injectTag(res: *mut Response, tag: []u8) AllocError!void {
     let page = res.page.bytes()
     var at = page.len
     var i: usize = 0
@@ -76,7 +82,7 @@ pub fn devInject(res: *mut Response) AllocError!void {
     }
     var out = Builder.init(res.alloc)
     try out.append(page[0..at])
-    try out.append(scriptTag)
+    try out.append(tag)
     try out.append(page[at..page.len])
     res.page.buf = out
 }
