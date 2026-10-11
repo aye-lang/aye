@@ -1,0 +1,1 @@
+import_unbound/main.aye:6:22: error[E0081]: `a` is not an imported module: `import a.b` binds only `b` (add `import a`)

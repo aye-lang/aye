@@ -1,0 +1,7 @@
+// `import a.b` binds `b` only: using the parent `a` needs `import a`.
+
+import a.b
+
+pub fn main() {
+    @println(b.f() + a.g())
+}

@@ -1405,7 +1405,7 @@ pub fn main() {
 - `import a.b` loads the module in directory `a/b` relative to the root
   module's directory, or a std module (`std`, `std.fs`, ...). The import
   binds its last name (`b`) in the importing file only. Use items as
-  `b.name`.
+  `b.name`. It does not load `a`, which is checked only if imported.
 - `import a.b.Name` imports a single item and binds `Name`.
 - After `import std`, every std module is reachable by path:
   `std.fs.open(...)`, `std.heap.General.init()`.

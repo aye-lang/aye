@@ -1,0 +1,6 @@
+pub fn label(n: i64) []u8 {
+    if n == 0 {
+        return "Count: 0"
+    }
+    return "Count: many"
+}

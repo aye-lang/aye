@@ -479,6 +479,8 @@ struct Loader<'a> {
     /// Import names that a local of the current function was given (an
     /// error): its uses are the local's, not reported again.
     shadowed: Vec<String>,
+    /// The names of the current function's parameters and locals.
+    bound: Vec<String>,
 }
 
 /// Load the root module (`root`, in the directory `base`) and every module
@@ -511,6 +513,7 @@ pub fn load(
         imports: HashMap::new(),
         last_import: None,
         shadowed: Vec::new(),
+        bound: Vec::new(),
     };
     l.add_module(String::new(), root);
     if let Some(mf) = manifest {
@@ -1243,7 +1246,7 @@ impl Loader<'_> {
             0 => None,
             m => self.dep_of(&self.modules[m].path).map(|d| d.key.clone()),
         };
-        let full = match &pkg {
+        let mut full = match &pkg {
             Some(key) if first != "std" => format!("{key}.{first}"),
             _ => first.clone(),
         };
@@ -1257,6 +1260,20 @@ impl Loader<'_> {
             );
             self.report(Error::new(E0120, *span, msg));
             return Binding::Bad;
+        }
+        // `import a.b` loads only the directory `a/b`: start at the deepest
+        // directory of the path, so `a` is not loaded (and checked) unless
+        // the program uses it. std keeps the walk, for `lacks`.
+        let mut start = 1;
+        if full != "std" && !full.starts_with("std.") {
+            for k in (2..=path.len()).rev() {
+                let p = format!("{full}.{}", join(&path[1..k]));
+                if self.module_dir(&p).0.is_dir() {
+                    full = p;
+                    start = k;
+                    break;
+                }
+            }
         }
         let Some(mut q) = self.module(&full, *span) else {
             if pkg.is_none() {
@@ -1278,7 +1295,7 @@ impl Loader<'_> {
             self.report(Error::new(E0081, *span, msg));
             return Binding::Bad;
         };
-        for (i, (seg, sp)) in path.iter().enumerate().skip(1) {
+        for (i, (seg, sp)) in path.iter().enumerate().skip(start) {
             if self.modules[q].broken {
                 return Binding::Bad;
             }
@@ -1524,6 +1541,43 @@ impl Loader<'_> {
         std_module_hint(seg)
     }
 
+    /// For `a.x` with `a` not declared, bound or imported: if the file
+    /// imports a module under `a` (`import a.b` binds only `b`), why `a`
+    /// is not there.
+    fn unbound_parent(&self, segs: &[(String, Span)]) -> Option<Error> {
+        let (first, span) = &segs[0];
+        if self.bound.contains(first) {
+            return None;
+        }
+        let key = self
+            .dep_of(&self.modules[self.cur].path)
+            .map(|d| format!("{}.", d.key));
+        let mut found: Vec<(&String, &str)> = self
+            .imports
+            .iter()
+            .filter_map(|(name, (b, _))| {
+                let Binding::Module(q) = b else { return None };
+                let path = self.modules[*q].path.as_str();
+                let path = path.strip_prefix(key.as_deref().unwrap_or(""))?;
+                path.starts_with(&format!("{first}."))
+                    .then_some((name, path))
+            })
+            .collect();
+        found.sort();
+        let &(name, path) = found.first()?;
+        let hint = match (2..=segs.len()).find(|&k| join(&segs[..k]) == path) {
+            Some(k) if k < segs.len() => format!("write `{name}.{}`", join(&segs[k..])),
+            _ => format!("add `import {first}`"),
+        };
+        Some(Error::new(
+            E0081,
+            *span,
+            format!(
+                "`{first}` is not an imported module: `import {path}` binds only `{name}` ({hint})"
+            ),
+        ))
+    }
+
     fn not_imported(&self, name: &str, span: Span) -> Error {
         let hint = if STD_FILES.iter().any(|(m, ..)| *m == format!("std.{name}")) {
             format!(" (add `import std.{name}`)")
@@ -1541,6 +1595,7 @@ impl Loader<'_> {
     /// cannot shadow an import or (outside the root module, where sema
     /// checks it) a top-level name of the module.
     fn bind(&mut self, name: &str, span: Span) {
+        self.bound.push(name.to_string());
         if let Some(&(_, prev)) = self.imports.get(name) {
             let msg = format!(
                 "`{name}` is already the name of the import at {}:{} (shadowing is not allowed: rename the local)",
@@ -1618,6 +1673,7 @@ impl Loader<'_> {
 
     fn func(&mut self, f: &mut ast::FnDecl) {
         self.shadowed.clear();
+        self.bound.clear();
         for p in &mut f.params {
             if f.body.is_some() {
                 self.bind(&p.name, p.span);
@@ -1825,7 +1881,11 @@ impl Loader<'_> {
                         let msg = format!("`{}` is a module, not a function", join(&segs));
                         self.report(Error::new(E0085, span, msg));
                     }
-                    Ok((Res::Unresolved, _)) => {}
+                    Ok((Res::Unresolved, _)) => {
+                        if let Some(err) = self.unbound_parent(&segs) {
+                            self.report(err);
+                        }
+                    }
                     Err(err) => self.report(err),
                 }
             }
@@ -1847,7 +1907,11 @@ impl Loader<'_> {
                         );
                         self.report(Error::new(E0085, span, msg));
                     }
-                    Ok((Res::Unresolved, _)) => {}
+                    Ok((Res::Unresolved, _)) => {
+                        if let Some(err) = self.unbound_parent(&segs) {
+                            self.report(err);
+                        }
+                    }
                     Err(err) => self.report(err),
                 }
             }

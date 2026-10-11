@@ -1,0 +1,9 @@
+// `import a` loads the module `a`; its sub-module `a.b` is loaded when it
+// is used.
+
+import a
+
+pub fn main() {
+    @println(a.g())
+    @println(a.b.f())
+}
