@@ -748,6 +748,8 @@ pub enum Intrinsic {
     ArenaInit,
     ArenaAllocator,
     ArenaDeinit,
+    /// `arena.reset()`: keeps the first block, frees the rest.
+    ArenaReset,
     /// `alloc.destroy(p)`: args are the allocator and the pointer.
     Destroy,
     /// `alloc.free(s)`: args are the allocator and the slice.
@@ -7360,8 +7362,8 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// The methods of `General` and `Arena` (`allocator`, `deinit`) and of
-    /// `Allocator` (`create`, `destroy`, `alloc`, `free`).
+    /// The methods of `General` and `Arena` (`allocator`, `deinit`, and
+    /// `reset` on `Arena`) and of `Allocator` (`create`, `destroy`, `alloc`, `free`).
     fn builtin_method(
         &mut self,
         b: BuiltinTy,
@@ -7380,6 +7382,7 @@ impl<'a> Checker<'a> {
             BuiltinTy::Allocator => {
                 matches!(name, "create" | "destroy" | "alloc" | "free" | "resize")
             }
+            BuiltinTy::Arena => matches!(name, "allocator" | "deinit" | "init" | "reset"),
             _ => matches!(name, "allocator" | "deinit" | "init"),
         };
         if !known {
@@ -7421,6 +7424,7 @@ impl<'a> Checker<'a> {
                     Intrinsic::ArenaAllocator,
                     Type::Builtin(BuiltinTy::Allocator),
                 ),
+                "reset" => (Intrinsic::ArenaReset, Type::Void),
                 _ if general => (Intrinsic::GeneralDeinit, Type::Void),
                 _ => (Intrinsic::ArenaDeinit, Type::Void),
             };

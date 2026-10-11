@@ -1,0 +1,26 @@
+// `Arena.reset` frees every block but the first and rewinds it: the next
+// allocation gets the first allocation's address, and `deinit` after
+// `reset` leaks nothing (the debug `General` would report it).
+
+import std.heap.Arena
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    arena.reset()
+    let alloc = arena.allocator()
+    let p1 = try alloc.create(1 as i64)
+    // Larger than a block: the arena takes a second one from `gpa`.
+    let big = try alloc.alloc(0 as u8, 10000)
+    @println(big.len)
+    arena.reset()
+    let p2 = try alloc.create(2 as i64)
+    @println(p1 == p2)
+    @println(p2.*)
+    arena.reset()
+    let p3 = try alloc.create(3 as i64)
+    @println(p3 == p2)
+}

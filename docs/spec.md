@@ -1187,8 +1187,10 @@ pub fn main() !void {
   and free take constant time.
 - `std.heap.Arena.init(backing)` allocates from `backing` and frees
   everything at once with `deinit()`; its `destroy`/`free` do nothing.
-- `x.allocator()` gives the `Allocator` of a `General` or `Arena`; it and
-  `deinit()` need `x` to be a `var`.
+  `reset()` keeps only its first block for reuse; pointers from before
+  it are invalid.
+- `x.allocator()` gives the `Allocator` of a `General` or `Arena`; it,
+  `deinit()` and `reset()` need `x` to be a `var`.
 - On an `Allocator`: `create(value)` returns `AllocError!*mut T` holding
   `value`; `destroy(p)` frees it. `alloc(value, n)` returns
   `AllocError![]mut T` with `n` copies of `value`; `free(slice)` frees it
@@ -1667,6 +1669,7 @@ General.deinit(self: *mut Self)            reports leaks (debug), frees everythi
 Arena.init(backing: Allocator) Arena
 Arena.allocator(self: *mut Self) Allocator
 Arena.deinit(self: *mut Self)              frees everything the arena allocated
+Arena.reset(self: *mut Self)               frees all but the first block and reuses it; earlier allocations are invalid
 ```
 
 Written `std.heap.General.init()` after `import std`, or `General.init()`
