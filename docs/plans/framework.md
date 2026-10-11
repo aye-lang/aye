@@ -350,7 +350,7 @@ the card that makes it:
 - goal: `web.runProd(alloc, port, routes, assets, notFound)` serves the asset table from memory (200, `ETag`, 304 on `If-None-Match`, `HEAD`, the immutable header on hashed URLs), `web.assetUrl(path)` returns the hashed path in production and the path itself elsewhere, and `--dev` is ignored.
 - serves: FD7, FD4
 - files: `framework/web/assets.aye` (new: `Asset`, `serveAsset`, `assetUrl`), `framework/web/serve.aye` (`runProd`), `framework/examples/pages/app/layout.aye` (`href` from `web.assetUrl("/style.css")`), `tests/framework.rs`, `tests/framework/pages_prod/*.http` (new)
-- verify: `cargo test --release --test framework prod_assets` → exit 0 and `cargo test --release --test framework pages` → exit 0 (unchanged output); the test generates with `--prod`, builds, starts and checks: `GET /` links `/style.<8hex>.css`, that URL is `200` with `Cache-Control: ... immutable` and the ETag `"<64 hex>"`, `/style.css` is `200` with `max-age=0`, `If-None-Match` gives `304` with no body, `GET /_web/events` and `GET /_web/dev.js` are 404 even with `--dev` on the command line, a traversal path is 400 or 404 as in dev
+- verify: `cargo test --release --test framework prod_serve` → exit 0 and `cargo test --release --test framework pages` → exit 0 (unchanged output); the test generates with `--prod`, builds, starts and checks: `GET /` links `/style.<8hex>.css`, that URL is `200` with `Cache-Control: ... immutable` and the ETag `"<64 hex>"`, `/style.css` is `200` with `max-age=0`, `If-None-Match` gives `304` with no body, `GET /_web/events` and `GET /_web/dev.js` are 404 even with `--dev` on the command line, a traversal path is 400 or 404 as in dev
 - depends on: F5.1
 - parallel with: –
 - where: local
