@@ -535,3 +535,20 @@ Every freshly linked executable takes about 0.37 s wall (about 0 CPU) the first 
 **Not tried (stopped on request):** `-Wl,-no_adhoc_codesign` (an unsigned arm64 binary is usually killed), `-mmacosx-version-min`, a `posix_spawn` of an already open file, and the Developer Tools exemption for the terminal app (System Settings, Privacy and Security, Developer Tools; it needs the user and a restart of the terminal, and covers only processes started from that app).
 
 **Nothing changed in `src/driver.rs`.** No flag or step tried so far hides the stall. The remaining lever is to link fewer new executables (each golden case links up to three: debug, safe, fast), and the Developer Tools exemption.
+
+### Round 2 (O1.17b): flags, overlap, count
+
+Measured on 10 cores with other agents running (load 5-25 at the start of the runs), so wall times are noisy by 10% or more; compare the CPU share too.
+
+| Run | Wall | CPU share | Summary counts |
+| --- | --- | --- | --- |
+| `cargo test --release --test golden` at main (baseline) | 421.7 s | 48% | 443 passed; wasip1 104 passed, 29 skipped; freestanding 11 passed |
+| modes run at once per case, wasm too | 368.6 s | 53% | 2 failed (see below) |
+| modes run at once per case, native only | 400.1 s | 48% | same as baseline |
+
+- **`-Wl,-no_adhoc_codesign`:** the link works, the binary is killed on its first exec (exit 137, SIGKILL). An unsigned arm64 binary does not run. Dropped.
+- **`-mmacosx-version-min=26.5` (host version from `sw_vers`):** first run 0.97-1.08 s against 0.85-1.13 s for the same build without it, in the same minute. No effect. Dropped. Nothing changed in `src/driver.rs`.
+- **The stall overlaps only in part.** Eight new executables run at once: 3.9 s in total; the same eight one after another: 9.9 s. So `syspolicyd` handles about 2 to 3 assessments at a time, and the suite already runs `jobs_for(2)` = 20 cases at once on 10 cores. That keeps it saturated, which is why a bigger overlap does not show.
+- **Overlap in `tests/golden.rs`:** `run_case_for` was changed to build the 2 or 3 modes one after another, then run the programs on threads, and to check them in the order of the modes (so the first failure is the same). The native result is 400 s against 422 s, which is inside the noise. It was not kept. One gotcha, found by the first run: on a wasm target the modes must not overlap. wasi has no process id, so `std_fs` and `std_fs_dir` use the same file name in every mode and fail when the modes run together (the 2 failures above). Node has no new executable to wait for, so there is nothing to gain there.
+- **Executables:** a `clang` wrapper on `PATH` counted 396 native links with `-o` in one golden run (the wasm links use the brew clang by path and are not counted; node runs their output, with no stall). 396 times 0.37 s is about 150 s of stall; with the overlap above that is a large part of the 380-420 s at 48% CPU.
+- **What is left:** the stall is a cost per new inode, paid at the rate `syspolicyd` allows. Only fewer executables help: a case built once in `debug` and `fast` only would change what is tested, so that is a decision for the owner. The Developer Tools exemption for the terminal app (System Settings, Privacy and Security, Developer Tools) is still not tried; it needs the user.
