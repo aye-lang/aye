@@ -1489,6 +1489,24 @@ fn cli_explain() -> Result<(), String> {
     Ok(())
 }
 
+/// `aye doc` for an unknown std module lists the std modules and names the
+/// close one, as E0081 does for `import std.<x>`.
+fn cli_doc_unknown_std() -> Result<(), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .args(["doc", "--signatures", "std.tex"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let err = String::from_utf8_lossy(&out.stderr);
+    let want = "aye: unknown std module `std.tex`; std has: coro, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time\ndid you mean `std.text`?\n";
+    if out.status.code() != Some(1) || !out.stdout.is_empty() || err != want {
+        return Err(format!(
+            "`aye doc --signatures std.tex`: {}\n--- expected stderr\n{want}--- got\n{err}",
+            out.status
+        ));
+    }
+    Ok(())
+}
+
 fn main() {
     let work = std::env::temp_dir().join(format!("aye-golden-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
@@ -1619,6 +1637,11 @@ fn main() {
             });
         }
         add(&mut jobs, "cli/aye explain".to_string(), cli_explain);
+        add(
+            &mut jobs,
+            "cli/aye doc: an unknown std module".to_string(),
+            cli_doc_unknown_std,
+        );
         add(
             &mut jobs,
             "cli/aye test: an error in a doc example".to_string(),
