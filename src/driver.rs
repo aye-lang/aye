@@ -468,6 +468,8 @@ pub fn apply_fixes(src: &str, diags: &[Diag]) -> (String, Vec<(Span, String)>) {
 /// A program in C, and the libraries it links with (`@link`).
 pub struct CProgram {
     pub c: String,
+    /// Where the functions are in `c`, to compile it in parts.
+    pub parts: cgen::Parts,
     pub links: Vec<String>,
     /// More flags for clang (`--cflags`), such as `-fsanitize=thread`.
     pub cflags: Vec<String>,
@@ -492,7 +494,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     typed.tests.clear();
     let links = linked(&typed, target);
     let ir = oir::lower(&typed, &links);
-    let c = cgen::emit(
+    let (c, parts) = cgen::emit(
         &ir,
         &file_names(&checked.files),
         mode != Mode::Fast,
@@ -501,6 +503,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     );
     Ok(CProgram {
         c,
+        parts,
         links,
         cflags: Vec::new(),
         target,
@@ -591,10 +594,11 @@ pub fn compile_tests_to_c(
             dirs.push(dir);
         }
     }
-    let c = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
+    let (c, parts) = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
     Ok((
         CProgram {
             c,
+            parts,
             links,
             cflags: Vec::new(),
             target,
@@ -1169,19 +1173,140 @@ fn compile(p: &CProgram, out: &Path, mode: Mode, link: bool) -> Result<(), Strin
     // clang may exit (a bad flag) before it has read all of the source,
     // which would kill this process with SIGPIPE.
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let src = std::env::temp_dir().join(format!(
-        "aye-{}-{}.c",
+    let name = format!(
+        "aye-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
+    );
+    // A big program's C is compiled in parts at once, one per core (up to
+    // 8), then linked: one clang uses one core. Not for an object file nor
+    // for another target (wasm's link is its own).
+    if link && p.target.is_host() {
+        let k = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+        let header = format!("{name}.h");
+        if let Some((h, units)) = p.parts.split(&p.c, &header, k) {
+            return compile_parts(p, &name, &h, &units, out, mode);
+        }
+    }
+    let src = std::env::temp_dir().join(format!("{name}.c"));
     std::fs::write(&src, &p.c).map_err(|e| e.to_string())?;
     let result = cc_file(p, &src, out, mode, link);
     let _ = std::fs::remove_file(&src);
     result
 }
 
+/// `compile` for the C in parts (`cgen::Parts::split`): the header and
+/// each unit go to files named after `name`, each unit is compiled to an
+/// object by its own clang, all at once, and the objects are linked.
+fn compile_parts(
+    p: &CProgram,
+    name: &str,
+    header: &str,
+    units: &[String],
+    out: &Path,
+    mode: Mode,
+) -> Result<(), String> {
+    let dir = std::env::temp_dir();
+    let h = dir.join(format!("{name}.h"));
+    let srcs: Vec<PathBuf> = (0..units.len())
+        .map(|i| dir.join(format!("{name}-{i}.c")))
+        .collect();
+    let objs: Vec<PathBuf> = (0..units.len())
+        .map(|i| dir.join(format!("{name}-{i}.o")))
+        .collect();
+    let result = (|| {
+        std::fs::write(&h, header).map_err(|e| e.to_string())?;
+        for (src, unit) in srcs.iter().zip(units) {
+            std::fs::write(src, unit).map_err(|e| e.to_string())?;
+        }
+        // The flags are those of one clang that compiles and links; each
+        // step uses only some of them.
+        let compiled = std::thread::scope(|s| {
+            let jobs: Vec<_> = srcs
+                .iter()
+                .zip(&objs)
+                .map(|(src, obj)| {
+                    s.spawn(move || {
+                        let mut cmd = clang_cmd(p, mode, false)?;
+                        cmd.args(["-Wno-unused-command-line-argument", "-x", "c"])
+                            .arg(src)
+                            .arg("-o")
+                            .arg(obj);
+                        cmd.status()
+                            .map_err(|e| format!("failed to run clang: {e}"))
+                    })
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|j| j.join().unwrap())
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        if !compiled.iter().all(|s| s.success()) {
+            return Err(clang_failed(p, true));
+        }
+        let mut cmd = clang_cmd(p, mode, true)?;
+        cmd.arg("-Wno-unused-command-line-argument")
+            .args(&objs)
+            .arg("-o")
+            .arg(out);
+        link_args(p, &mut cmd);
+        let status = cmd
+            .status()
+            .map_err(|e| format!("failed to run clang: {e}"))?;
+        if !status.success() {
+            return Err(clang_failed(p, true));
+        }
+        // clang runs `dsymutil` itself only when it also compiles: without
+        // it, the debug information stays in the objects, which are
+        // removed.
+        if p.target.os == Os::Macos && debug_info(mode, &p.cflags) {
+            let status = Command::new("dsymutil")
+                .arg(out)
+                .status()
+                .map_err(|e| format!("failed to run dsymutil: {e}"))?;
+            if !status.success() {
+                return Err(clang_failed(p, true));
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&h);
+    for f in srcs.iter().chain(&objs) {
+        let _ = std::fs::remove_file(f);
+    }
+    result
+}
+
+/// Do these flags give debug information (the last `-g` flag, as clang
+/// reads them)?
+fn debug_info(mode: Mode, cflags: &[String]) -> bool {
+    mode.clang_flags()
+        .iter()
+        .copied()
+        .chain(cflags.iter().map(String::as_str))
+        .rfind(|f| f.starts_with("-g"))
+        .is_some_and(|f| f != "-g0")
+}
+
 /// `compile` for the C source in the file `src`.
 fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode, link: bool) -> Result<(), String> {
+    let mut cmd = clang_cmd(p, mode, link)?;
+    cmd.args(["-x", "c"]).arg(src).arg("-o").arg(out);
+    if link {
+        link_args(p, &mut cmd);
+    }
+    let status = cmd
+        .status()
+        .map_err(|e| format!("failed to run clang: {e}"))?;
+    if !status.success() {
+        return Err(clang_failed(p, link));
+    }
+    Ok(())
+}
+
+/// The clang command with the flags of the target, the mode and
+/// `--cflags`, before the input; `link` is whether it links.
+fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
     let freestanding = p.target.os == Os::Freestanding;
     let mut cmd = p.target.clang()?;
     cmd.args(["-std=gnu11", "-fwrapv", "-fno-strict-aliasing"]);
@@ -1215,48 +1340,47 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode, link: bool) -> Resu
     }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
-        .args(&p.cflags)
-        .args(["-x", "c"])
-        .arg(src)
-        .arg("-o")
-        .arg(out);
+        .args(&p.cflags);
+    Ok(cmd)
+}
+
+/// The libraries at the end of a clang command that links.
+fn link_args(p: &CProgram, cmd: &mut Command) {
     // std.math calls libm.
-    if link && !freestanding {
+    if p.target.os != Os::Freestanding {
         cmd.arg("-lm");
     }
     // `-x none` ends `-x c`, so that a library file among the link flags is
     // not read as C (clang warns that it is unused when there is none).
     // `-lm` is always there.
     let links: Vec<String> = p.links.iter().filter(|l| *l != "m").cloned().collect();
-    let flags = if link { link_flags(&links) } else { Vec::new() };
+    let flags = link_flags(&links);
     if !flags.is_empty() {
         cmd.args(["-Wno-unused-command-line-argument", "-x", "none"])
             .args(flags);
     }
-    let status = cmd
-        .status()
-        .map_err(|e| format!("failed to run clang: {e}"))?;
-    if !status.success() {
-        if link && !p.links.is_empty() {
-            return Err(format!(
-                "clang failed: check that the libraries of `@link` ({}) are installed (if they are, this is a compiler bug)",
-                p.links.join(", ")
-            ));
-        }
-        if !p.target.is_host() {
-            let hint = if link {
-                "; `aye build -c` compiles to an object file without linking, which needs no sysroot"
-            } else {
-                ""
-            };
-            return Err(format!(
-                "clang failed for target {} (check that its toolchain and sysroot are installed; if they are, this is a compiler bug{hint})",
-                p.target.name
-            ));
-        }
-        return Err("clang failed on the generated C (this is a compiler bug)".to_string());
+}
+
+/// The error for a clang that failed; `link` is whether it linked.
+fn clang_failed(p: &CProgram, link: bool) -> String {
+    if link && !p.links.is_empty() {
+        return format!(
+            "clang failed: check that the libraries of `@link` ({}) are installed (if they are, this is a compiler bug)",
+            p.links.join(", ")
+        );
     }
-    Ok(())
+    if !p.target.is_host() {
+        let hint = if link {
+            "; `aye build -c` compiles to an object file without linking, which needs no sysroot"
+        } else {
+            ""
+        };
+        return format!(
+            "clang failed for target {} (check that its toolchain and sysroot are installed; if they are, this is a compiler bug{hint})",
+            p.target.name
+        );
+    }
+    "clang failed on the generated C (this is a compiler bug)".to_string()
 }
 
 #[cfg(test)]
