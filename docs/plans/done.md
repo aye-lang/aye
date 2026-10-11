@@ -68,6 +68,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O5.2c | 2026-10-11 | `aye test --time-limit` on Linux: a `SIGXCPU` death counts as the time limit even when the accounted CPU is a little under it (Linux delivers it early); `tests/time_limit.aye` passes on Linux | 48a4043 |
 | O1.16 | 2026-10-11 | `aye fix` removes `;` statement terminators in one pass (E0002 fix in `src/lexer.rs`, lexing continues after a `;`; `a; b` becomes a newline plus the indentation; strings untouched); golden `tests/fix/semicolons`; lexer unit test | 0a784c1 |
 | O1.15a | 2026-10-11 | `aye doc std.<x>` for an unknown module prints the std module list and the closest name, shared with E0081 via `module::std_module_hint`; golden `cli/aye doc: an unknown std module` | 01660b6 |
+| O5.1a | 2026-10-11 | `aye test <dir>` with more than one root: a root that fails to compile is one `FAILED (compile)` entry (`Failure::Compile`, JSON kind `compile`), the run continues, exit 1; a single-root directory still reports the compile error directly (keeps the `give modtests instead` hint); golden `tests/modules/treebroken`; README and spec §13 | 2975beb |
 | O3.1b | 2026-10-11 | `aye_std_ecvt` uses `snprintf("%.*e")` on Linux too (glibc `ecvt` rounds the 17th digit, `DBL_MAX` did not round-trip through `std.json`) | 48a4043 |
 
 ## Browser lane
