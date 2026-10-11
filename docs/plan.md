@@ -71,7 +71,7 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O3.9 (std.http pool); then browser M4 | local; cloud routines for Linux |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O3.6a (query/form/cookie) in flight; then O3.9a, O7.4 (Arena.reset), O5.2h | local; cloud routines for Linux |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | P8 split: P8.1 done (builds out of tree) | P8.2 (create `aye-lang/anyknown`, filter-repo, CI), then P8.3 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F2.2 (layout, not-found) in flight; then F1.2a, F1.3a, F2 query/form, ETag/304 | local or cloud |
 
