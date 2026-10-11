@@ -484,6 +484,17 @@ pub struct VarInfo {
     pub let_span: Option<Span>,
 }
 
+/// A member access (`x.f`, `x.m()`) as sema resolved it, for `aye lsp`:
+/// where the member is declared, and its declaration written from the
+/// types.
+#[derive(Debug, Clone)]
+pub struct ResolvedMember {
+    /// The member's name in its declaration.
+    pub decl: Span,
+    /// `name: T` for a field, `fn name(a: T) R` for a method.
+    pub sig: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct TStmt {
     pub kind: TStmtKind,
@@ -1001,7 +1012,15 @@ struct Checker<'a> {
     files: Vec<String>,
     /// The target's integer widths.
     layout: Layout,
+    /// The member accesses resolved so far, by the span of the member's
+    /// name, when they are asked for (`check_members`); else `None`.
+    members: Members,
+    /// Where each struct field is declared, by (struct, field); kept only
+    /// with `members`.
+    field_spans: HashMap<(String, String), Span>,
 }
+
+type Members = Option<Vec<(Span, ResolvedMember)>>;
 
 /// Check a file. Without `require_main` (`aye test`, or `aye check` of a
 /// file with tests) the file does not need `pub fn main()`.
@@ -1013,6 +1032,32 @@ pub fn check(
     files: &[String],
     layout: Layout,
 ) -> std::result::Result<Program, Vec<Error>> {
+    run(file, require_main, files, layout, None).0
+}
+
+/// Like `check`, and also the member accesses (`x.f`, `x.m()`) it
+/// resolved, by the span of the member's name; a program with errors gets
+/// the ones resolved around the errors.
+pub fn check_members(
+    file: &ast::File,
+    require_main: bool,
+    files: &[String],
+    layout: Layout,
+) -> (
+    std::result::Result<Program, Vec<Error>>,
+    Vec<(Span, ResolvedMember)>,
+) {
+    let (result, members) = run(file, require_main, files, layout, Some(Vec::new()));
+    (result, members.unwrap_or_default())
+}
+
+fn run(
+    file: &ast::File,
+    require_main: bool,
+    files: &[String],
+    layout: Layout,
+    members: Members,
+) -> (std::result::Result<Program, Vec<Error>>, Members) {
     let mut c = Checker {
         files: files.to_vec(),
         structs: HashMap::new(),
@@ -1068,12 +1113,15 @@ pub fn check(
         links: Vec::new(),
         optional_links: Vec::new(),
         layout,
+        members,
+        field_spans: HashMap::new(),
     };
     let p = c.program(file, require_main);
+    let members = c.members.take();
     if c.errors.is_empty() {
-        Ok(p)
+        (Ok(p), members)
     } else {
-        Err(c.errors)
+        (Err(c.errors), members)
     }
 }
 
@@ -1644,6 +1692,7 @@ impl<'a> Checker<'a> {
             match item {
                 ast::Item::Struct(s) => {
                     let fields = self.fields(&s.fields, &format!("struct `{}`", s.name));
+                    self.note_fields(&s.name, &s.fields);
                     if s.is_extern {
                         for f in &s.fields {
                             let Some((_, ty)) = fields.iter().find(|(n, _)| *n == f.name) else {
@@ -2766,6 +2815,7 @@ impl<'a> Checker<'a> {
             self.quiet = true;
         }
         let fields = self.fields(&sdecl.fields, &format!("struct `{name}`"));
+        self.note_fields(&name, &sdecl.fields);
         self.structs.get_mut(&name).unwrap().fields = fields;
         let exprs = default_exprs(&sdecl.fields);
         if exprs.iter().any(Option::is_some) {
@@ -3146,6 +3196,54 @@ impl<'a> Checker<'a> {
             fields.push((f.name.clone(), ty));
         }
         fields
+    }
+
+    /// Keep where the fields of the struct `owner` are declared, if member
+    /// accesses are recorded.
+    fn note_fields(&mut self, owner: &str, decls: &[ast::FieldDecl]) {
+        if self.members.is_some() {
+            for f in decls {
+                let key = (owner.to_string(), f.name.clone());
+                self.field_spans.entry(key).or_insert(f.span);
+            }
+        }
+    }
+
+    /// Record that the name at `span` is the field `name` (of type `ty`) of
+    /// the struct `s`, if member accesses are recorded.
+    fn note_field(&mut self, span: Span, s: &str, name: &str, ty: &Type) {
+        let Some(members) = &mut self.members else {
+            return;
+        };
+        if let Some(&decl) = self.field_spans.get(&(s.to_string(), name.to_string())) {
+            let sig = format!("{name}: {ty}");
+            members.push((span, ResolvedMember { decl, sig }));
+        }
+    }
+
+    /// Record that the name at `span` is the method `key` (`Struct.method`),
+    /// if member accesses are recorded.
+    fn note_method(&mut self, span: Span, key: &str) {
+        let Some(members) = &mut self.members else {
+            return;
+        };
+        let (Some(ctx), Some(sig)) = (self.fn_decls.get(key), self.fns.get(key)) else {
+            return;
+        };
+        let f = ctx.decl;
+        let params: Vec<String> = f
+            .params
+            .iter()
+            .filter(|p| !p.comptime)
+            .zip(&sig.params)
+            .map(|(p, t)| format!("{}: {t}", p.name))
+            .collect();
+        let ret = match &sig.ret {
+            Type::Void => String::new(),
+            t => format!(" {t}"),
+        };
+        let sig = format!("fn {}({}){ret}", f.name, params.join(", "));
+        members.push((span, ResolvedMember { decl: f.span, sig }));
     }
 
     /// Fields that a struct or enum holds by value.
@@ -5959,6 +6057,7 @@ impl<'a> Checker<'a> {
                             ));
                         };
                         let ty = def.fields[index].1.clone();
+                        self.note_field(span, sname, name, &ty);
                         (
                             TExprKind::Field {
                                 base: Box::new(b),
@@ -6457,6 +6556,7 @@ impl<'a> Checker<'a> {
                     format!("{what} `{}` has no method `{name}`", t),
                 );
             }
+            self.note_method(span, &key);
             return self.call(&key, None, args, span);
         }
         let recv = self.value(base, None)?;
@@ -6490,6 +6590,7 @@ impl<'a> Checker<'a> {
                     });
                     if let Some(index) = fn_field {
                         let ty = def.fields[index].1.clone();
+                        self.note_field(span, &s, name, &ty);
                         let field = TExpr {
                             kind: TExprKind::Field {
                                 base: Box::new(deref(recv)),
@@ -6511,6 +6612,7 @@ impl<'a> Checker<'a> {
                         format!("struct `{s}` has no method `{name}`{hint}"),
                     );
                 };
+                self.note_method(span, &key);
                 let recv = match r {
                     Recv::Static => {
                         return err(
