@@ -17,3 +17,6 @@ harness = false
 
 [[test]]
 name = "deps"
+
+[[test]]
+name = "lsp"

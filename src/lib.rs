@@ -11,6 +11,7 @@ pub mod driver;
 pub mod fetch;
 pub mod fmt;
 pub mod lexer;
+pub mod lsp;
 pub mod manifest;
 pub mod module;
 pub mod oir;
