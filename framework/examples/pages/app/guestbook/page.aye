@@ -1,0 +1,35 @@
+// The guestbook page of the pages app: `/guestbook` lists the entries, shows
+// the notice that `?added=1` asks for and, from the `last` cookie, the name
+// signed last by this browser, and has the form that `route.aye` takes.
+
+import lib.guestbook
+import std.http
+import web.Error
+import web.Request
+import web.Response
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let html = res.html()
+    try html.raw("<h1>Guestbook</h1>")
+    if (try req.query("added")) != null {
+        try html.raw("<p class=\"notice\">Thanks for signing.</p>")
+    }
+    if req.cookie("last") |sent| {
+        try html.raw("<p>Welcome back, ")
+        try html.text(try http.percentDecode(req.arena, sent))
+        try html.raw(".</p>")
+    }
+    let n = guestbook.count()
+    if n == 0 {
+        try html.raw("<p>No entries yet.</p>")
+    } else {
+        try html.raw("<ul>")
+        for i in 0..n {
+            try html.raw("<li>")
+            try html.text(try guestbook.get(req.arena, i))
+            try html.raw("</li>")
+        }
+        try html.raw("</ul>")
+    }
+    try html.raw("<form method=\"post\" action=\"/guestbook\"><label>Name <input name=\"name\" maxlength=\"40\"></label> <button>Sign</button></form>")
+}

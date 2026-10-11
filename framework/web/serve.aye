@@ -4,6 +4,7 @@
 
 import std.fs
 import std.fs.WriteError
+import std.heap.Arena
 import std.http
 import std.mem.AllocError
 import std.mem.Allocator
@@ -173,11 +174,23 @@ fn statusOf(e: Error) u16 {
     if e == Error.BadRequest {
         return 400
     }
+    if e == Error.Unauthorized {
+        return 401
+    }
+    if e == Error.Forbidden {
+        return 403
+    }
     if e == Error.NotFound {
         return 404
     }
     if e == Error.MethodNotAllowed {
         return 405
+    }
+    if e == Error.Conflict {
+        return 409
+    }
+    if e == Error.PayloadTooLarge {
+        return 413
     }
     return 500
 }
@@ -210,4 +223,26 @@ fn pathOf(target: []u8) []u8 {
         return target[0..i]
     }
     return target
+}
+
+test "every error has its status" {
+    @expectEqual(400, statusOf(Error.BadRequest))
+    @expectEqual(401, statusOf(Error.Unauthorized))
+    @expectEqual(403, statusOf(Error.Forbidden))
+    @expectEqual(404, statusOf(Error.NotFound))
+    @expectEqual(405, statusOf(Error.MethodNotAllowed))
+    @expectEqual(409, statusOf(Error.Conflict))
+    @expectEqual(413, statusOf(Error.PayloadTooLarge))
+    @expectEqual(500, statusOf(Error.OutOfMemory))
+    @expectEqual(500, statusOf(Error.Internal))
+}
+
+test "an API error is JSON with the name and the status" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var res = Response.init(arena.allocator())
+    failJson(&mut res, Error.Forbidden)
+    @expectEqual(403, res.status)
+    @expectEqual("application/json", res.contentType)
+    @expectEqual("{\"error\":\"Forbidden\"}", res.page.bytes())
 }

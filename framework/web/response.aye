@@ -1,15 +1,18 @@
 // web.Response: what a handler fills in; `web.run` writes it out.
 
+import std.heap.Arena
 import std.http
 import std.json
 import std.list.List
 import std.mem.Allocator
 import std.text.Builder
 
-/// The errors a handler may return. `web.run` answers `NotFound` with
-/// 404, `MethodNotAllowed` with 405, `BadRequest` with 400 and the rest
-/// with 500.
-pub error Error { BadRequest, NotFound, MethodNotAllowed, OutOfMemory, Internal }
+/// The errors a handler may return. `web.run` answers `BadRequest` with
+/// 400, `Unauthorized` with 401, `Forbidden` with 403, `NotFound` with 404,
+/// `MethodNotAllowed` with 405, `Conflict` with 409, `PayloadTooLarge` with
+/// 413 and `OutOfMemory` and `Internal` with 500. A `page.aye` gets a plain
+/// text page of the status, a `route.aye` the JSON `{"error":"<name>"}`.
+pub error Error { BadRequest, Unauthorized, Forbidden, NotFound, MethodNotAllowed, Conflict, PayloadTooLarge, OutOfMemory, Internal }
 
 /// The response a handler builds: 200 and an empty `text/plain` body to
 /// begin with. `html()` and `text` set the body and its `Content-Type`.
@@ -18,6 +21,7 @@ pub struct Response {
     contentType: []u8
     headers: List(http.Header)
     page: Html
+    alloc: Allocator
 
     /// An empty response whose memory comes from `alloc`.
     pub fn init(alloc: Allocator) Response {
@@ -26,12 +30,51 @@ pub struct Response {
             contentType: "text/plain; charset=utf-8",
             headers: List(http.Header).init(alloc),
             page: Html { buf: Builder.init(alloc) },
+            alloc: alloc,
         }
     }
 
     /// Adds a header (not `Content-Type` or `Content-Length`).
     pub fn header(self: *mut Self, name: []u8, value: []u8) Error!void {
         try self.headers.append(http.Header { name: name, value: value })
+    }
+
+    /// Makes this a redirect: the status becomes `status` (303 after a form
+    /// `POST`, 302 or 307 elsewhere), `Location` becomes `url` and the body
+    /// is empty. A `url` with a line break is a bug in the handler, answered
+    /// with `Internal`.
+    pub fn redirect(self: *mut Self, url: []u8, status: u16) Error!void {
+        for c in url {
+            if c == '\r' || c == '\n' {
+                return Error.Internal
+            }
+        }
+        self.status = status
+        self.contentType = "text/plain; charset=utf-8"
+        self.page.buf.clear()
+        try self.header("Location", url)
+    }
+
+    /// Adds `Set-Cookie: <name>=<value>; Path=/; HttpOnly; SameSite=Lax`. The
+    /// value is percent-encoded (everything but letters, digits and `-._~`),
+    /// so `req.cookie(name)` gives it back encoded; decode it with
+    /// `std.http.percentDecode`. A `name` that is empty or has other
+    /// characters is a bug in the handler, answered with `Internal`.
+    pub fn setCookie(self: *mut Self, name: []u8, value: []u8) Error!void {
+        if name.len == 0 {
+            return Error.Internal
+        }
+        for c in name {
+            if !isUnreserved(c) {
+                return Error.Internal
+            }
+        }
+        var b = Builder.init(self.alloc)
+        try b.append(name)
+        try b.append("=")
+        try appendEncoded(&mut b, value)
+        try b.append("; Path=/; HttpOnly; SameSite=Lax")
+        try self.header("Set-Cookie", b.bytes())
     }
 
     /// Sets the body to `s` as `text/plain`.
@@ -62,4 +105,61 @@ pub struct Response {
         self.contentType = "text/html; charset=utf-8"
         return &mut self.page
     }
+}
+
+// Letters, digits and `-._~`: what a cookie value keeps as it is.
+fn isUnreserved(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~'
+}
+
+// Appends `s` to `b`, every byte that is not unreserved as `%XX`.
+fn appendEncoded(b: *mut Builder, s: []u8) Error!void {
+    let digits = "0123456789ABCDEF"
+    for c in s {
+        if isUnreserved(c) {
+            try b.appendByte(c)
+        } else {
+            try b.appendByte('%')
+            try b.appendByte(digits[(c / 16) as usize])
+            try b.appendByte(digits[(c % 16) as usize])
+        }
+    }
+}
+
+test "redirect sets the status, Location and an empty body" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var res = Response.init(arena.allocator())
+    try res.text("old")
+    try res.redirect("/guestbook?added=1", 303)
+    @expectEqual(303, res.status)
+    @expectEqual(0, res.page.bytes().len)
+    @expectEqual("Location", res.headers.items()[0].name)
+    @expectEqual("/guestbook?added=1", res.headers.items()[0].value)
+    var caught = false
+    res.redirect("/a\r\nSet-Cookie: x=1", 302) catch |e| {
+        caught = e == Error.Internal
+    }
+    @expect(caught)
+}
+
+test "setCookie encodes the value and adds the attributes" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var res = Response.init(arena.allocator())
+    try res.setCookie("last", "Ann B")
+    try res.setCookie("x", "<i>-._~")
+    @expectEqual("Set-Cookie", res.headers.items()[0].name)
+    @expectEqual("last=Ann%20B; Path=/; HttpOnly; SameSite=Lax", res.headers.items()[0].value)
+    @expectEqual("x=%3Ci%3E-._~; Path=/; HttpOnly; SameSite=Lax", res.headers.items()[1].value)
+    var spaced = false
+    res.setCookie("a b", "1") catch |e| {
+        spaced = e == Error.Internal
+    }
+    @expect(spaced)
+    var empty = false
+    res.setCookie("", "1") catch |e| {
+        empty = e == Error.Internal
+    }
+    @expect(empty)
 }

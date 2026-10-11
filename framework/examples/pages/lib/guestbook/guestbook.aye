@@ -1,0 +1,72 @@
+// The guestbook of the pages app: the names signed so far, in memory. Every
+// request thread shares them, so they sit in module-level storage behind a
+// lock. A global cannot start as `Mutex.init()` (an initializer has no
+// calls), so the first caller makes the lock; `gate` is 0 before that, 1
+// while it is made and 2 after.
+
+import std.mem
+import std.mem.Allocator
+import std.sync.Atomic
+import std.sync.Mutex
+import web.Error
+
+/// The longest name, in bytes.
+pub let MaxName: usize = 40
+
+/// The most entries; the next `add` gets `Error.Conflict`.
+pub let Capacity: usize = 16
+
+var gate = Atomic(u32) { value: 0 }
+var lock: ?Mutex = null
+var names = [16][40]u8{[40]u8{0, ..}, ..}
+var lens = [16]usize{0, ..}
+var used: usize = 0
+
+fn mutex() Mutex {
+    if gate.load() != 2 {
+        if gate.compareSwap(0, 1) {
+            lock = Mutex.init()
+            gate.store(2)
+        } else {
+            while gate.load() != 2 {
+            }
+        }
+    }
+    return lock.?
+}
+
+/// Adds `name` as the newest entry. A name of more than `MaxName` bytes is
+/// `Error.PayloadTooLarge`, a full guestbook `Error.Conflict`.
+pub fn add(name: []u8) Error!void {
+    if name.len > MaxName {
+        return Error.PayloadTooLarge
+    }
+    let m = mutex()
+    m.lock()
+    defer m.unlock()
+    if used == Capacity {
+        return Error.Conflict
+    }
+    mem.copy(names[used][0..name.len], name)
+    lens[used] = name.len
+    used += 1
+}
+
+/// How many entries there are. They are never removed, so `get(alloc, i)`
+/// works for every `i` below it.
+pub fn count() usize {
+    let m = mutex()
+    m.lock()
+    defer m.unlock()
+    return used
+}
+
+/// A copy of entry `i`, oldest first, made in `alloc`.
+pub fn get(alloc: Allocator, i: usize) Error![]u8 {
+    let m = mutex()
+    m.lock()
+    defer m.unlock()
+    let out = try alloc.alloc(0 as u8, lens[i])
+    mem.copy(out, names[i][0..lens[i]])
+    return out
+}
