@@ -1,0 +1,4 @@
+test "a function value" ... ok (N ms)
+test "a dyn method" ... ok (N ms)
+
+2 passed; 0 failed; 1 modules; N ms

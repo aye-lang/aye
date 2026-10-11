@@ -360,8 +360,9 @@ pub enum Rvalue {
 /// Lower the program. `linked` are the libraries it is linked with: an
 /// `if @hasLink(name)` keeps only the branch that runs. Only the functions
 /// and vtables that the program can reach are kept (from `main`, the
-/// tests, exported functions and globals), so a function that calls into
-/// a library that is not linked is left out when nothing calls it.
+/// tests, exported functions and globals; with tests, not from `main`),
+/// so a function that calls into a library that is not linked is left out
+/// when nothing calls it.
 pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
     let structs: HashMap<&str, &sema::StructDef> =
         p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
@@ -410,6 +411,8 @@ fn const_fns(v: &sema::ConstVal, out: &mut Vec<Ref>) {
 
 /// The functions and vtables reachable from `main`, the tests, the
 /// exported functions and the globals; `refs[i]` are those of `funcs[i]`.
+/// A test executable has its own C `main` that runs one test, so with
+/// tests the program's `main` is a root only when something refers to it.
 fn reachable(
     p: &sema::Program,
     funcs: Vec<Func>,
@@ -420,9 +423,10 @@ fn reachable(
         .enumerate()
         .map(|(i, f)| (f.name.as_str(), i))
         .collect();
+    let tests = !p.tests.is_empty();
     let mut todo: Vec<Ref> = Vec::new();
     for f in &funcs {
-        if f.is_main || f.export || sema::is_test(&f.name) {
+        if (f.is_main && !tests) || f.export || sema::is_test(&f.name) {
             todo.push(Ref::Fn(f.name.clone()));
         }
     }

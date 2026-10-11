@@ -138,7 +138,6 @@ brackets.
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
 - P-tmp about 7000 stale `aye-run-*.dSYM`/`aye-test-*.dSYM` folders sit in `$TMPDIR` from before O5.2g; delete them once no agent runs an old binary (`rm -rf $TMPDIR/aye-run-*.dSYM $TMPDIR/aye-test-*.dSYM`).
-- O5.2h tree-shake: only generate functions reachable from `main`/tests (split builds compile the dead ones too, +25% CPU; O5.2e). Verify: CPU time of `aye build browser`.
 - O5.2f drop `-g` for `aye test` executables unless `--cflags` is given (−45% on top of O5.2e; no code reads DWARF). Decide after O5.2e.
 - O5.2b per-test `ms` is inflated under `-j` by the first-exec cost of a fresh binary (~0.5 s on macOS, same cause as O1.17b and O5.1b); warm the binary once before fanning out. Verify: `treetests` times under 50 ms after the first.
 - O6.2a lsp navigation leftovers (O6.2 report): share the declaration renderer between `src/doc.rs` and `src/lsp/nav.rs`; `x.method()`/fields of a value need types (sema records resolved member spans); block scopes; `aye.toml` deps and `@cimport` modules; cursor just past an identifier should count as on it. Verify: tests/lsp.rs cases.

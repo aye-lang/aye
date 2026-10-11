@@ -47,7 +47,8 @@
 //!   and CPU times (`(12 ms)`, `"ms":12`, `"cpu_ms":12`, `time limit: 1.0 s`)
 //!   are replaced by `N` before the comparison, here and for `aye test` in
 //!   the other cases. `aye test -j 1` and `-j 4` on `std_testing.aye` must
-//!   both print its `X.out`.
+//!   both print its `X.out`. The C of `aye test` on `tree_shake.aye` must
+//!   lack `main` and what only `main` reaches.
 //! - `tests/fix/X.aye`: `aye fix X.aye` on a copy must leave exactly
 //!   `X.fixed` and print exactly `X.out`. If `X.stderr` exists, errors
 //!   remain: stderr must equal it and the exit status must be 1; otherwise
@@ -1532,6 +1533,30 @@ fn asan_case(p: &Path, work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// O5.2h: a test executable leaves out `main` and what only `main`
+/// reaches. The C of `aye test tests/tests/tree_shake.aye` has no
+/// `onlyFromMain` (it calls a C function no library defines) and no
+/// program `main`, and keeps what the tests reach through a function value
+/// and a `dyn` vtable. Checked in the C: clang drops an unused `static`
+/// function anyway, so the link fails only in a split build.
+fn tree_shake_tests() -> Result<(), String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tests/tree_shake.aye");
+    let text = read(&src).unwrap();
+    let (c, ..) = driver::compile_tests_to_c(Root::single(&name(&src), &text), Mode::Debug)
+        .map_err(|d| join(&d))?;
+    for gone in ["aye_f_onlyFromMain(", "aye_f_main("] {
+        if c.c.contains(gone) {
+            return Err(format!("the test C still has `{gone}`"));
+        }
+    }
+    for kept in ["aye_f_double(", "Seven_get(", "aye_f_viaDyn("] {
+        if !c.c.contains(kept) {
+            return Err(format!("the test C lacks `{kept}`"));
+        }
+    }
+    Ok(())
+}
+
 /// M9.7: `General` in debug mode allocates and frees in constant time:
 /// `tests/cases/general_churn.aye` (a million allocation and free pairs,
 /// and a recursion that allocates per call), built in debug mode, uses at
@@ -1949,6 +1974,11 @@ fn main() {
             &mut jobs,
             "cli/aye test --module".to_string(),
             cli_test_module,
+        );
+        add(
+            &mut jobs,
+            "tests/tree_shake: the test C".to_string(),
+            tree_shake_tests,
         );
         // At most `common::jobs_for(2)` cases run at once.
         let queue = std::sync::Mutex::new(jobs.into_iter().enumerate());
