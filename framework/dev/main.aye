@@ -143,10 +143,10 @@ pub fn main() !void {
 
     var bin: []u8 = "aye"
     if os.getenv("AYE") |p| {
-        bin = p
+        bin = try runnable(alloc, p)
     }
     let web = try path.join(alloc, app, ".web")
-    let server = try path.join(alloc, web, "server")
+    let server = try runnable(alloc, try path.join(alloc, web, "server"))
     signal(2, onSignal)
     signal(15, onSignal)
 
@@ -614,6 +614,17 @@ fn note(what: []u8, a: []u8) {
         }
     }
     fs.stdout().write("\n") catch |e| {}
+}
+
+/// `p` as a command that `process.spawn` runs from where it is: a relative
+/// path with a `/` gets `./` in front, as spawn looks a path up in `PATH`
+/// when it does not start with `/` or `./`. A name without `/` (`aye`) is
+/// meant for `PATH` and stays.
+fn runnable(alloc: Allocator, p: []u8) ![]u8 {
+    if text.startsWith(p, "/") || text.startsWith(p, "./") || text.indexOf(p, "/") == null {
+        return p
+    }
+    return try path.join(alloc, ".", p)
 }
 
 fn die(what: []u8, a: []u8) {
