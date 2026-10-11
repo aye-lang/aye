@@ -1,0 +1,6 @@
+// An unknown std module that is far from every real one gets no suggestion.
+
+import std.zzzzzz
+
+pub fn main() {
+}

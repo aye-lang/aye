@@ -6,8 +6,9 @@
 //!   `X.stderr` exists, `main` must return an error: exit status 1, and
 //!   stderr equal to `X.stderr` in debug mode; safe and fast mode print no
 //!   error return trace, so there stderr must be the first line only.
-//!   A case with `X.needs` (`pkg-config` packages) or `X.tools` (programs on
-//!   `PATH`) is skipped when one is missing.
+//!   A case with `X.needs` (`pkg-config` packages, or the word `ipv6`: a
+//!   TCP socket can bind `[::1]`) or `X.tools` (programs on `PATH`) is
+//!   skipped when one is missing.
 //!   With the WASI toolchain and `node` there, each case also runs built for
 //!   wasm32-wasip1 under `node:wasi` (`scripts/wasi-run.mjs`), `tests/tests`
 //!   too, against the same goldens (`X.wasm32-wasip1.out` instead of
@@ -157,7 +158,14 @@ fn missing_tools(path: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The packages in `X.needs` that `pkg-config` does not know.
+/// Whether a TCP socket can bind the IPv6 loopback (`ipv6.disable=1` hosts
+/// cannot).
+fn ipv6_loopback() -> bool {
+    std::net::TcpListener::bind("[::1]:0").is_ok()
+}
+
+/// The packages in `X.needs` that `pkg-config` does not know (the word
+/// `ipv6` is not a package).
 fn missing_packages(path: &Path) -> Vec<String> {
     let needs = read(&path.with_extension("needs")).unwrap_or_default();
     let known = |p: &str| {
@@ -168,7 +176,7 @@ fn missing_packages(path: &Path) -> Vec<String> {
     };
     needs
         .split_whitespace()
-        .filter(|p| !known(p))
+        .filter(|p| *p != "ipv6" && !known(p))
         .map(String::from)
         .collect()
 }
@@ -284,9 +292,15 @@ fn run_case_for(path: &Path, work: &Path, target: &'static Target) -> Result<(),
 }
 
 /// A `tests/cases` program that needs C libraries or programs: skipped
-/// when `pkg-config` does not know a package of `X.needs`, or a program of
-/// `X.tools` is not on `PATH`.
+/// when `pkg-config` does not know a package of `X.needs`, `X.needs` lists
+/// `ipv6` and the host has no IPv6 loopback, or a program of `X.tools` is
+/// not on `PATH`.
 fn tool_case(path: &Path, work: &Path) -> Result<(), String> {
+    let needs = read(&path.with_extension("needs")).unwrap_or_default();
+    if needs.split_whitespace().any(|p| p == "ipv6") && !ipv6_loopback() {
+        println!("skipped cases/{}: no IPv6 loopback", name(path));
+        return Ok(());
+    }
     let mut missing = missing_packages(path);
     missing.extend(missing_tools(path));
     if !missing.is_empty() {

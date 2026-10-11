@@ -1,0 +1,18 @@
+// std.net IPv6 (O1.3b): connect to a listener by IPv6 literal (`::1`).
+// Needs an IPv6 loopback (`net_ipv6.needs`).
+
+import std.net
+
+pub fn main() !void {
+    let l = try net.listen("::1", 0)
+    defer l.close()
+    let c = try net.connect("::1", l.port())
+    let s = try l.accept()
+    try c.write("ping")
+    var buf = @zeroed([8]u8)
+    let n = try s.readTimeout(buf[..], 5000)
+    @print("::1: ")
+    @println(n == 4 && buf[0] == 'p' && buf[3] == 'g')
+    c.close()
+    s.close()
+}
