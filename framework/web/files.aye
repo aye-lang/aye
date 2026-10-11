@@ -1,0 +1,107 @@
+// web.serveFile: static files from an app's `public/` directory (FD4).
+
+import std.fs
+import std.mem.Allocator
+import std.path
+import std.text
+
+/// Answers `url` (a request path such as `/img/logo.svg`) with the file
+/// of that name under `dir`: 200, a `Content-Type` from the extension,
+/// `Cache-Control: public, max-age=0` and the file as the body. Returns
+/// false when there is no such regular file (the caller answers 404); a
+/// link does not count as a file, so no link leads out of `dir`. A `.` or
+/// `..` segment or a `\` is `BadRequest`; an empty segment (`//`, a
+/// trailing `/`) names no file. An empty `dir` serves nothing.
+pub fn serveFile(alloc: Allocator, dir: []u8, url: []u8, res: *mut Response) Error!bool {
+    if dir.len == 0 || url.len < 2 {
+        return false
+    }
+    var segs = text.split(url[1..url.len], "/")
+    var named = true
+    while segs.next() |seg| {
+        if text.eql(seg, ".") || text.eql(seg, "..") || text.indexOf(seg, "\\") != null {
+            return Error.BadRequest
+        }
+        if seg.len == 0 {
+            named = false
+        }
+    }
+    if !named {
+        return false
+    }
+    let file = path.join(alloc, dir, url[1..url.len]) catch |e| {
+        return Error.OutOfMemory
+    }
+    let st = fs.stat(file) catch |e| {
+        return false
+    }
+    if st.kind != fs.Kind.File {
+        return false
+    }
+    let body = fs.readFile(alloc, file) catch |e| {
+        return false
+    }
+    res.contentType = mimeOf(url)
+    try res.header("Cache-Control", "public, max-age=0")
+    res.page.buf.clear()
+    try res.page.raw(body)
+    return true
+}
+
+// The `Content-Type` for the extension of `name`.
+fn mimeOf(name: []u8) []u8 {
+    var dot: usize = name.len
+    var i: usize = name.len
+    while i > 0 {
+        i -= 1
+        if name[i] == '/' {
+            break
+        }
+        if name[i] == '.' {
+            dot = i
+            break
+        }
+    }
+    if dot == name.len {
+        return "application/octet-stream"
+    }
+    let ext = name[dot + 1..name.len]
+    if text.eqlIgnoreCase(ext, "html") {
+        return "text/html; charset=utf-8"
+    }
+    if text.eqlIgnoreCase(ext, "css") {
+        return "text/css; charset=utf-8"
+    }
+    if text.eqlIgnoreCase(ext, "js") {
+        return "text/javascript; charset=utf-8"
+    }
+    if text.eqlIgnoreCase(ext, "json") {
+        return "application/json"
+    }
+    if text.eqlIgnoreCase(ext, "png") {
+        return "image/png"
+    }
+    if text.eqlIgnoreCase(ext, "jpg") {
+        return "image/jpeg"
+    }
+    if text.eqlIgnoreCase(ext, "svg") {
+        return "image/svg+xml"
+    }
+    if text.eqlIgnoreCase(ext, "ico") {
+        return "image/x-icon"
+    }
+    if text.eqlIgnoreCase(ext, "txt") {
+        return "text/plain; charset=utf-8"
+    }
+    if text.eqlIgnoreCase(ext, "woff2") {
+        return "font/woff2"
+    }
+    return "application/octet-stream"
+}
+
+test "content types by extension" {
+    @expect(text.eql(mimeOf("/style.css"), "text/css; charset=utf-8"))
+    @expect(text.eql(mimeOf("/img/logo.SVG"), "image/svg+xml"))
+    @expect(text.eql(mimeOf("/a.b/readme"), "application/octet-stream"))
+    @expect(text.eql(mimeOf("/x.unknown"), "application/octet-stream"))
+}

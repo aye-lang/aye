@@ -15,9 +15,11 @@ import std.text.Builder
 /// Why `run` gave up: it could not listen, write or allocate.
 pub error ServeError = ListenError || WriteError || AllocError
 
-/// What every connection thread reads: the route table.
+/// What every connection thread reads: the route table and the directory
+/// of static files.
 struct App {
     routes: []Route
+    public: []u8
 }
 
 /// The port after `--port` in the program's arguments, or `fallback`.
@@ -45,9 +47,12 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// 127.0.0.1:<port>`, and serves `routes` until the process ends. A path
 /// that no route has gets 404; a path with other methods only gets 405 and
 /// an `Allow` header. `HEAD` is answered from the `Get` route with the same
-/// headers and an empty body.
-pub fn run(alloc: Allocator, port: u16, routes: []Route) ServeError!void {
-    var app = App { routes: routes }
+/// headers and an empty body. When no route matches a `GET` or `HEAD`, the
+/// file of that path under `public` is served (see `serveFile`); `public` is
+/// the path of the directory, absolute or relative to the working directory,
+/// or empty for none.
+pub fn run(alloc: Allocator, port: u16, routes: []Route, public: []u8) ServeError!void {
+    var app = App { routes: routes, public: public }
     var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
     var line = Builder.init(alloc)
     defer line.deinit()
@@ -73,6 +78,7 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
         r.handler(&req, &mut res) catch |e| {
             fail(&mut res, e)
         }
+    } else if served(app, &req, &mut res) {
     } else {
         let allowed = allow(alloc, app.routes, req.path) catch |e| {
             hres.status = 500
@@ -101,6 +107,19 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     } else {
         hres.body = res.page.bytes()
     }
+}
+
+// Does `public` have the file of a `GET` or `HEAD` request? Then `res` is
+// its answer. A path that leaves `public` gets 400.
+fn served(app: *mut App, req: *Request, res: *mut Response) bool {
+    if req.method != Method.Get && req.method != Method.Head {
+        return false
+    }
+    let found = serveFile(req.arena, app.public, req.path, res) catch |e| {
+        fail(res, e)
+        return true
+    }
+    return found
 }
 
 // Turns the response into the plain page of the status that `e` means.
