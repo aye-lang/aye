@@ -33,8 +33,16 @@
 //!   runs the page's `/_web/dev.js` in a fake `window` with an SSE client.
 //!   When the test breaks `app/about/page.aye`, the script reloads once (to
 //!   the error page); when the test fixes it, it reloads a second time.
+//! - `framework/examples/pages/islands/counter` (an island: `view/` for both
+//!   builds, `client.aye` for wasm32-freestanding) is built for
+//!   wasm32-freestanding, and `tests/framework/island_exports.mjs` lists the
+//!   imports and exports of the module: the three `dom_*` and `env`'s
+//!   `aye_write`, `aye_abort` and `strtod` (from `std.json`), no others;
+//!   `mount`, `event`, `memory` and `malloc` among the exports. Skipped
+//!   without clang's wasm32 backend or `node`.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
+use aye::driver;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::CommandExt;
@@ -926,4 +934,56 @@ fn dev_units() {
         "aye test failed:\n{stdout}{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn island_build() {
+    let target = driver::find_target("wasm32-freestanding").unwrap();
+    if !target.toolchain_available() || !driver::node_available() {
+        println!("skipped: no wasm32 clang or no node");
+        return;
+    }
+    let wasm = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-counter.wasm");
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .args(["build", "--target", "wasm32-freestanding"])
+        .arg(root().join("framework/examples/pages/islands/counter"))
+        .arg("-o")
+        .arg(&wasm)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "building the counter island failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = Command::new("node")
+        .arg(root().join("tests/framework/island_exports.mjs"))
+        .arg(&wasm)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "node failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines = String::from_utf8_lossy(&out.stdout).into_owned();
+    let imports: Vec<&str> = lines.lines().filter(|l| l.starts_with("import ")).collect();
+    assert_eq!(
+        imports,
+        [
+            "import env.aye_abort",
+            "import env.aye_write",
+            "import env.dom_on",
+            "import env.dom_query",
+            "import env.dom_set_text",
+            "import env.strtod",
+        ]
+    );
+    for export in ["mount", "event", "memory", "malloc"] {
+        assert!(
+            lines.lines().any(|l| l == format!("export {export}")),
+            "no export {export}:\n{lines}"
+        );
+    }
 }
