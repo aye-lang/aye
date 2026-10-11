@@ -187,7 +187,7 @@ fn doc_command() {
     );
     let (code, _, err) = aye(&["doc", "--signatures", "std.nope"]);
     assert_eq!(code, 1);
-    assert!(err.contains("no std module"), "{err}");
+    assert!(err.contains("unknown std module"), "{err}");
 }
 
 #[test]

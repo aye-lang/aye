@@ -18,7 +18,7 @@
 
 use crate::fmt::{self, Br, Item, Role, Scan};
 use crate::lexer::{Kw, Tok};
-use crate::module::STD_FILES;
+use crate::module::{STD_FILES, std_module_hint};
 use std::path::{Path, PathBuf};
 
 /// The documentation of the modules at `path`: `std` (every std module) or
@@ -37,7 +37,8 @@ pub fn signatures(path: &str) -> Result<String, String> {
             }
         }
         if modules.is_empty() {
-            return Err(format!("aye: no std module `{path}`"));
+            let seg = path.strip_prefix("std.").unwrap_or(path);
+            return Err(format!("aye: {}", std_module_hint(seg)));
         }
     } else {
         let p = Path::new(path);

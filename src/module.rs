@@ -328,6 +328,27 @@ fn join(segs: &[(String, Span)]) -> String {
         .join(".")
 }
 
+/// The message for an unknown std module `std.<seg>`: the std modules, and
+/// the close one, if any. Used for E0081 and by `aye doc`.
+pub fn std_module_hint(seg: &str) -> String {
+    let mut names: Vec<&str> = STD_FILES
+        .iter()
+        .filter_map(|(m, ..)| m.strip_prefix("std.").filter(|n| !n.contains('.')))
+        .collect();
+    names.sort();
+    names.dedup();
+    let mut msg = format!(
+        "unknown std module `std.{seg}`; std has: {}",
+        names.join(", ")
+    );
+    if let Some(near) = names.iter().find(|n| {
+        n.as_bytes()[..2] == *seg.as_bytes().get(..2).unwrap_or(&[]) && edit_distance(n, seg) <= 2
+    }) {
+        msg.push_str(&format!("\ndid you mean `std.{near}`?"));
+    }
+    msg
+}
+
 /// The Levenshtein distance of two names.
 fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
@@ -1152,23 +1173,7 @@ impl Loader<'_> {
         if path != "std" {
             return format!("module `{path}` has no `{seg}`");
         }
-        let mut names: Vec<&str> = STD_FILES
-            .iter()
-            .filter_map(|(m, ..)| m.strip_prefix("std.").filter(|n| !n.contains('.')))
-            .collect();
-        names.sort();
-        names.dedup();
-        let mut msg = format!(
-            "unknown std module `std.{seg}`; std has: {}",
-            names.join(", ")
-        );
-        if let Some(near) = names.iter().find(|n| {
-            n.as_bytes()[..2] == *seg.as_bytes().get(..2).unwrap_or(&[])
-                && edit_distance(n, seg) <= 2
-        }) {
-            msg.push_str(&format!("\ndid you mean `std.{near}`?"));
-        }
-        msg
+        std_module_hint(seg)
     }
 
     fn not_imported(&self, name: &str, span: Span) -> Error {
