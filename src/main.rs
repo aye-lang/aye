@@ -667,6 +667,11 @@ fn test(args: &Args, target: &'static driver::Target) -> ExitCode {
         );
     } else {
         for r in results {
+            if let Some(driver::Failure::Compile(message)) = r.failures.first() {
+                println!("test \"{}\" ... FAILED (compile)", r.name);
+                eprintln!("{message}");
+                continue;
+            }
             match r.time_limit_note() {
                 Some(note) => println!("test \"{}\" ... FAILED ({note})", r.name),
                 None => println!(
