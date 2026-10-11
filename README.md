@@ -51,6 +51,9 @@ aye spec [<section> | all]                            # print the core of the la
 as `--cflags -fsanitize=thread`. `--target <t>` (`aarch64-macos`,
 `x86_64-macos`, `aarch64-linux`, `x86_64-linux`, `wasm32-wasip1`,
 `wasm32-freestanding`; default: this machine) builds for another target.
+`build -c` compiles to an object file (`<name>.o`) without linking; for a
+Linux target on macOS, where clang has no Linux sysroot to link with, it
+needs none (`aye build --target x86_64-linux -c hello.aye`).
 
 `aye fmt` works on tokens and keeps every comment and line break; it sets
 indentation (4 spaces) and spacing, keeps at most one blank line in a row and

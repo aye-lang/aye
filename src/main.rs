@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of all its .aye files):
-  aye build <path> [-o out] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
+  aye build <path> [-o out] [-c] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
   aye run <path> [--mode debug|safe|fast] [--cflags <flags>] [--target <target>] [-- args...]
   aye emit-c <path> [--mode debug|safe|fast] [--target <target>]
   aye check <path> [--json] [--target <target>]
   aye fix <path>
   aye test <path> [--filter <text>] [--module <module>] [--json] [--time-limit <seconds>] [-j <n>] [--mode debug|safe|fast] [--cflags <flags>] [--target <target>]
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
+  (-c: compile to an object file, `<path>.o`, without linking; for any --target, no sysroot needed)
   (--target: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding; default: this machine)
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
   aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
@@ -83,6 +84,8 @@ struct Args {
     cflags: Vec<String>,
     /// `--target name`.
     target: Option<String>,
+    /// `aye build -c`: an object file, not linked.
+    compile_only: bool,
     /// `aye test --time-limit s`: CPU seconds per test; 0: no limit.
     time_limit: u64,
     /// `aye test -j n`: test processes at once.
@@ -97,12 +100,14 @@ fn parse_args() -> Result<Args, String> {
     let mut prog_args = Vec::new();
     let mut cflags = Vec::new();
     let mut target = None;
+    let mut compile_only = false;
     let mut time_limit = 10;
     let mut jobs = std::thread::available_parallelism().map_or(1, |n| n.get());
     while let Some(a) = it.next() {
         match a.as_str() {
             "--" if cmd == "run" => prog_args.extend(it.by_ref()),
             "-o" if cmd == "build" => out = Some(it.next().ok_or("`-o` needs a path")?),
+            "-c" if cmd == "build" => compile_only = true,
             "--json" if cmd == "check" || cmd == "test" => json = true,
             "--filter" if cmd == "test" => filter = it.next().ok_or("`--filter` needs a text")?,
             "--time-limit" if cmd == "test" => {
@@ -155,6 +160,7 @@ fn parse_args() -> Result<Args, String> {
         prog_args,
         cflags,
         target,
+        compile_only,
         time_limit,
         jobs,
     })
@@ -290,12 +296,17 @@ fn main() -> ExitCode {
                 .file_stem()
                 .unwrap_or("main".as_ref())
                 .to_string_lossy(),
-            target.ext
+            if args.compile_only { ".o" } else { target.ext }
         )),
         _ => std::env::temp_dir().join(format!("aye-run-{}{}", std::process::id(), target.ext)),
     };
     c.cflags = args.cflags.clone();
-    if let Err(e) = driver::cc(&c, &exe, args.mode) {
+    let built = if args.compile_only {
+        driver::cc_obj(&c, &exe, args.mode)
+    } else {
+        driver::cc(&c, &exe, args.mode)
+    };
+    if let Err(e) = built {
         eprintln!("aye: {e}");
         return ExitCode::FAILURE;
     }
