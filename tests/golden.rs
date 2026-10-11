@@ -974,6 +974,89 @@ fn cli_build_link(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `aye build --no-link libcurl` treats the `@linkOptional("libcurl")` of
+/// `std.http` as absent: the executable does not depend on libcurl
+/// (`otool -L` on macOS, `ldd` on Linux; the check is skipped where neither
+/// exists) and `https://` is `HttpsUnsupported`. Where libcurl is installed
+/// the plain build does depend on it. A name that no `@linkOptional`
+/// declares is E0100, and `aye run` takes the flag too.
+fn cli_no_link(work: &Path) -> Result<(), String> {
+    let src = work.join("no_link.aye");
+    std::fs::write(
+        &src,
+        "import std.heap.General\nimport std.http\n\npub fn main() {\n    var gpa = General.init()\n    defer gpa.deinit()\n    if http.get(gpa.allocator(), \"https://127.0.0.1:1/\") |_| {\n        @println(\"response\")\n    } else |e| {\n        @println(@tagName(e))\n    }\n}\n",
+    )
+    .map_err(|e| e.to_string())?;
+    let src = src.to_str().unwrap();
+    let lists_curl = |exe: &Path| -> Option<bool> {
+        let tool = if cfg!(target_os = "macos") {
+            ("otool", "-L")
+        } else {
+            ("ldd", "")
+        };
+        let mut cmd = Command::new(tool.0);
+        if !tool.1.is_empty() {
+            cmd.arg(tool.1);
+        }
+        let out = cmd.arg(exe).output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).contains("curl"))
+    };
+    let exe = work.join("no_link_off");
+    let (_, err, code) = aye(
+        work,
+        &[
+            "build",
+            src,
+            "--no-link",
+            "libcurl",
+            "-o",
+            exe.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!(
+            "`aye build --no-link libcurl` failed: {code:?}\n{err}"
+        ));
+    }
+    if lists_curl(&exe) == Some(true) {
+        return Err(
+            "`aye build --no-link libcurl`: the executable still depends on libcurl".into(),
+        );
+    }
+    let out = Command::new(&exe).output().map_err(|e| e.to_string())?;
+    if String::from_utf8_lossy(&out.stdout) != "HttpsUnsupported\n" {
+        return Err(format!(
+            "the --no-link program printed:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        ));
+    }
+    let curl_installed = Command::new("pkg-config")
+        .args(["--exists", "libcurl"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if curl_installed {
+        let exe = work.join("no_link_on");
+        let (_, err, code) = aye(work, &["build", src, "-o", exe.to_str().unwrap()])?;
+        if code != Some(0) {
+            return Err(format!("`aye build` failed: {code:?}\n{err}"));
+        }
+        if lists_curl(&exe) == Some(false) {
+            return Err("the plain build does not depend on libcurl".into());
+        }
+    }
+    let (_, err, code) = aye(work, &["build", src, "--no-link", "curl"])?;
+    if code == Some(0) || !err.contains("E0100") {
+        return Err(format!("`--no-link curl` should be E0100: {code:?}\n{err}"));
+    }
+    let (out, err, code) = aye(work, &["run", src, "--no-link", "libcurl"])?;
+    if code != Some(0) || out != "HttpsUnsupported\n" {
+        return Err(format!("`aye run --no-link libcurl`: {code:?}\n{out}{err}"));
+    }
+    Ok(())
+}
+
 /// `aye build --target x86_64-macos` makes a Mach-O x86_64 executable; it
 /// runs when Rosetta is there. Skipped off macOS.
 fn cli_target_x86_64(work: &Path) -> Result<(), String> {
@@ -1986,6 +2069,11 @@ fn main() {
             &mut jobs,
             "cli/aye build embed_binary".to_string(),
             move || cli_build_embed_binary(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --no-link".to_string(),
+            move || cli_no_link(w),
         );
         add(
             &mut jobs,

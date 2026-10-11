@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 746
+
+<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><article><h1>Hello, world</h1><p>The first post of the posts app. Its text is <em>markup</em>, written by the site's authors.</p></article><div data-island="likes" data-props="{&quot;count&quot;:0}"><button>♥ 0</button></div><h2 id="comments">1 comments</h2><ul class="comments"><li><strong>Ann B</strong> &lt;b&gt;hi&lt;/b&gt;!</li></ul><form method="post" action="/posts/hello"><label>Name <input name="name" maxlength="80" value="Ann B"></label> <label>Comment <textarea name="body" maxlength="2000"></textarea></label> <button>Post</button></form><script src="/_web/islands.js" defer></script></body></html>

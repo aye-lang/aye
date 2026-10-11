@@ -1,0 +1,227 @@
+// The store of the posts app: the posts, read from the JSON file after
+// `--posts` in the program's arguments (default `posts.json` in the working
+// directory) on the first request that needs them, and the comments, kept in
+// memory. Every request thread shares them, so they sit in module-level
+// storage behind a lock. A global cannot start as `Mutex.init()` (an
+// initializer has no calls), so the first caller makes the lock; `gate` is 0
+// before that, 1 while it is made and 2 after. A file that is missing or
+// malformed is `Error.Internal` and nothing is kept, so the next request
+// reads it again.
+//
+// The file is an array of objects with the strings `slug`, `title` and
+// `body_html` (markup written by the site's authors, shown unescaped).
+
+import std.fs
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.list.List
+import std.mem
+import std.mem.Allocator
+import std.os
+import std.sync.Atomic
+import std.sync.Mutex
+import std.text
+import web.Error
+
+/// A post. Its strings live as long as the program.
+pub struct Post {
+    slug: []u8
+    title: []u8
+    body_html: []u8
+}
+
+/// A comment on the post `slug`. Its strings live as long as the program.
+pub struct Comment {
+    slug: []u8
+    name: []u8
+    text: []u8
+}
+
+var gate = Atomic(u32) { value: 0 }
+var lock: ?Mutex = null
+var heap: ?General = null
+var arena: ?Arena = null
+var loaded: ?[]Post = null
+var notes: ?List(Comment) = null
+
+fn mutex() Mutex {
+    if gate.load() != 2 {
+        if gate.compareSwap(0, 1) {
+            lock = Mutex.init()
+            gate.store(2)
+        } else {
+            while gate.load() != 2 {
+            }
+        }
+    }
+    return lock.?
+}
+
+/// The path after `--posts` in the program's arguments, or `posts.json`.
+fn postsPath(alloc: Allocator) Error![]u8 {
+    let args = os.args(alloc) catch |e| {
+        return Error.OutOfMemory
+    }
+    var i: usize = 1
+    while i + 1 < args.len {
+        if text.eql(args[i], "--posts") {
+            return args[i + 1]
+        }
+        i += 1
+    }
+    return "posts.json"
+}
+
+/// The string member `key` of `v`, or `Error.Internal`.
+fn member(v: *json.Value, key: []u8) Error![]u8 {
+    let m = v.get(key) orelse return Error.Internal
+    return m.asString() orelse return Error.Internal
+}
+
+/// The posts in the JSON text `src`, with everything in `a`.
+fn parse(a: *mut Arena, src: []u8) Error![]Post {
+    var root = json.parse(a, src) catch |e| {
+        return Error.Internal
+    }
+    let items = root.asArray() orelse return Error.Internal
+    let out = a.allocator().alloc(Post { slug: "", title: "", body_html: "" }, items.len) catch |e| {
+        return Error.OutOfMemory
+    }
+    for i in 0..items.len {
+        out[i] = Post {
+            slug: try member(&items[i], "slug"),
+            title: try member(&items[i], "title"),
+            body_html: try member(&items[i], "body_html"),
+        }
+    }
+    return out
+}
+
+/// Reads the posts if no earlier call did. The caller holds the lock.
+fn load() Error!void {
+    if loaded != null {
+        return
+    }
+    if heap == null {
+        heap = General.init()
+    }
+    arena = Arena.init(heap.?.allocator())
+    let alloc = arena.?.allocator()
+    let src = fs.readFile(alloc, try postsPath(alloc)) catch |e| {
+        arena.?.deinit()
+        return Error.Internal
+    }
+    let parsed = parse(&mut arena.?, src) catch |e| {
+        arena.?.deinit()
+        return e
+    }
+    notes = List(Comment).init(alloc)
+    loaded = parsed
+}
+
+/// Every post, in the order of the file. The slice is never freed or changed.
+pub fn all() Error![]Post {
+    let m = mutex()
+    m.lock()
+    defer m.unlock()
+    try load()
+    return loaded.?
+}
+
+/// The post whose slug is `slug` (compared as bytes), or null; a file that
+/// cannot be read is null too.
+pub fn bySlug(slug: []u8) ?Post {
+    let found = all() catch |e| {
+        return null
+    }
+    for post in found {
+        if text.eql(post.slug, slug) {
+            return post
+        }
+    }
+    return null
+}
+
+/// Adds a comment by `name` to the post `slug`, newest last. The strings are
+/// copied. A slug that names no post is `Error.NotFound`.
+pub fn addComment(slug: []u8, name: []u8, body: []u8) Error!void {
+    if bySlug(slug) == null {
+        return Error.NotFound
+    }
+    let m = mutex()
+    m.lock()
+    defer m.unlock()
+    let alloc = arena.?.allocator()
+    let c = Comment { slug: try copy(alloc, slug), name: try copy(alloc, name), text: try copy(alloc, body) }
+    notes.?.append(c) catch |e| {
+        return Error.OutOfMemory
+    }
+}
+
+/// The longest comment name and the longest comment body, in bytes.
+pub let MaxName: usize = 80
+pub let MaxBody: usize = 2000
+
+/// Checks the fields of a new comment: an empty name or body is
+/// `Error.BadRequest`, a long one `Error.PayloadTooLarge`.
+pub fn checkComment(name: []u8, body: []u8) Error!void {
+    if name.len == 0 || body.len == 0 {
+        return Error.BadRequest
+    }
+    if name.len > MaxName || body.len > MaxBody {
+        return Error.PayloadTooLarge
+    }
+}
+
+/// The comments on the post `slug`, oldest first, in a list made in `alloc`.
+pub fn comments(alloc: Allocator, slug: []u8) Error![]Comment {
+    let m = mutex()
+    m.lock()
+    defer m.unlock()
+    var out = List(Comment).init(alloc)
+    if notes != null {
+        for c in notes.?.items() {
+            if text.eql(c.slug, slug) {
+                out.append(c) catch |e| {
+                    return Error.OutOfMemory
+                }
+            }
+        }
+    }
+    return out.items()
+}
+
+fn copy(alloc: Allocator, s: []u8) Error![]u8 {
+    let out = alloc.alloc(0 as u8, s.len) catch |e| {
+        return Error.OutOfMemory
+    }
+    mem.copy(out, s)
+    return out
+}
+
+test "parse reads slug, title and body_html of each post" {
+    var a = Arena.init(@testAllocator())
+    defer a.deinit()
+    let src = "[{\"slug\":\"a\",\"title\":\"A < B\",\"body_html\":\"<p>x</p>\"},{\"slug\":\"b\",\"title\":\"B\",\"body_html\":\"\"}]"
+    let found = try parse(&mut a, src)
+    @expect(found.len == 2)
+    @expect(text.eql(found[0].slug, "a"))
+    @expect(text.eql(found[0].title, "A < B"))
+    @expect(text.eql(found[1].slug, "b"))
+}
+
+test "parse refuses text that is not an array of posts" {
+    var a = Arena.init(@testAllocator())
+    defer a.deinit()
+    var failed = false
+    parse(&mut a, "{}") catch |e| {
+        failed = true
+    }
+    @expect(failed)
+    failed = false
+    parse(&mut a, "[{\"slug\":\"a\"}]") catch |e| {
+        failed = true
+    }
+    @expect(failed)
+}

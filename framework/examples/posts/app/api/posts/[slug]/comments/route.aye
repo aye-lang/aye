@@ -1,0 +1,64 @@
+// The comments of a post as JSON: `GET /api/posts/<slug>/comments` answers
+// `[{"name": ..., "body": ...}]`, oldest first; `POST` with a JSON body
+// `{"name": ..., "body": ...}` adds a comment and answers 201 with it. A body
+// that is not that object, or has an empty field, is `Error.BadRequest`, a
+// long field `Error.PayloadTooLarge`, a slug that names no post
+// `Error.NotFound` (all as `{"error":"<name>"}`).
+
+import lib.posts
+import std.heap.Arena
+import std.json
+import web.Error
+import web.Request
+import web.Response
+
+pub fn get(req: *Request, res: *mut Response) Error!void {
+    let slug = req.param("slug")
+    if posts.bySlug(slug) == null {
+        return Error.NotFound
+    }
+    let found = try posts.comments(req.arena, slug)
+    let items = req.arena.alloc(json.Value.Null, found.len) catch |e| {
+        return Error.OutOfMemory
+    }
+    for i in 0..found.len {
+        items[i] = try commentValue(req, found[i].name, found[i].text)
+    }
+    var v = json.Value.Array { items: items }
+    try res.json(&v)
+}
+
+pub fn post(req: *Request, res: *mut Response) Error!void {
+    let slug = req.param("slug")
+    if posts.bySlug(slug) == null {
+        return Error.NotFound
+    }
+    var a = Arena.init(req.arena)
+    var root = json.parse(&mut a, req.body) catch |e| {
+        return Error.BadRequest
+    }
+    let name = field(&root, "name") orelse return Error.BadRequest
+    let body = field(&root, "body") orelse return Error.BadRequest
+    try posts.checkComment(name, body)
+    try posts.addComment(slug, name, body)
+    var v = try commentValue(req, name, body)
+    try res.json(&v)
+    res.status = 201
+}
+
+/// The string member `key` of the object `v`, or null.
+fn field(v: *json.Value, key: []u8) ?[]u8 {
+    let m = v.get(key) orelse return null
+    return m.asString()
+}
+
+/// The object `{"name": name, "body": body}`, its members made in the request
+/// arena.
+fn commentValue(req: *Request, name: []u8, body: []u8) Error!json.Value {
+    let members = req.arena.alloc(json.Member { key: "", value: json.Value.Null }, 2) catch |e| {
+        return Error.OutOfMemory
+    }
+    members[0] = json.Member { key: "name", value: json.Value.String { value: name } }
+    members[1] = json.Member { key: "body", value: json.Value.String { value: body } }
+    return json.Value.Object { members: members }
+}

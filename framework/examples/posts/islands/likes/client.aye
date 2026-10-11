@@ -1,0 +1,50 @@
+// The likes island in the browser (`aye build --target
+// wasm32-freestanding` of this directory): `islands.js` calls `mount` with
+// the root element and the props, then `event` for each listener. The root
+// module is this directory, so the shared part is `import view`; the page's
+// native build imports it as `islands.likes.view` and never loads this
+// file, whose body-less `extern fn`s would not link. The count lives in the
+// browser only: a reload shows the page's count again.
+
+import std.heap.General
+import std.text.Builder
+import view
+
+extern fn dom_query(root: i32, sel: [*]u8, len: usize) i32
+extern fn dom_set_text(el: i32, s: [*]u8, len: usize)
+extern fn dom_on(el: i32, name: [*]u8, len: usize, id: i32)
+
+var count: i64 = 0
+var button: i32 = 0
+
+fn show() {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var b = Builder.init(gpa.allocator())
+    defer b.deinit()
+    view.label(&mut b, count) catch |e| {
+        return
+    }
+    let text = b.bytes()
+    dom_set_text(button, text.ptr, text.len)
+}
+
+/// Starts the island in the element `root` that holds `view.render`'s
+/// markup: reads the props, finds the button and listens for its clicks as
+/// event 1.
+pub extern fn mount(root: i32, props: [*]u8, len: usize) {
+    count = view.start(props[0..len])
+    button = dom_query(root, "button".ptr, 6)
+    if button == 0 {
+        return
+    }
+    dom_on(button, "click".ptr, 5, 1)
+}
+
+/// A listener fired: event 1 is a click on the button.
+pub extern fn event(id: i32) {
+    if id == 1 && button != 0 {
+        count += 1
+        show()
+    }
+}

@@ -1,0 +1,47 @@
+// A post of the posts app: `/posts/<slug>` shows the post, its comments and
+// the form that `route.aye` takes, with the name from the `name` cookie filled
+// in, and the `likes` island (FD6) under the post. A slug that names no post
+// is `Error.NotFound`, answered with `not-found.aye`.
+
+import islands.likes.view
+import lib.posts
+import std.http
+import std.text.Builder
+import web.Error
+import web.Request
+import web.Response
+import web.island
+
+// The post is `entry`: a local named `post` would shadow the `post` of
+// `route.aye`, which the generated module of this directory shares.
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let entry = posts.bySlug(req.param("slug")) orelse return Error.NotFound
+    let found = try posts.comments(req.arena, entry.slug)
+    let html = res.html()
+    try html.raw("<article><h1>")
+    try html.text(entry.title)
+    try html.raw("</h1>")
+    try html.raw(entry.body_html)
+    try html.raw("</article>")
+    try island(html, "likes", "{\"count\":0}", view.render)
+    try html.raw("<h2 id=\"comments\">")
+    var count = Builder.init(req.arena)
+    try count.appendUint(found.len as u64)
+    try count.append(" comments")
+    try html.raw(count.bytes())
+    try html.raw("</h2><ul class=\"comments\">")
+    for c in found {
+        try html.raw("<li><strong>")
+        try html.text(c.name)
+        try html.raw("</strong> ")
+        try html.text(c.text)
+        try html.raw("</li>")
+    }
+    try html.raw("</ul><form method=\"post\" action=\"/posts/")
+    try html.text(entry.slug)
+    try html.raw("\"><label>Name <input name=\"name\" maxlength=\"80\" value=\"")
+    if req.cookie("name") |sent| {
+        try html.text(try http.percentDecode(req.arena, sent))
+    }
+    try html.raw("\"></label> <label>Comment <textarea name=\"body\" maxlength=\"2000\"></textarea></label> <button>Post</button></form>")
+}

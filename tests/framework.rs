@@ -53,6 +53,15 @@
 //!   (built as above) starts at `Count: 3`, two clicks give `Count: 5`, and
 //!   an island whose `.wasm` is missing logs one `console.error`. Skipped
 //!   like `island_build`.
+//! - `tests/framework/island_e2e.mjs` (Node 22) plays the browser against a
+//!   running app: it fetches `/counter`, builds a fake DOM from the island
+//!   `div`, runs the served `/_web/islands.js` with a real `fetch` of the
+//!   `.wasm`, clicks twice and prints `text=Count: 5` (`island_e2e`, on a
+//!   copy of the pages example). `dev_island` runs it against `web dev`
+//!   (the dev tag comes before the islands tag), changes the label in
+//!   `islands/counter/view/view.aye` from `Count: ` to `Total: `, waits for
+//!   the restart and expects `text=Total: 5`: `web gen` rebuilt the island.
+//!   Skipped like `island_build`.
 //! - `web gen --prod` (`gen_prod`, on a copy of the pages example with a
 //!   2 MiB `public/big.bin`, a dotfile and a symlink) also writes
 //!   `.web/assets.aye`: one `@embedFile` per regular file of `public/` and
@@ -68,6 +77,15 @@
 //!   has no body, `/img/logo.svg` is served, `/nope.css`, a traversal path,
 //!   `/_web/dev.js` and `/_web/events` are 404 and no page gets the dev
 //!   script; `/_web/islands/counter.wasm` is served when the island was built.
+//! - `framework/build` (`build_prod`, `aye run framework/build -- <app> -o
+//!   <exe>`) runs `web gen --prod`, `aye check` and `aye build --no-link
+//!   libcurl` on a copy of the pages example. The executable runs from
+//!   another directory with the app tree moved away and `PATH` set to
+//!   `/usr/bin:/bin`: `/`, `/about`, `/style.css` and its hashed URL,
+//!   `/counter` and the island's `.wasm` are served, and `otool -L` (or
+//!   `ldd`) lists no libcurl. The test prints the binary's size. A page that
+//!   does not compile makes the command exit 1 with the compiler's text and
+//!   no file.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use aye::driver;
@@ -1142,6 +1160,91 @@ fn islands_glue() {
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Count: 5");
 }
 
+/// Can an island be built and played: the wasm32 toolchain, `node` and
+/// Node 22?
+fn island_tools() -> bool {
+    driver::find_target("wasm32-freestanding")
+        .unwrap()
+        .toolchain_available()
+        && driver::node_available()
+        && node_22()
+}
+
+/// Runs `island_e2e.mjs` against the server on `port`: the last line it
+/// prints, `text=<count>`.
+fn island_text(port: u16) -> String {
+    island_text_at(port, "/counter")
+}
+
+/// Like `island_text`, for the island on the page `path`.
+fn island_text_at(port: u16, path: &str) -> String {
+    let out = Command::new("node")
+        .arg(root().join("tests/framework/island_e2e.mjs"))
+        .arg(format!("http://127.0.0.1:{port}/"))
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the island script failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn island_e2e() {
+    if !island_tools() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-island-e2e-app");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    run_gen(&app, &[]);
+    let web = app.join(".web");
+    assert!(web.join("client/counter.wasm").is_file());
+    let server = start(&build_dir("island-e2e", &web));
+    assert_eq!(island_text(server.port), "text=Count: 5");
+}
+
+#[test]
+fn dev_island() {
+    if !island_tools() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-island");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let page = try_get(dev.port, "/counter").unwrap();
+    let dev_tag = page.find("/_web/dev.js").expect("no dev tag in /counter");
+    let islands_tag = page
+        .find("/_web/islands.js")
+        .expect("no islands tag in /counter");
+    assert!(dev_tag < islands_tag, "the dev tag comes first:\n{page}");
+    assert_eq!(island_text(dev.port), "text=Count: 5");
+
+    let view = app.join("islands/counter/view/view.aye");
+    let source = std::fs::read_to_string(&view).unwrap();
+    assert!(source.contains("try b.append(\"Count: \")"));
+    std::fs::write(
+        &view,
+        source.replace("try b.append(\"Count: \")", "try b.append(\"Total: \")"),
+    )
+    .unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the edit");
+    assert_eq!(island_text(dev.port), "text=Total: 5");
+}
+
 /// The hex SHA-256 of the file at `path`, from `shasum` (macOS) or
 /// `sha256sum`.
 fn sha256_hex(path: &Path) -> String {
@@ -1357,4 +1460,431 @@ fn prod_serve() {
     } else {
         println!("skipped: no wasm32 clang; the island was not embedded");
     }
+}
+
+/// Runs `aye run framework/build -- <app> -o <exe>` from the root of the
+/// checkout.
+fn run_build(app: &Path, exe: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(root().join("framework").join("build"))
+        .arg("--")
+        .arg(app)
+        .arg("-o")
+        .arg(exe)
+        .output()
+        .unwrap()
+}
+
+/// Like `start_in`, with `PATH` set to `/usr/bin:/bin` and nothing else in
+/// the environment: no `aye`, no toolchain.
+fn start_scrubbed(exe: &Path, cwd: &Path) -> App {
+    start_scrubbed_with(exe, cwd, &[])
+}
+
+/// Like `start_scrubbed`, with `extra` arguments after `--port 0`.
+fn start_scrubbed_with(exe: &Path, cwd: &Path, extra: &[&str]) -> App {
+    let mut child = Command::new(exe)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--port", "0"])
+        .args(extra)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let port = line
+        .trim()
+        .strip_prefix("listening on 127.0.0.1:")
+        .unwrap_or_else(|| panic!("unexpected first line: {line:?}"))
+        .parse()
+        .unwrap();
+    App { child, port }
+}
+
+#[test]
+fn build_prod() {
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let app = tmp.join("framework-build-prod-app");
+    let gone = tmp.join("framework-build-prod-gone");
+    let from = tmp.join("framework-build-prod-cwd");
+    let bad = tmp.join("framework-build-prod-bad");
+    for dir in [&app, &gone, &from, &bad] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    std::fs::create_dir_all(&from).unwrap();
+    let exe = from.join("pages-prod");
+
+    // A broken page ends the command with status 1, the compiler's text and
+    // no executable.
+    copy_dir(&root().join("framework/examples/pages"), &bad);
+    let page = bad.join("app/about/page.aye");
+    let mut source = std::fs::read_to_string(&page).unwrap();
+    source.push_str("\nfn broken() i32 { return missing }\n");
+    std::fs::write(&page, source).unwrap();
+    let out = run_build(&bad, &exe);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("about/page.aye"), "{stderr}");
+    assert!(stderr.contains("web build: "), "{stderr}");
+    assert!(!exe.exists());
+
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let out = run_build(&app, &exe);
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "web build failed:\n{stdout}{stderr}");
+    let size = std::fs::metadata(&exe).unwrap().len();
+    let want = format!("web build: {} ({size} bytes)\n", exe.display());
+    assert!(stdout.ends_with(&want), "{stdout:?} lacks {want:?}");
+    println!("production binary: {size} bytes");
+    let islands = app.join(".web/client/counter.wasm").is_file();
+    std::fs::rename(&app, &gone).unwrap();
+
+    let server = start_scrubbed(&exe, &from);
+    let split = |response: &str| response.split_once("\n\n").unwrap().1.to_string();
+    let home = request(&server, "GET", "/");
+    assert!(home.starts_with("HTTP/1.1 200 OK\n"), "{home}");
+    let about = request(&server, "GET", "/about");
+    assert!(about.starts_with("HTTP/1.1 200 OK\n"), "{about}");
+    assert!(about.contains("<h1>About</h1>"), "{about}");
+    let href = about
+        .split("<link rel=\"stylesheet\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no stylesheet link: {about}"));
+    assert!(
+        href.starts_with("/style.") && href != "/style.css",
+        "{href}"
+    );
+    let css = request(&server, "GET", "/style.css");
+    assert!(css.starts_with("HTTP/1.1 200 OK\n"), "{css}");
+    let hashed = request(&server, "GET", href);
+    assert!(hashed.starts_with("HTTP/1.1 200 OK\n"), "{hashed}");
+    assert_eq!(split(&hashed), split(&css));
+    let counter = request(&server, "GET", "/counter");
+    assert!(counter.starts_with("HTTP/1.1 200 OK\n"), "{counter}");
+    assert!(counter.contains("data-island=\"counter\""), "{counter}");
+    if islands {
+        let wasm = request_raw(&server, "GET", "/_web/islands/counter.wasm", "", "");
+        assert!(wasm.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    } else {
+        println!("skipped: no wasm32 clang; the island was not embedded");
+    }
+
+    // The dynamic libraries: libcurl is not among them.
+    let listing = Command::new("otool")
+        .arg("-L")
+        .arg(&exe)
+        .output()
+        .or_else(|_| Command::new("ldd").arg(&exe).output());
+    match listing {
+        Ok(listing) => {
+            let listing = String::from_utf8_lossy(&listing.stdout);
+            println!("libraries:\n{listing}");
+            assert!(!listing.contains("curl"), "{listing}");
+        }
+        Err(_) => println!("skipped: neither otool nor ldd"),
+    }
+}
+
+/// A method, a path and the file of `tests/framework/posts/` with its
+/// response, for the posts app.
+const POSTS_CASES: &[(&str, &str, &str)] = &[
+    ("GET", "/", "root.http"),
+    ("GET", "/posts/hello", "post_hello.http"),
+    ("GET", "/posts/less-is-more", "post_less_is_more.http"),
+    ("GET", "/posts/on-files", "post_on_files.http"),
+    ("GET", "/posts/nope", "post_missing.http"),
+    ("GET", "/nope", "missing.http"),
+];
+
+/// Builds the posts app in its own directory `name` under the test
+/// directory and starts it on the file `data/posts.json`.
+fn posts_server(name: &str) -> App {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/posts"), &app);
+    run_gen(&app, &[]);
+    let web = app.join(".web");
+    let check = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .arg("check")
+        .arg(&web)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "aye check .web failed:\n{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let exe = build_dir("posts", &web);
+    let data = app.join("data/posts.json");
+    start_with(&exe, &["--posts", data.to_str().unwrap()])
+}
+
+#[test]
+fn posts_pages() {
+    let server = posts_server("framework-posts-app");
+    for (method, path, file) in POSTS_CASES {
+        let want =
+            std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap();
+        assert_eq!(
+            scrub(&request(&server, method, path)),
+            want,
+            "{method} {path}"
+        );
+    }
+}
+
+const FORM: &str = "Content-Type: application/x-www-form-urlencoded\r\n";
+const JSON: &str = "Content-Type: application/json\r\n";
+
+/// Comments on the posts app: the form, the post page with the cookie and the
+/// JSON API run in order against one server, so each case sees the comments
+/// of the earlier ones. Each is a method, a path, extra header lines, a body
+/// and the file of `tests/framework/posts/` with the response.
+#[test]
+fn posts_comments() {
+    let server = posts_server("framework-posts-comments-app");
+    let long_body = format!("name=Ann&body={}", "a".repeat(2001));
+    let cases: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            "name=Ann+B&body=%3Cb%3Ehi%3C%2Fb%3E%21",
+            "comment_post.http",
+        ),
+        (
+            "GET",
+            "/posts/hello",
+            "Cookie: name=Ann%20B\r\n",
+            "",
+            "comment_page.http",
+        ),
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            "name=Ann&body=",
+            "comment_empty.http",
+        ),
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            "name=Ann",
+            "comment_missing.http",
+        ),
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            &long_body,
+            "comment_long.http",
+        ),
+        (
+            "POST",
+            "/posts/nope",
+            FORM,
+            "name=Ann&body=hi",
+            "comment_nope.http",
+        ),
+        ("GET", "/api/posts", "", "", "api_posts.http"),
+        (
+            "POST",
+            "/api/posts/hello/comments",
+            JSON,
+            "{\"name\":\"Bo\",\"body\":\"yo\"}",
+            "api_comment_post.http",
+        ),
+        (
+            "GET",
+            "/api/posts/hello/comments",
+            "",
+            "",
+            "api_comments.http",
+        ),
+        (
+            "POST",
+            "/api/posts/nope/comments",
+            JSON,
+            "{\"name\":\"Bo\",\"body\":\"yo\"}",
+            "api_comment_nope.http",
+        ),
+        (
+            "POST",
+            "/api/posts/hello/comments",
+            JSON,
+            "{\"name\":",
+            "api_comment_bad.http",
+        ),
+        (
+            "POST",
+            "/api/posts/hello/comments",
+            JSON,
+            "{\"name\":\"Bo\"}",
+            "api_comment_field.http",
+        ),
+    ];
+    for (method, path, extra, body, file) in cases {
+        let want =
+            std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap();
+        assert_eq!(
+            scrub(&request_with(&server, method, path, extra, body)),
+            want,
+            "{method} {path}"
+        );
+    }
+}
+
+/// The likes island of the posts app: the post page has its `div` and the
+/// islands script tag once, `web gen` builds `likes.wasm`, and two clicks in
+/// the Node e2e script make `♥ 2` (the count is not stored).
+#[test]
+fn posts_likes() {
+    if !island_tools() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let server = posts_server("framework-posts-likes-app");
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-posts-likes-app");
+    assert!(app.join(".web/client/likes.wasm").is_file());
+    let page = request(&server, "GET", "/posts/hello");
+    assert_eq!(page.matches("data-island=\"likes\"").count(), 1, "{page}");
+    assert_eq!(page.matches("/_web/islands.js").count(), 1, "{page}");
+    assert_eq!(island_text_at(server.port, "/posts/hello"), "text=♥ 2");
+}
+
+/// `response` as the dev server would send it: the hashed stylesheet `href`
+/// of the production build is `/style.css` again and `Content-Length` is
+/// the length of the body that results.
+fn unhash(response: &str) -> String {
+    let Some((head, body)) = response.split_once("\n\n") else {
+        return response.to_string();
+    };
+    let Some(href) = body
+        .split("<link rel=\"stylesheet\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|href| href.starts_with("/style.") && *href != "/style.css")
+    else {
+        return response.to_string();
+    };
+    let body = body.replace(href, "/style.css");
+    let head: String = head
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.starts_with("Content-Length: ") {
+                format!("Content-Length: {}\n", body.len())
+            } else if line.ends_with('\n') {
+                line.to_string()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    format!("{head}\n{body}")
+}
+
+/// The production binary of the posts app, built by `web build`, run from
+/// another directory with the app tree gone and `PATH` scrubbed, on a copy
+/// of the data file: the transcripts of the dev build hold, apart from the
+/// hashed stylesheet `href`.
+#[test]
+fn posts_prod() {
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let app = tmp.join("framework-posts-prod-app");
+    let gone = tmp.join("framework-posts-prod-gone");
+    let from = tmp.join("framework-posts-prod-cwd");
+    let data = tmp.join("framework-posts-prod-data");
+    for dir in [&app, &gone, &from, &data] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let exe = from.join("posts-prod");
+    copy_dir(&root().join("framework/examples/posts"), &app);
+    let out = run_build(&app, &exe);
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "web build failed:\n{stdout}{stderr}");
+    let islands = app.join(".web/client/likes.wasm").is_file();
+    let css = std::fs::read_to_string(app.join("public/style.css")).unwrap();
+    let file = data.join("posts.json");
+    std::fs::copy(app.join("data/posts.json"), &file).unwrap();
+    std::fs::rename(&app, &gone).unwrap();
+
+    let server = start_scrubbed_with(&exe, &from, &["--posts", file.to_str().unwrap()]);
+    let want = |file: &str| {
+        std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap()
+    };
+    for (method, path, file) in POSTS_CASES {
+        assert_eq!(
+            unhash(&scrub(&request(&server, method, path))),
+            want(file),
+            "{method} {path}"
+        );
+    }
+
+    // The stylesheet, plain and under its hashed name, is the file's text.
+    let home = request(&server, "GET", "/");
+    let href = home
+        .split("<link rel=\"stylesheet\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no stylesheet link: {home}"));
+    assert!(
+        href.starts_with("/style.") && href != "/style.css",
+        "{href}"
+    );
+    for path in ["/style.css", href] {
+        let response = request(&server, "GET", path);
+        assert!(response.starts_with("HTTP/1.1 200 OK\n"), "{response}");
+        assert!(
+            response.contains("Content-Type: text/css; charset=utf-8\n"),
+            "{response}"
+        );
+        assert_eq!(response.split_once("\n\n").unwrap().1, css, "{path}");
+    }
+
+    if islands {
+        let wasm = request_raw(&server, "GET", "/_web/islands/likes.wasm", "", "");
+        let (head, body) = split_binary(&wasm);
+        assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+        assert!(head.contains("Content-Type: application/wasm\n"), "{head}");
+        assert!(body.starts_with(b"\0asm"));
+    } else {
+        println!("skipped: no wasm32 clang; the island was not embedded");
+    }
+
+    // A comment: the redirect and the page that follows it.
+    let post = request_with(
+        &server,
+        "POST",
+        "/posts/hello",
+        FORM,
+        "name=Ann+B&body=%3Cb%3Ehi%3C%2Fb%3E%21",
+    );
+    assert_eq!(unhash(&scrub(&post)), want("comment_post.http"));
+    let page = request_with(
+        &server,
+        "GET",
+        "/posts/hello",
+        "Cookie: name=Ann%20B\r\n",
+        "",
+    );
+    assert_eq!(unhash(&scrub(&page)), want("comment_page.http"));
 }

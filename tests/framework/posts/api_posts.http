@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: application/json
+Connection: close
+Content-Length: 138
+
+[{"slug":"hello","title":"Hello, world"},{"slug":"less-is-more","title":"Less < More"},{"slug":"on-files","title":"Posts live in a file"}]

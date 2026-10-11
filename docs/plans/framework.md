@@ -120,7 +120,7 @@ file by hand. Tests run only the named case (`cargo test --release
 - goal: a function turns the `diagnostics` array of `aye check --json .web` into an HTML error page whose paths point at `app/`, not at `.web/` symlinks.
 - serves: FD5
 - files: `framework/dev/diag.aye` (new: `errorPage(alloc, json: []u8, appDir: []u8) -> Error![]u8` with `test` blocks), `tests/framework.rs` (a `dev_units` test that runs `aye test framework/dev` as `web_units` does for `web`), `tests/framework/dev/` (new: a saved `--json` output with `.web/` paths and the expected page)
-- verify: `cargo test --release --test framework dev_units` → exit 0; the saved output with two errors gives a page that has both messages with `app/blog/[slug]/page.aye:LINE:COL` and escaped text
+- verify: `cargo test --release --test framework dev_units` → exit 0; the saved output with two errors gives a page that has both messages with `app/posts/[slug]/page.aye:LINE:COL` and escaped text
 - depends on: –
 - parallel with: F3.1, F3.2, F2.3 (different files except `tests/framework.rs`)
 - where: local
@@ -296,7 +296,7 @@ worktrees) and run only the named case.
 - lane: framework
 - goal: a Node 22 script plays the browser against the running pages example: it fetches `/counter`, reads the island markup, loads `/_web/islands.js` and the `.wasm` from the server, clicks twice and sees the count; under `web dev`, editing `islands/counter/view/view.aye` and fetching again gives the new label.
 - serves: FD6
-- files: `tests/framework/island_run.mjs` (new: takes the base URL, builds a fake DOM from the page's `data-island` elements, imports the served glue), `tests/framework.rs` (`island_e2e`; `dev_island` for the edit)
+- files: `tests/framework/island_e2e.mjs` (new: takes the base URL, builds a fake DOM from the page's `data-island` elements, imports the served glue), `tests/framework.rs` (`island_e2e`; `dev_island` for the edit)
 - verify: `cargo test --release --test framework island_e2e` → exit 0 (prints `Count: 3`, `Count: 5`), then `cargo test --release --test framework dev_island` → exit 0 (the label text `Count: ` becomes `Total: ` in a temp copy; the script, rerun after the restart, prints `Total: 3`; at most 90 s)
 - depends on: F4.4
 - parallel with: –
@@ -362,8 +362,8 @@ the card that makes it:
 - lane: framework
 - goal: `aye run framework/build -- <app> -o <file>` runs gen with `--prod`, `aye check` and `aye build --mode fast --no-link libcurl .web -o <file>`, and prints the size; the result runs with the app tree gone and no Aye toolchain on `PATH`.
 - serves: FD7
-- files: `framework/build/main.aye` (new), `tests/framework.rs` (`prod_build`)
-- verify: `cargo test --release --test framework prod_build` → exit 0; the test builds the pages example, copies the executable alone into an empty temp directory, deletes the app copy, starts it from that directory with `PATH` set to `/usr/bin:/bin` and `--port 0`, and gets the F5.2 transcripts; the dynamic library list (`otool -L` on macOS) holds only `/usr/lib/libSystem.B.dylib`; a broken page makes the command exit 1 with the compiler's text and no file written
+- files: `framework/build/main.aye` (new), `tests/framework.rs` (`build_prod`)
+- verify: `cargo test --release --test framework build_prod` → exit 0; the test builds the pages example, copies the executable alone into an empty temp directory, deletes the app copy, starts it from that directory with `PATH` set to `/usr/bin:/bin` and `--port 0`, and gets the F5.2 transcripts; the dynamic library list (`otool -L` on macOS) holds only `/usr/lib/libSystem.B.dylib`; a broken page makes the command exit 1 with the compiler's text and no file written
 - depends on: F5.2, O1.23
 - parallel with: –
 - where: local (macOS; the Linux `ldd` arm is F5.8)
@@ -373,10 +373,10 @@ the card that makes it:
 
 #### F5.4: the posts app: data and pages
 - lane: framework
-- goal: `framework/examples/posts/` is an app with `app/layout.aye`, `app/not-found.aye`, `/`, `/blog`, `/blog/[slug]`, `/about` and `public/style.css`, its posts read from the JSON file after `--posts` on first use, and golden transcripts for each page.
+- goal: `framework/examples/posts/` is an app with `app/layout.aye`, `app/not-found.aye`, `/`, `/`, `/posts/[slug]`, `/about` and `public/style.css`, its posts read from the JSON file after `--posts` on first use, and golden transcripts for each page.
 - serves: FD9
-- files: `framework/examples/posts/` (new: `app/`, `lib/posts/posts.aye` with a `Mutex`-guarded cache and `test` blocks, `data/posts.json` with 3 posts, `public/style.css`), `tests/framework.rs` (`posts_site`), `tests/framework/posts/*.http` (new)
-- verify: `aye test framework/examples/posts/lib/posts` → exit 0 and `cargo test --release --test framework posts_site` → exit 0; cases: `/` lists the 3 titles as links, `/blog/<slug>` shows the title and the body (`post.body_html` is raw, the title escaped; one post has `<` in its title), `/blog/missing` renders `not-found.aye` with 404, `/about`, `/nope` 404; a missing or malformed `--posts` file gives a 500 page and one log line, then the next request retries
+- files: `framework/examples/posts/` (new: `app/`, `lib/posts/posts.aye` with a `Mutex`-guarded cache and `test` blocks, `data/posts.json` with 3 posts, `public/style.css`), `tests/framework.rs` (`posts_pages`), `tests/framework/posts/*.http` (new)
+- verify: `aye test framework/examples/posts/lib/posts` → exit 0 and `cargo test --release --test framework posts_pages` → exit 0; cases: `/` lists the 3 titles as links, `/blog/<slug>` shows the title and the body (`post.body_html` is raw, the title escaped; one post has `<` in its title), `/blog/missing` renders `not-found.aye` with 404, `/about`, `/nope` 404; a missing or malformed `--posts` file gives a 500 page and one log line, then the next request retries
 - depends on: F5.2
 - parallel with: F5.3
 - where: local
@@ -388,8 +388,8 @@ the card that makes it:
 - lane: framework
 - goal: `POST /blog/<slug>` (a `route.aye` `post` next to the page) adds a comment held in memory and answers 303 to `/blog/<slug>?added=1`; the detail page lists the comments and the notice; `GET /api/posts` and `GET /api/posts/[slug]` return JSON and `POST /api/posts/[slug]` takes a JSON comment.
 - serves: FD9, FD3
-- files: `framework/examples/posts/app/blog/[slug]/{page,route}.aye`, `framework/examples/posts/app/api/posts/route.aye`, `framework/examples/posts/app/api/posts/[slug]/route.aye` (new), `framework/examples/posts/lib/posts/posts.aye`, `tests/framework.rs`, `tests/framework/posts/*.http`
-- verify: `cargo test --release --test framework posts_site` → exit 0; new cases: the form POST (`name=Ann+B&text=Hi%21`) gives `303`, `Location: /blog/hello?added=1`; `GET` of that location lists `Ann B` and `Hi!` escaped and the notice; an empty field is `400`, a field over the limit `413`; `GET /api/posts` is `[{"slug":...,"title":...}]`; `POST /api/posts/hello` with `{"name":"Bo","text":"yo"}` gives `201` and the stored comment as JSON, and the detail page shows it; a bad JSON body is `{"error":"BadRequest"}`; a `PUT` is `405` with `Allow`
+- files: `framework/examples/posts/app/posts/[slug]/{page,route}.aye`, `framework/examples/posts/app/api/posts/route.aye`, `framework/examples/posts/app/api/posts/[slug]/route.aye` (new), `framework/examples/posts/lib/posts/posts.aye`, `tests/framework.rs`, `tests/framework/posts/*.http`
+- verify: `cargo test --release --test framework posts_pages` → exit 0; new cases: the form POST (`name=Ann+B&text=Hi%21`) gives `303`, `Location: /blog/hello?added=1`; `GET` of that location lists `Ann B` and `Hi!` escaped and the notice; an empty field is `400`, a field over the limit `413`; `GET /api/posts` is `[{"slug":...,"title":...}]`; `POST /api/posts/hello` with `{"name":"Bo","text":"yo"}` gives `201` and the stored comment as JSON, and the detail page shows it; a bad JSON body is `{"error":"BadRequest"}`; a `PUT` is `405` with `Allow`
 - depends on: F5.4
 - parallel with: –
 - where: local
@@ -401,8 +401,8 @@ the card that makes it:
 - lane: framework
 - goal: the post page has a `likes` island (a button and a count that starts at the post's `likes` from the JSON and goes up on click, in the browser only) built by gen, and the same transcripts hold with it.
 - serves: FD9, FD6
-- files: `framework/examples/posts/islands/likes/{view/view.aye,client.aye}` (new, a copy of the counter's shape), `framework/examples/posts/app/blog/[slug]/page.aye`, `framework/examples/posts/data/posts.json` (`likes`), `tests/framework.rs`, `tests/framework/posts/*.http`, `tests/framework/island_run.mjs` (a `--text` option for the expected label)
-- verify: `cargo test --release --test framework posts_site` → exit 0 (the detail transcript holds the island `div`) and `cargo test --release --test framework posts_island` → exit 0 (F4.5's script against the posts server: `Likes: 4` after the click from 3)
+- files: `framework/examples/posts/islands/likes/{view/view.aye,client.aye}` (new, a copy of the counter's shape), `framework/examples/posts/app/posts/[slug]/page.aye`, `framework/examples/posts/data/posts.json` (`likes`), `tests/framework.rs`, `tests/framework/posts/*.http`, `tests/framework/island_e2e.mjs` (a `--text` option for the expected label)
+- verify: `cargo test --release --test framework posts_pages` → exit 0 (the detail transcript holds the island `div`) and `cargo test --release --test framework posts_likes` → exit 0 (F4.5's script against the posts server: `♥ 2` after the click from 3)
 - depends on: F5.5, F4.5
 - parallel with: –
 - where: local
@@ -422,12 +422,13 @@ the card that makes it:
 - model: sonnet
 - time box: 120 min
 - notes: The `agent` JSON line shapes are in `docs/agent-protocol.md` of aye-lang/anyknown. If the browser cannot do a step, the script prints which step and the card ends with that listed as a browser-lane gap (P-card), not worked around. The island is not run in the anyknown browser (no `WebAssembly` there, `docs/framework.md` §7); its text is the server-rendered `Likes: 3`.
+- notes (done): `posts_prod` runs the `POSTS_CASES` transcripts, the comment `POST` and the page after it against the production binary (the app tree gone, `PATH=/usr/bin:/bin`, the data file copied elsewhere), with the hashed stylesheet `href` put back to `/style.css` and `Content-Length` recomputed; `/style.css` and the hashed URL are compared with `public/style.css`, and `likes.wasm` is checked when the island was built. The manual/CI step is `sh scripts/framework-posts.sh` (after `scripts/downstream.sh` has cloned anyknown; with no clone it prints `skipped: no anyknown clone; run scripts/downstream.sh first` and exits 0): it prints `dump / ok`, `dump post ok`, `form ok`. The checks are `grep`s on the dumps, so there are no `anyknown_*.md` files. `dump --md` reads the first `article` only (`docs/agent-protocol.md`, Read), and the posts page has its comments after the `article`, so `0 comments` is checked in `dump --a11y` and `1 comments` in the agent `snapshot`. A `<main>` around the page would put the comments into the Markdown; that changes every posts transcript and is left as a decision.
 
 #### F5.8: the framework on Ubuntu 24.04
 - lane: framework
 - goal: `cargo test --release --test framework` passes on Ubuntu 24.04 x86_64 and the production posts binary's `ldd` shows only `libc`, `libm` and the loader.
 - serves: FD7
-- files: `tests/framework.rs` (an `ldd` arm next to `otool -L` in `prod_build`, chosen by `cfg!(target_os)`), whatever small fix the failures need in `framework/`
+- files: `tests/framework.rs` (an `ldd` arm next to `otool -L` in `build_prod`, chosen by `cfg!(target_os)`), whatever small fix the failures need in `framework/`
 - verify: `cargo test --release --test framework` → exit 0 in the cloud session; the report lists the test names and the `ldd` output
 - depends on: F5.7
 - parallel with: F5.9 (not at the same time: both want the VM quiet)

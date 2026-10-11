@@ -1,6 +1,7 @@
 //! Compiler driver: runs the pipeline and invokes clang.
 
-use crate::diag::{Diag, Error, Fix, Span, json_str, offset};
+use crate::codes;
+use crate::diag::{Diag, Error, Fix, Severity, Span, json_str, offset};
 use crate::manifest::ManifestFile;
 use crate::module::{self, SourceFile};
 use crate::{ast, cgen, oir, sema};
@@ -289,6 +290,9 @@ pub struct Root {
     /// Record the member accesses sema resolves in `Checked::members`
     /// (`aye lsp`); off, the compiler does no work for them.
     pub members: bool,
+    /// `--no-link lib`: the `@linkOptional` libraries to treat as absent
+    /// even where they are installed.
+    pub no_link: Vec<String>,
 }
 
 impl Root {
@@ -347,6 +351,7 @@ impl Root {
             manifest: None,
             cache: None,
             members: false,
+            no_link: Vec::new(),
         })
     }
 
@@ -369,6 +374,7 @@ impl Root {
             manifest: None,
             cache: None,
             members: false,
+            no_link: Vec::new(),
         }
     }
 }
@@ -512,12 +518,13 @@ pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<CProgram, 
 /// directives and panic messages.
 pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let target = root.target;
+    let no_link = root.no_link.clone();
     // A freestanding program may only export functions.
     let checked = front_end(root, Some(target.os != Os::Freestanding));
     let mut typed = checked.result?;
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
-    let links = linked(&typed, target);
+    let links = linked(&typed, target, &no_link)?;
     let ir = oir::lower(&typed, &links);
     let (c, parts) = cgen::emit(
         &ir,
@@ -537,17 +544,39 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
 }
 
 /// The libraries the program is linked with: those of `@link`, and those
-/// of `@linkOptional` that are installed (none are on a wasm target).
-fn linked(p: &sema::Program, target: &Target) -> Vec<String> {
-    p.links
+/// of `@linkOptional` that are installed (none are on a wasm target) and
+/// not named by `--no-link`. A `--no-link` name that no `@linkOptional`
+/// declares is E0100.
+fn linked(
+    p: &sema::Program,
+    target: &Target,
+    no_link: &[String],
+) -> Result<Vec<String>, Vec<Diag>> {
+    let unknown: Vec<Diag> = no_link
+        .iter()
+        .filter(|n| !p.optional_links.contains(n))
+        .map(|n| Diag {
+            file: "<command line>".to_string(),
+            span: Span::new(1, 1),
+            end: None,
+            severity: Severity::Error,
+            code: codes::E0100,
+            msg: format!("`--no-link {n}`: no `@linkOptional(\"{n}\")` in the program"),
+            fix: None,
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return Err(unknown);
+    }
+    Ok(p.links
         .iter()
         .chain(
             p.optional_links
                 .iter()
-                .filter(|l| !target.is_wasm() && link_available(l)),
+                .filter(|l| !target.is_wasm() && !no_link.contains(l) && link_available(l)),
         )
         .cloned()
-        .collect()
+        .collect())
 }
 
 /// Is the library `name` (as `@link` names it) installed: a framework
@@ -598,6 +627,7 @@ pub fn compile_tests_to_c(
     mode: Mode,
 ) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>, Vec<PathBuf>), Vec<Diag>> {
     let target = root.target;
+    let no_link = root.no_link.clone();
     let checked = front_end(
         Root {
             doc_tests: true,
@@ -606,7 +636,7 @@ pub fn compile_tests_to_c(
         Some(false),
     );
     let typed = checked.result?;
-    let links = linked(&typed, target);
+    let links = linked(&typed, target, &no_link)?;
     let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -719,7 +749,8 @@ fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// it with `.aye` files is a root, and a module that several roots reach is
 /// tested once. Only tests whose shown name (`name`, `module: name`, the
 /// module relative to `path`) contains `filter` run, and with `module`,
-/// only those of that module. `cflags` are more flags for clang. Up to
+/// only those of that module. `cflags` are more flags for clang; `no_link`
+/// are `@linkOptional` libraries to treat as absent. Up to
 /// `jobs` test processes run at once; `results` stay in test order. A test
 /// process that uses more than `time_limit` seconds of CPU time (0: no
 /// limit) is killed and fails. Of several directory roots, one that does
@@ -732,6 +763,7 @@ pub fn run_tests(
     filter: &str,
     module: Option<&str>,
     cflags: &[String],
+    no_link: &[String],
     jobs: usize,
     time_limit: u64,
 ) -> Result<TestRun, TestError> {
@@ -760,6 +792,7 @@ pub fn run_tests(
         let mut root = Root::load_in(&dir.to_string_lossy(), top.is_dir().then_some(top))
             .map_err(TestError::Run)?;
         root.target = target;
+        root.no_link = no_link.to_vec();
         let base = root.base.clone();
         let prefix: Vec<String> = base
             .strip_prefix(top)

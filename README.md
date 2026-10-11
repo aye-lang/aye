@@ -49,7 +49,10 @@ aye spec [<section> | all]                            # print the core of the la
 ```
 
 `build`, `run` and `test` take `--cflags "flags"` for more clang flags, such
-as `--cflags -fsanitize=thread`. `--target <t>` (`aarch64-macos`,
+as `--cflags -fsanitize=thread`. `--no-link <lib>` (repeatable) treats an
+`@linkOptional` library as not installed: it is not linked and `@hasLink` is
+false, so `aye build --no-link libcurl` makes a server without libcurl (its
+`https://` client calls give `HttpsUnsupported`). `--target <t>` (`aarch64-macos`,
 `x86_64-macos`, `aarch64-linux`, `x86_64-linux`, `wasm32-wasip1`,
 `wasm32-freestanding`; default: this machine) builds for another target.
 `build -c` compiles to an object file (`<name>.o`) without linking; for a
