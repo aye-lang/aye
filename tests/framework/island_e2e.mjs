@@ -1,20 +1,22 @@
 // Plays the browser for an island of a running app (docs/framework.md FD6):
-// fetches `GET /counter`, reads the `[data-island]` div (name, props and
-// inner markup) and the `/_web/islands.js` script tag, fetches the script,
-// and runs it in a `vm` sandbox with a fake `document` built from that div
-// and the real `fetch` for `/_web/islands/<name>.wasm`. Then it clicks the
-// counter's button twice.
+// fetches `GET <path>` (`/counter` unless given), reads the `[data-island]`
+// div (name, props and inner markup) and the `/_web/islands.js` script tag,
+// fetches the script, and runs it in a `vm` sandbox with a fake `document`
+// built from that div and the real `fetch` for `/_web/islands/<name>.wasm`.
+// Then it clicks the island's button twice.
 //
-// Usage: node island_e2e.mjs <url>
+// Usage: node island_e2e.mjs <url> [<path>]
 //
-// Prints `text=<text of the count>` and exits 0 when the page, the script
-// and the module come from the server and the clicks work, 1 with the
-// reason otherwise. Against the pages example the text is `Count: 5` (the
-// island starts at 3).
+// Prints `text=<text of the count>` (the island's `span`, or its button when
+// it has none) and exits 0 when the page, the script and the module come
+// from the server and the clicks work, 1 with the reason otherwise. Against
+// the pages example the text is `Count: 5` (the island starts at 3); against
+// `/posts/hello` of the posts example it is `♥ 2`.
 
 import vm from "node:vm";
 
 const base = new URL(process.argv[2]);
+const pagePath = process.argv[3] ?? "/counter";
 
 function fail(reason) {
   console.error(reason);
@@ -78,7 +80,7 @@ async function get(path) {
   return res.text();
 }
 
-const page = await get("/counter");
+const page = await get(pagePath);
 const div = page.match(/<div data-island="([^"]*)" data-props="([^"]*)">(.*?)<\/div>/s);
 if (!div) fail("no [data-island] div in the page");
 const root = new Element(
@@ -105,8 +107,8 @@ const sandbox = {
 vm.runInNewContext(script, sandbox);
 
 const button = root.querySelector("button");
-const span = root.querySelector("span");
-if (!button || !span) fail("the island has no button and span: " + div[3]);
+const span = root.querySelector("span") ?? button;
+if (!button) fail("the island has no button: " + div[3]);
 // The glue is asynchronous: wait for the listener or an error.
 for (let i = 0; i < 1000 && !button.listeners.click && errors.length === 0; i++) {
   await new Promise((r) => setTimeout(r, 10));

@@ -1,0 +1,74 @@
+// The likes island, the part both builds share: the post page calls `render`
+// for the server-rendered markup, and `client.aye` (wasm32-freestanding)
+// calls `label` and `start`. Only std is imported here: `web` needs
+// `std.http`, which wasm32-freestanding lacks.
+
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.mem.AllocError
+import std.text
+import std.text.Builder
+
+/// The count to start at: the number `count` of the JSON object `props`,
+/// or 0 when `props` is not an object with one.
+pub fn start(props: []u8) i64 {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    if json.parse(&mut arena, props) |v| {
+        var root = v
+        if root.get("count") |c| {
+            if c.asNumber() |n| {
+                return n as i64
+            }
+        }
+    } else |err| {}
+    return 0
+}
+
+/// Appends the text of the button, a heart and `n`.
+pub fn label(b: *mut Builder, n: i64) AllocError!void {
+    try b.append("♥ ")
+    try b.appendInt(n)
+}
+
+/// Appends the island's markup for the JSON text `props`: the button with
+/// the count. `client.aye` finds it by tag name.
+pub fn render(b: *mut Builder, props: []u8) AllocError!void {
+    try b.append("<button>")
+    try label(b, start(props))
+    try b.append("</button>")
+}
+
+test "start reads the number from the props" {
+    @expect(start("{\"count\":3}") == 3)
+    @expect(start("{\"count\":-2,\"other\":true}") == -2)
+}
+
+test "start is 0 when the props have no number" {
+    @expect(start("") == 0)
+    @expect(start("{}") == 0)
+    @expect(start("[3]") == 0)
+    @expect(start("{\"count\":\"3\"}") == 0)
+    @expect(start("{\"count\":") == 0)
+}
+
+test "label writes the heart and the number" {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var b = Builder.init(gpa.allocator())
+    defer b.deinit()
+    try label(&mut b, 5)
+    @expect(text.eql(b.bytes(), "♥ 5"))
+}
+
+test "render writes the button with the count" {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var b = Builder.init(gpa.allocator())
+    defer b.deinit()
+    try render(&mut b, "{\"count\":3}")
+    @expect(text.eql(b.bytes(), "<button>♥ 3</button>"))
+}
