@@ -9,6 +9,10 @@
 #
 #     browser/build.sh [OUT] [--mode safe|fast|debug]
 #
+# In the Aye repository it builds the compiler first and uses
+# target/release/aye. Anywhere else (the anyknown repository) it uses the
+# `aye` named by $AYE, or `aye` on the PATH.
+#
 # `--mode safe` keeps the bounds and overflow checks (a panic names the
 # line) at about the speed of `fast`; use it to look into a crash on a
 # real site.
@@ -22,7 +26,14 @@ while [ $# -gt 0 ]; do
         *) out="$1"; shift ;;
     esac
 done
-cargo build --release --quiet
+if [ -z "${AYE:-}" ]; then
+    if grep -qs '^name = "aye"$' Cargo.toml; then
+        cargo build --release --quiet
+        AYE=target/release/aye
+    else
+        AYE=aye
+    fi
+fi
 mkdir -p "$(dirname "$out")"
-target/release/aye build browser -o "$out" --mode "$mode"
+"$AYE" build browser -o "$out" --mode "$mode"
 echo "$out ($mode)"

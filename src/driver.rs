@@ -473,6 +473,9 @@ pub struct CProgram {
     pub links: Vec<String>,
     /// More flags for clang (`--cflags`), such as `-fsanitize=thread`.
     pub cflags: Vec<String>,
+    /// Run `dsymutil` after the link on macOS when the flags give debug
+    /// information (a `.dSYM` next to the executable).
+    pub dsym: bool,
     pub target: &'static Target,
 }
 
@@ -506,6 +509,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         parts,
         links,
         cflags: Vec::new(),
+        dsym: true,
         target,
     })
 }
@@ -601,6 +605,7 @@ pub fn compile_tests_to_c(
             parts,
             links,
             cflags: Vec::new(),
+            dsym: true,
             target,
         },
         typed.tests,
@@ -770,6 +775,9 @@ pub fn run_tests(
             Err(ds) => return Err(TestError::Compile(ds)),
         };
         c.cflags = cflags.to_vec();
+        // The failure positions of a test come from constants, not from
+        // DWARF; only `--cflags` (a sanitizer's report) needs the symbols.
+        c.dsym = !cflags.is_empty();
         let mut todo = Vec::new();
         for (i, mut test) in tests.into_iter().enumerate() {
             let at =
@@ -795,12 +803,16 @@ pub fn run_tests(
         if todo.is_empty() {
             continue;
         }
-        cc(&c, &exe, mode).map_err(TestError::Run)?;
+        if let Err(e) = cc(&c, &exe, mode) {
+            remove_dsym(&exe);
+            return Err(TestError::Run(e));
+        }
         let done = run_parallel(jobs, todo.len(), |k| {
             let (i, name, _) = &todo[k];
             run_one(c.target, &exe, *i, name.clone(), &files, time_limit)
         });
         let _ = std::fs::remove_file(&exe);
+        remove_dsym(&exe);
         for ((_, _, module), r) in todo.into_iter().zip(done) {
             ran.insert(module);
             results.push(r.map_err(TestError::Run)?);
@@ -1259,7 +1271,7 @@ fn compile_parts(
         // clang runs `dsymutil` itself only when it also compiles: without
         // it, the debug information stays in the objects, which are
         // removed.
-        if p.target.os == Os::Macos && debug_info(mode, &p.cflags) {
+        if p.dsym && p.target.os == Os::Macos && debug_info(mode, &p.cflags) {
             let status = Command::new("dsymutil")
                 .arg(out)
                 .status()
@@ -1275,6 +1287,14 @@ fn compile_parts(
         let _ = std::fs::remove_file(f);
     }
     result
+}
+
+/// Remove the `.dSYM` folder that `dsymutil` (or clang) left next to the
+/// executable `exe`.
+pub fn remove_dsym(exe: &Path) {
+    let mut dsym = exe.as_os_str().to_owned();
+    dsym.push(".dSYM");
+    let _ = std::fs::remove_dir_all(dsym);
 }
 
 /// Do these flags give debug information (the last `-g` flag, as clang

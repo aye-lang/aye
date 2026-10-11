@@ -1,0 +1,2 @@
+# The anyknown browser. `aye build` names the executable after `name`.
+name = "anyknown"
