@@ -51,6 +51,13 @@
 //!   (built as above) starts at `Count: 3`, two clicks give `Count: 5`, and
 //!   an island whose `.wasm` is missing logs one `console.error`. Skipped
 //!   like `island_build`.
+//! - `web gen --prod` (`gen_prod`, on a copy of the pages example with a
+//!   2 MiB `public/big.bin`, a dotfile and a symlink) also writes
+//!   `.web/assets.aye`: one `@embedFile` per regular file of `public/` and
+//!   per `.wasm` of `.web/client/`, the public ones with a hashed URL from
+//!   the first 8 hex digits of the file's SHA-256 (`shasum`); the dotfile and
+//!   the link are left out. `aye check` and `aye build` of `.web` pass, and a
+//!   gen without `--prod` writes no `assets.aye`.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use aye::driver;
@@ -1112,4 +1119,103 @@ fn islands_glue() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Count: 5");
+}
+
+/// The hex SHA-256 of the file at `path`, from `shasum` (macOS) or
+/// `sha256sum`.
+fn sha256_hex(path: &Path) -> String {
+    let out = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()
+        .or_else(|_| Command::new("sha256sum").arg(path).output())
+        .unwrap();
+    assert!(out.status.success(), "no shasum or sha256sum");
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn gen_prod() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-gen-prod-app");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    std::fs::write(app.join("public/big.bin"), vec![7u8; 2 << 20]).unwrap();
+    std::fs::write(app.join("public/.hidden"), "x").unwrap();
+    std::os::unix::fs::symlink("style.css", app.join("public/link.css")).unwrap();
+    let run_gen = |extra: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+            .current_dir(root())
+            .env("AYE", env!("CARGO_BIN_EXE_aye"))
+            .arg("run")
+            .arg(root().join("framework").join("gen"))
+            .arg("--")
+            .arg(&app)
+            .arg("--web")
+            .arg(root().join("framework").join("web"))
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "web gen failed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let web = app.join(".web");
+    // Without `--prod` nothing is embedded.
+    run_gen(&[]);
+    assert!(!web.join("assets.aye").exists());
+    run_gen(&["--prod"]);
+    let source = std::fs::read_to_string(web.join("assets.aye")).unwrap();
+    let islands = web.join("client/counter.wasm").is_file();
+    let count = 3 + usize::from(islands);
+    assert_eq!(source.matches("@embedFile").count(), count, "{source}");
+    assert!(source.contains(&format!("pub let table = [{count}]Asset{{")));
+    for (stem, file) in [
+        ("/style", "style.css"),
+        ("/img/logo", "img/logo.svg"),
+        ("/big", "big.bin"),
+    ] {
+        let ext = file.rsplit_once('.').unwrap().1;
+        let sha = sha256_hex(&app.join("public").join(file));
+        let want = format!("path: \"/{file}\", hashed: \"{stem}.{}.{ext}\"", &sha[..8]);
+        assert!(source.contains(&want), "no {want} in:\n{source}");
+        assert!(
+            source.contains(&format!("etag: \"\\\"{sha}\\\"\"")),
+            "no etag of {file}"
+        );
+        assert!(
+            source.contains(&format!("@embedFile(\"../public/{file}\")")),
+            "no embed of {file}"
+        );
+    }
+    assert!(source.contains("contentType: \"text/css; charset=utf-8\""));
+    assert!(source.contains("contentType: \"image/svg+xml\""));
+    assert!(!source.contains("link.css") && !source.contains(".hidden"));
+    if islands {
+        let sha = sha256_hex(&web.join("client/counter.wasm"));
+        let want = format!(
+            "path: \"/_web/islands/counter.wasm\", hashed: \"/_web/islands/counter.wasm\", contentType: \"application/wasm\", etag: \"\\\"{sha}\\\"\", bytes: @embedFile(\"client/counter.wasm\")"
+        );
+        assert!(source.contains(&want), "no {want} in:\n{source}");
+    }
+    assert!(source.contains("pub fn lookup(p: []u8) ?*Asset"));
+    let check = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .arg("check")
+        .arg(&web)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "aye check .web failed:\n{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    build_dir("gen-prod", &web);
 }
