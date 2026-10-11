@@ -1,0 +1,15 @@
+// `std.log.line` writes its message to stderr with a newline and no prefix;
+// `err` and `info` write `error: ` and `info: ` first.
+
+import std
+
+let USAGE = "usage: log_line <file>"
+
+pub fn main() {
+    std.log.line(USAGE)
+    std.log.line("{}:{}: {}", "a.txt", 3, true)
+    std.log.err("{}", "bad")
+    std.log.info("done")
+    std.log.line("")
+    std.log.line("{} {}", 1.5, 7)
+}

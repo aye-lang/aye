@@ -165,6 +165,7 @@ const BUILTINS: &[(&str, &str)] = &[
     ("std.heap", "Arena"),
     ("std.log", "err"),
     ("std.log", "info"),
+    ("std.log", "line"),
     ("std.testing", "allocator"),
 ];
 

@@ -1,0 +1,6 @@
+usage: log_line <file>
+a.txt:3: true
+error: bad
+info: done
+
+1.5 7
