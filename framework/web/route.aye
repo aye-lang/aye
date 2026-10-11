@@ -7,15 +7,22 @@ import std.text.Builder
 /// A page or an API function: reads the request, fills the response.
 pub let Handler = fn(*Request, *mut Response) Error!void
 
+/// What a route answers: a `Page` (a `page.aye`; an error of its handler is
+/// answered as plain text) or an `Api` function (a `route.aye`; an error is
+/// answered as JSON `{"error":"<name>"}`).
+pub enum Kind { Page, Api }
+
 /// One route: a method and a pattern of literal segments and `[name]`
 /// segments (`/`, `/about`, `/blog/[slug]`), and the function that answers
 /// it. A `[name]` segment matches any one non-empty segment of the path;
 /// the handler reads it with `req.param("name")`. A literal route must come
-/// before a `[name]` route that also matches the path.
+/// before a `[name]` route that also matches the path. `kind` is `Page` when
+/// left out.
 pub struct Route {
     method: Method
     pattern: []u8
     handler: Handler
+    kind: Kind = Kind.Page
 }
 
 /// The first route with this method and a pattern that matches the path, or

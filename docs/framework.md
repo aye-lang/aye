@@ -156,10 +156,16 @@ method gets 405 with `Allow`.
   Internal }`, mapped to 400, 401, 403, 404, 405, 409, 413, 500, 500. A
   request that matches no route and no `public/` file gets the app's
   `not-found.aye` (404, inside the root layout; without the file, a plain
-  404). A handler that returns `NotFound` still gets the plain page for
-  now (not yet `not-found.aye`); for a `route.aye`, `{"error":"NotFound"}`
-  is the plan. A handler
-  that wants another status sets `res.status` and returns normally.
+  404). A `page.aye` handler that returns `NotFound` gets the same page
+  (the generated wrapper of the page catches it and discards what the
+  page had written; without a `not-found.aye`, the plain 404). Any other
+  error of a `page.aye` is a plain-text page of its status. An error of a
+  `route.aye` handler is answered as JSON, `{"error":"<name>"}` with the
+  status of the error (`{"error":"NotFound"}` with 404); the route table
+  tells them apart with `Route.kind` (`Kind.Page` or `Kind.Api`), set by
+  `web gen`. A 405 for a method the file lacks stays the plain page. A
+  handler that wants another status sets `res.status` and returns
+  normally.
   Errors of other sets are handled where they happen:
   `std.fs.open(p) catch |e| { std.log.err("open {}: {}", p, e); return
   web.Error.Internal }`. Because errors are identified by name, a
@@ -417,10 +423,13 @@ writes `.web/` as in section 1; the hello app's routes move to
 path. Symlinks are made with an `extern fn symlink` from libc until std
 has one (gap list below). `--web` goes away with O4.2.
 
-**F1.3 (needs F1.2, O3.1).** `app/api/hello/[name]/route.aye` with
+**F1.3 (needs F1.2, O3.1).** `app/api/items/[id]/route.aye` with
 `pub fn get`; the transcript checks `200`, `Content-Type:
-application/json` and `{"hello":"aye"}` for `/api/hello/aye`, and 405
-for a `POST`.
+application/json` and `{"id":1,"name":"Anchor"}` for `/api/items/1`,
+`404` and `{"error":"NotFound"}` for `/api/items/9` (the handler returns
+`Error.NotFound`), and 405 for a `POST`. `web gen` reads what a
+`route.aye` exports from `aye doc --signatures` (the `aye` named by `AYE`,
+else the one on `PATH`).
 
 ## Foreseen language and std needs
 

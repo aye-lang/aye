@@ -12,7 +12,12 @@
 // A `layout.aye` (`pub fn layout`) wraps every page below its directory, the
 // innermost layout first (`web.wrap`); API routes are never wrapped. A
 // `not-found.aye` in `app/` (`pub fn notFound`) is the page, with status 404
-// and the root layout, of a path that nothing answers (`web.runApp`).
+// and the root layout, of a path that nothing answers (`web.runApp`) and of
+// a `page` that returns `Error.NotFound` (the generated wrapper of the page
+// catches it). An error of a `route.aye` handler is answered as JSON
+// (`Kind.Api` in the route table, see `web.Route`). What the files export is
+// read with `aye doc --signatures`: set `AYE` to the `aye` program if it is
+// not on `PATH`.
 // `.web/` gets a `main.aye`, a `routes/` module with the route table, a link
 // `r/r<i>_<name>` to each route's directory, a link to every other directory
 // of the app except `public/` (`lib`), and `web`, a link to the web module
@@ -217,17 +222,26 @@ fn routesSource(alloc: Allocator, pages: []Page, names: [][]u8) ![]u8 {
         try b.append(n)
         try b.append("\n")
     }
-    try b.append("import web\nimport web.Method\nimport web.Route\n\n")
-    // A page with layouts is served through a function that renders it, then
-    // wraps the result in each layout, innermost first. API routes are never
-    // wrapped.
+    try b.append("import web\nimport web.Kind\nimport web.Method\nimport web.Route\n\n")
+    // A page with layouts, or in an app with a `not-found.aye`, is served
+    // through a function that renders it, then wraps the result in each
+    // layout, innermost first. `Error.NotFound` from the page is answered
+    // with `notFound` instead. API routes are never wrapped.
+    let notFound = hasNotFound(pages)
     for i in 0..pages.len {
-        if wrapped(alloc, pages, i, "page") {
+        if wrapped(alloc, pages, i, "page", notFound) {
             try b.append("fn page")
             try b.appendUint(i as u64)
-            try b.append("(req: *web.Request, res: *mut web.Response) web.Error!void {\n    try ")
-            try b.append(names[i])
-            try b.append(".page(req, res)\n")
+            try b.append("(req: *web.Request, res: *mut web.Response) web.Error!void {\n")
+            if notFound {
+                try b.append("    ")
+                try b.append(names[i])
+                try b.append(".page(req, res) catch |e| {\n        if e != web.Error.NotFound {\n            return e\n        }\n        res.status = 404\n        res.headers.clear()\n        res.page.buf.clear()\n        try notFound(req, res)\n        return\n    }\n")
+            } else {
+                try b.append("    try ")
+                try b.append(names[i])
+                try b.append(".page(req, res)\n")
+            }
             try b.append(try wrapCalls(alloc, pages, names, pages[i].dir))
             try b.append("}\n\n")
         }
@@ -249,7 +263,7 @@ fn routesSource(alloc: Allocator, pages: []Page, names: [][]u8) ![]u8 {
             try b.append(", pattern: \"")
             try b.append(pages[i].url)
             try b.append("\", handler: ")
-            if wrapped(alloc, pages, i, f) {
+            if wrapped(alloc, pages, i, f, notFound) {
                 try b.append("page")
                 try b.appendUint(i as u64)
             } else {
@@ -257,7 +271,11 @@ fn routesSource(alloc: Allocator, pages: []Page, names: [][]u8) ![]u8 {
                 try b.append(".")
                 try b.append(f)
             }
-            try b.append(" },\n")
+            if text.eql(f, "page") {
+                try b.append(", kind: Kind.Page },\n")
+            } else {
+                try b.append(", kind: Kind.Api },\n")
+            }
         }
     }
     try b.append("}\n")
@@ -273,9 +291,10 @@ fn hasNotFound(pages: []Page) bool {
     return false
 }
 
-// Does `pages[i]` have a `page` (and `f` is that name) with at least one
-// layout around it?
-fn wrapped(alloc: Allocator, pages: []Page, i: usize, f: []u8) bool {
+// Does `pages[i]` have a `page` (and `f` is that name) that needs a wrapper:
+// with at least one layout around it, or in an app with a `not-found.aye`
+// (`notFound`)?
+fn wrapped(alloc: Allocator, pages: []Page, i: usize, f: []u8, notFound: bool) bool {
     if !text.eql(f, "page") {
         return false
     }
@@ -287,6 +306,9 @@ fn wrapped(alloc: Allocator, pages: []Page, i: usize, f: []u8) bool {
     }
     if !hasPage {
         return false
+    }
+    if notFound {
+        return true
     }
     let found = layouts(alloc, pages, pages[i].dir) catch |e| {
         die("out of memory", "", "")

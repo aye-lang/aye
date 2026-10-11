@@ -1,12 +1,18 @@
-// A post of the pages app: `/blog/<slug>`.
+// A post of the pages app: `/blog/<slug>`. The slug `missing` is no post: the
+// page returns `Error.NotFound`, answered with `not-found.aye`.
 
+import std.text
 import web.Error
 import web.Request
 import web.Response
 
 pub fn page(req: *Request, res: *mut Response) Error!void {
+    let slug = req.param("slug")
+    if text.eql(slug, "missing") {
+        return Error.NotFound
+    }
     let html = res.html()
     try html.raw("<h1>Post: ")
-    try html.text(req.param("slug"))
+    try html.text(slug)
     try html.raw("</h1>")
 }

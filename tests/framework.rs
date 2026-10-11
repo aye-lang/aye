@@ -9,8 +9,11 @@
 //!   (`framework/gen`, run with `aye run`) writes its `.web/`, which is
 //!   checked, built and started the same way. `tests/framework/pages/X.http`
 //!   are the responses to the requests in `PAGES_CASES` (pages in the root
-//!   layout and a nested one, the `not-found.aye` page, an API `route.aye`
-//!   with JSON and a 405, and the files of `public/`).
+//!   layout and a nested one, the `not-found.aye` page for a path and for a
+//!   page that returns `Error.NotFound`, an API `route.aye` with JSON, a
+//!   `{"error":"NotFound"}` and a 405, and the files of `public/`). `web gen`
+//!   reads the exports of the files with `aye doc --signatures`, so it runs
+//!   with `AYE` set to the `aye` under test.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -39,7 +42,9 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/blog/hello", "blog_hello.http"),
     ("GET", "/blog/layouts", "blog_layouts.http"),
     ("GET", "/api/items/1", "api_item.http"),
+    ("GET", "/api/items/9", "api_item_missing.http"),
     ("POST", "/api/items/1", "api_item_post.http"),
+    ("GET", "/blog/missing", "blog_missing.http"),
     ("GET", "/nope", "missing.http"),
     ("GET", "/style.css", "style_css.http"),
     ("HEAD", "/style.css", "style_css_head.http"),
@@ -175,6 +180,7 @@ fn pages() {
     let app = root().join("framework").join("examples").join("pages");
     let generated = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
         .arg("run")
         .arg(root().join("framework").join("gen"))
         .arg("--")

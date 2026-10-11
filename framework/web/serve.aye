@@ -89,7 +89,11 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     if find(app.routes, req.method, req.path) |r| {
         req.route = r.pattern
         r.handler(&req, &mut res) catch |e| {
-            fail(&mut res, e)
+            if r.kind == Kind.Api {
+                failJson(&mut res, e)
+            } else {
+                fail(&mut res, e)
+            }
         }
     } else if served(app, &req, &mut res) {
     } else {
@@ -141,6 +145,26 @@ fn fail(res: *mut Response, e: Error) {
     res.status = statusOf(e)
     res.headers.clear()
     res.text(http.reason(res.status)) catch |e2| {
+        res.page.buf.clear()
+    }
+}
+
+// Like `fail`, for an API route: the body is JSON, `{"error":"<name>"}`
+// with the name of the error (a plain identifier, so it needs no escaping).
+fn failJson(res: *mut Response, e: Error) {
+    res.status = statusOf(e)
+    res.headers.clear()
+    res.contentType = "application/json"
+    res.page.buf.clear()
+    res.page.raw("{\"error\":\"") catch |e2| {
+        res.page.buf.clear()
+        return
+    }
+    res.page.raw(@tagName(e)) catch |e2| {
+        res.page.buf.clear()
+        return
+    }
+    res.page.raw("\"}") catch |e2| {
         res.page.buf.clear()
     }
 }
