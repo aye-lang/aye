@@ -2348,7 +2348,9 @@ adding `import std.mem.Allocator` (and `AllocError`, `std.heap.General`,
 ```
 
 `diagnostics` is `[]` when the program compiles. Lines and columns are
-1-based; a column counts characters. Each fix-it edit replaces the text of
+1-based; a column counts characters. `end_line` and `end_col`, when
+present, are the position just after the offending token or expression.
+Each fix-it edit replaces the text of
 the diagnostic's `file` from `line:col` up to (not including)
 `end_line:end_col` with `replacement`; an insertion has equal start and
 end. The edits of one diagnostic are applied together.

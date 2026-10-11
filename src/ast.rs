@@ -395,6 +395,8 @@ pub enum UnOp {
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+    /// The position just after the last token of the expression.
+    pub end: Span,
 }
 
 #[derive(Debug, Clone)]

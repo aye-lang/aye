@@ -3236,7 +3236,8 @@ impl<'a> Checker<'a> {
                     );
                 }
                 None => {
-                    let e = Error::new(E0017, t.span, format!("unknown type `{n}`"));
+                    let e = Error::new(E0017, t.span, format!("unknown type `{n}`"))
+                        .ending(t.span.right(n.chars().count() as u32));
                     return Err(suggest(e, n, t.span, self.type_names()));
                 }
             },
@@ -3662,6 +3663,7 @@ impl<'a> Checker<'a> {
                 && let StmtKind::Expr(ast::Expr {
                     kind: ExprKind::Builtin { name, args },
                     span,
+                    ..
                 }) = &s.kind
                 && name == "setSafety"
             {
@@ -4449,7 +4451,10 @@ impl<'a> Checker<'a> {
             return self.value(e, None);
         }
         let t = self.value(e, Some(Self::hint(e, ty)))?;
-        self.coerce(t, ty)
+        self.coerce(t, ty).map_err(|err| match err.end {
+            None if err.span == e.span => err.ending(e.end),
+            _ => err,
+        })
     }
 
     /// The type to check `e` with when `ty` is expected: `T` for `?T`, so
@@ -5020,7 +5025,8 @@ impl<'a> Checker<'a> {
                     return err(E0074, span, format!("`{name}` is a type, not a value"));
                 }
                 None => {
-                    let e = Error::new(E0018, span, format!("undefined variable `{name}`"));
+                    let e = Error::new(E0018, span, format!("undefined variable `{name}`"))
+                        .ending(span.right(name.chars().count() as u32));
                     return Err(suggest(
                         e,
                         name,
@@ -5050,6 +5056,7 @@ impl<'a> Checker<'a> {
                     &ast::Expr {
                         kind: ExprKind::Ident(name.clone()),
                         span,
+                        end: span.right(name.chars().count() as u32),
                     },
                     None,
                 )?;
@@ -5096,7 +5103,8 @@ impl<'a> Checker<'a> {
                     return self.generic_call(f, args, span);
                 }
                 if !self.fns.contains_key(name) {
-                    let e = Error::new(E0019, span, format!("undefined function `{name}`"));
+                    let e = Error::new(E0019, span, format!("undefined function `{name}`"))
+                        .ending(span.right(name.chars().count() as u32));
                     let fns = self
                         .fns
                         .keys()

@@ -79,6 +79,14 @@ impl Parser {
         self.toks[self.pos].span
     }
 
+    /// The position just after the last token taken.
+    fn prev_end(&self) -> Span {
+        match self.pos {
+            0 => self.span(),
+            n => self.toks[n - 1].end,
+        }
+    }
+
     fn bump(&mut self) -> Token {
         let t = self.toks[self.pos].clone();
         if self.pos < self.toks.len() - 1 {
@@ -130,6 +138,7 @@ impl Parser {
             self.span(),
             format!("expected {expected}, found {}{hint}", self.peek()),
         )
+        .ending(self.toks[self.pos].end)
     }
 
     /// The error after an element of a list closed by `closer` when neither
@@ -1375,6 +1384,7 @@ impl Parser {
                         body,
                     },
                     span,
+                    end: self.prev_end(),
                 };
                 continue;
             }
@@ -1390,6 +1400,7 @@ impl Parser {
                         variant_span,
                     },
                     span,
+                    end: self.prev_end(),
                 };
                 if self.at(&Tok::Kw(Kw::Is)) || self.binop().is_some_and(|(o, _)| o.is_comparison())
                 {
@@ -1416,6 +1427,7 @@ impl Parser {
                     rhs: Box::new(rhs),
                 },
                 span,
+                end: self.prev_end(),
             };
             if op.is_comparison()
                 && (self.at(&Tok::Kw(Kw::Is))
@@ -1464,6 +1476,7 @@ impl Parser {
                 body: Box::new(body),
             },
             span,
+            end: self.prev_end(),
         })
     }
 
@@ -1509,6 +1522,7 @@ impl Parser {
                     ty,
                 },
                 span,
+                end: self.prev_end(),
             };
         }
         Ok(e)
@@ -1521,6 +1535,7 @@ impl Parser {
             return Ok(Expr {
                 kind: ExprKind::Try(expr),
                 span,
+                end: self.prev_end(),
             });
         }
         if self.at(&Tok::Amp) {
@@ -1530,6 +1545,7 @@ impl Parser {
             return Ok(Expr {
                 kind: ExprKind::AddrOf { mutable, expr },
                 span,
+                end: self.prev_end(),
             });
         }
         let op = match self.peek() {
@@ -1546,6 +1562,7 @@ impl Parser {
                 expr: Box::new(expr),
             },
             span,
+            end: self.prev_end(),
         })
     }
 
@@ -1562,7 +1579,11 @@ impl Parser {
                             name,
                             args: self.args()?,
                         };
-                        e = Expr { kind, span };
+                        e = Expr {
+                            kind,
+                            span,
+                            end: self.prev_end(),
+                        };
                     } else if let Some(enum_name) = ident_path(&e)
                         && self.at(&Tok::LBrace)
                         && !self.no_struct_lit
@@ -1572,7 +1593,11 @@ impl Parser {
                             variant: name,
                             fields: self.field_inits()?,
                         };
-                        e = Expr { kind, span: e.span };
+                        e = Expr {
+                            kind,
+                            span: e.span,
+                            end: self.prev_end(),
+                        };
                     } else {
                         e = Expr {
                             kind: ExprKind::Field {
@@ -1580,6 +1605,7 @@ impl Parser {
                                 name,
                             },
                             span,
+                            end: self.prev_end(),
                         };
                     }
                 }
@@ -1588,6 +1614,7 @@ impl Parser {
                     e = Expr {
                         kind: ExprKind::Deref(Box::new(e)),
                         span,
+                        end: self.prev_end(),
                     };
                 }
                 Tok::DotQuestion => {
@@ -1595,6 +1622,7 @@ impl Parser {
                     e = Expr {
                         kind: ExprKind::Unwrap(Box::new(e)),
                         span,
+                        end: self.prev_end(),
                     };
                 }
                 // `F(T) { ... }`: a literal of the struct that `F(T)` returns
@@ -1611,6 +1639,7 @@ impl Parser {
                             fields: self.field_inits()?,
                         },
                         span: e.span,
+                        end: self.prev_end(),
                     };
                 }
                 // A call of a value that is not a name: `f()(x)`, `ops[i](x)`.
@@ -1622,6 +1651,7 @@ impl Parser {
                             callee: Box::new(e),
                             args,
                         },
+                        end: self.prev_end(),
                     };
                 }
                 Tok::LBracket => {
@@ -1646,6 +1676,7 @@ impl Parser {
                                 hi,
                             },
                             span,
+                            end: self.prev_end(),
                         };
                     } else {
                         self.expect(&Tok::RBracket)?;
@@ -1656,6 +1687,7 @@ impl Parser {
                                 index,
                             },
                             span,
+                            end: self.prev_end(),
                         };
                     }
                     self.leave_nested(saved);
@@ -1695,6 +1727,7 @@ impl Parser {
             return Ok(Expr {
                 kind: ExprKind::Type(self.type_expr()?),
                 span,
+                end: self.prev_end(),
             });
         }
         self.expr()
@@ -1739,6 +1772,7 @@ impl Parser {
                     return Ok(Expr {
                         kind: ExprKind::Type(ty),
                         span,
+                        end: self.prev_end(),
                     });
                 }
                 match self.array_elems()? {
@@ -1826,6 +1860,7 @@ impl Parser {
                     return Ok(Expr {
                         kind: ExprKind::Type(ty),
                         span,
+                        end: self.prev_end(),
                     });
                 }
                 if !matches!(ty.kind, TypeExprKind::Array(..) | TypeExprKind::Slice(..)) {
@@ -1893,7 +1928,11 @@ impl Parser {
             Tok::Kw(k) if is_unsupported_kw(k) => return Err(not_supported(k, span)),
             _ => return Err(self.unexpected("expression")),
         };
-        Ok(Expr { kind, span })
+        Ok(Expr {
+            kind,
+            span,
+            end: self.prev_end(),
+        })
     }
 
     /// `{a, b, c}` of an array literal, or `{value, ..}` of a repeat
