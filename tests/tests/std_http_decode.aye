@@ -1,0 +1,93 @@
+// O3.6a: std.http query, form and cookie decoding.
+
+import std.heap.Arena
+import std.http
+import std.text
+
+test "percentDecode keeps plus and bad escapes" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    @expect(text.eql(try http.percentDecode(a, "a%20b+c"), "a b+c"))
+    @expect(text.eql(try http.percentDecode(a, "%41%7a%7A"), "Azz"))
+    @expect(text.eql(try http.percentDecode(a, "100%"), "100%"))
+    @expect(text.eql(try http.percentDecode(a, "%4"), "%4"))
+    @expect(text.eql(try http.percentDecode(a, "%zz%4g"), "%zz%4g"))
+    @expect(text.eql(try http.percentDecode(a, "%%41"), "%A"))
+    @expect(text.eql(try http.percentDecode(a, "%C3%A9"), "é"))
+    @expect((try http.percentDecode(a, "")).len == 0)
+}
+
+test "formDecode turns plus into a space" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    @expect(text.eql(try http.formDecode(a, "a+b%2Bc%20d"), "a b+c d"))
+}
+
+test "queryValue takes the first match" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    let qs = "a=1&b=two+words&a=3&c&d=&e=%26x&f%20g=h"
+    @expect(text.eql((try http.queryValue(a, qs, "a")).?, "1"))
+    @expect(text.eql((try http.queryValue(a, qs, "b")).?, "two words"))
+    @expect(text.eql((try http.queryValue(a, qs, "c")).?, ""))
+    @expect(text.eql((try http.queryValue(a, qs, "d")).?, ""))
+    @expect(text.eql((try http.queryValue(a, qs, "e")).?, "&x"))
+    @expect(text.eql((try http.queryValue(a, qs, "f g")).?, "h"))
+    @expect((try http.queryValue(a, qs, "z")) == null)
+    @expect((try http.queryValue(a, "", "a")) == null)
+    @expect((try http.queryValue(a, "&&a=1", "a")) != null)
+}
+
+test "formValue needs the form content type" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    let ct: ?[]u8 = "Application/X-WWW-Form-Urlencoded; charset=utf-8"
+    @expect(text.eql((try http.formValue(a, ct, "msg=hi+there%21", "msg")).?, "hi there!"))
+    @expect((try http.formValue(a, ct, "msg=hi", "other")) == null)
+    @expect((try http.formValue(a, "application/json", "msg=hi", "msg")) == null)
+    @expect((try http.formValue(a, null, "msg=hi", "msg")) == null)
+}
+
+test "cookieValue trims and does not decode" {
+    @expect(text.eql(http.cookieValue("a=1; b=x%20y ;  c=3", "b").?, "x%20y"))
+    @expect(text.eql(http.cookieValue("a=1; b=2", "a").?, "1"))
+    @expect(text.eql(http.cookieValue("a=1;b=", "b").?, ""))
+    @expect(http.cookieValue("a=1; ab=2", "b") == null)
+    @expect(http.cookieValue("flag; a=1", "flag") == null)
+    @expect(http.cookieValue("", "a") == null)
+}
+
+test "Request path, query, form and cookie" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    let buf = "POST /search?q=a%20b&n=1 HTTP/1.1\r\nHost: h\r\nCookie: sid=abc; theme=dark\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\nmsg=hi+you!"
+    let p = try http.parse(a, buf, http.defaultLimits())
+    var req = p.request
+    defer req.deinit()
+    @expect(text.eql(req.path(), "/search"))
+    @expect(text.eql((try req.query(a, "q")).?, "a b"))
+    @expect(text.eql((try req.query(a, "n")).?, "1"))
+    @expect((try req.query(a, "msg")) == null)
+    @expect(text.eql((try req.form(a, "msg")).?, "hi you!"))
+    @expect(text.eql(req.cookie("theme").?, "dark"))
+    @expect(req.cookie("none") == null)
+}
+
+test "Request without a query or a form" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+    let buf = "GET /plain HTTP/1.1\r\nHost: h\r\n\r\n"
+    let p = try http.parse(a, buf, http.defaultLimits())
+    var req = p.request
+    defer req.deinit()
+    @expect(text.eql(req.path(), "/plain"))
+    @expect((try req.query(a, "q")) == null)
+    @expect((try req.form(a, "q")) == null)
+    @expect(req.cookie("sid") == null)
+}

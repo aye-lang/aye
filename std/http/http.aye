@@ -114,6 +114,34 @@ pub struct Request {
         }
         return self.minor == 1
     }
+
+    /// The target without its query string.
+    pub fn path(self: *Self) []u8 {
+        return pathOf(self.target)
+    }
+
+    /// The first value of `name` in the query string, percent-decoded
+    /// (`+` is a space) in `alloc`; null when there is none. See
+    /// `queryValue`.
+    pub fn query(self: *Self, alloc: Allocator, name: []u8) AllocError!?[]u8 {
+        return queryValue(alloc, queryOf(self.target), name)
+    }
+
+    /// The first value of the field `name` of a `application/x-www-form-urlencoded`
+    /// body, decoded in `alloc`; null when there is none or the request has
+    /// another content type. See `formValue`.
+    pub fn form(self: *Self, alloc: Allocator, name: []u8) AllocError!?[]u8 {
+        return formValue(alloc, self.header("content-type"), self.body, name)
+    }
+
+    /// The value of the cookie `name` of the `Cookie` header, as sent;
+    /// null when there is none. See `cookieValue`.
+    pub fn cookie(self: *Self, name: []u8) ?[]u8 {
+        if self.header("cookie") |h| {
+            return cookieValue(h, name)
+        }
+        return null
+    }
 }
 
 /// The result of `parse`: the request and the number of bytes it took from
@@ -121,6 +149,114 @@ pub struct Request {
 pub struct Parsed {
     request: Request
     consumed: usize
+}
+
+/// The target without its query string.
+pub fn pathOf(target: []u8) []u8 {
+    if text.indexOf(target, "?") |i| {
+        return target[..i]
+    }
+    return target
+}
+
+/// The query string of a target: what follows the first `?`, as sent;
+/// empty when there is none.
+pub fn queryOf(target: []u8) []u8 {
+    if text.indexOf(target, "?") |i| {
+        return target[i + 1..]
+    }
+    return target[target.len..]
+}
+
+/// Decodes `%XX` escapes of `s` in `alloc`. A `%` not followed by two hex
+/// digits stays as it is. `+` stays a `+`; `formDecode` makes it a space.
+pub fn percentDecode(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    return decodeEscapes(alloc, s, false)
+}
+
+/// Like `percentDecode`, and each `+` becomes a space: the decoding of a
+/// query string or a form body.
+pub fn formDecode(alloc: Allocator, s: []u8) AllocError![]mut u8 {
+    return decodeEscapes(alloc, s, true)
+}
+
+fn decodeEscapes(alloc: Allocator, s: []u8, plusIsSpace: bool) AllocError![]mut u8 {
+    var out = Builder.init(alloc)
+    errdefer out.deinit()
+    var i: usize = 0
+    while i < s.len {
+        let c = s[i]
+        i += 1
+        if c == '+' && plusIsSpace {
+            try out.appendByte(' ')
+            continue
+        }
+        if c == '%' && i + 1 < s.len {
+            if hexValue(s[i]) |hi| {
+                if hexValue(s[i + 1]) |lo| {
+                    try out.appendByte((hi * 16 + lo) as u8)
+                    i += 2
+                    continue
+                }
+            }
+        }
+        try out.appendByte(c)
+    }
+    return out.toOwned()
+}
+
+/// The first value of `name` in `pairs`, a query string or a form body
+/// (`a=1&b=2`), with names and value decoded by `formDecode` in `alloc`; a
+/// pair without `=` has the value "". Null when no pair has the name.
+pub fn queryValue(alloc: Allocator, pairs: []u8, name: []u8) AllocError!?[]u8 {
+    var it = text.split(pairs, "&")
+    while it.next() |pair| {
+        if pair.len == 0 {
+            continue
+        }
+        var key = pair
+        var value = pair[pair.len..]
+        if text.indexOf(pair, "=") |eq| {
+            key = pair[..eq]
+            value = pair[eq + 1..]
+        }
+        let k = try formDecode(alloc, key)
+        if text.eql(k, name) {
+            return try formDecode(alloc, value)
+        }
+    }
+    return null
+}
+
+/// `queryValue` of `body` when `contentType` is `application/x-www-form-urlencoded`
+/// (parameters such as `; charset=utf-8` and ASCII case are ignored); null
+/// for any other type, or none.
+pub fn formValue(alloc: Allocator, contentType: ?[]u8, body: []u8, name: []u8) AllocError!?[]u8 {
+    let ct = contentType orelse return null
+    var media = ct
+    if text.indexOf(ct, ";") |i| {
+        media = ct[..i]
+    }
+    if !text.eqlIgnoreCase(text.trim(media), "application/x-www-form-urlencoded") {
+        return null
+    }
+    return queryValue(alloc, body, name)
+}
+
+/// The value of the cookie `name` in the value of a `Cookie` header
+/// (`a=1; b=2`): spaces around a pair are trimmed and the value is not
+/// decoded. Null when there is none.
+pub fn cookieValue(header: []u8, name: []u8) ?[]u8 {
+    var it = text.split(header, ";")
+    while it.next() |part| {
+        let pair = text.trim(part)
+        if text.indexOf(pair, "=") |eq| {
+            if text.eql(pair[..eq], name) {
+                return pair[eq + 1..]
+            }
+        }
+    }
+    return null
 }
 
 /// A response: the one a server handler fills for `writeResponse` (do not
