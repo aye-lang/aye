@@ -1,6 +1,8 @@
 // web.Route: the route table and its matcher.
 
+import std.mem.Allocator
 import std.text
+import std.text.Builder
 
 /// A page or an API function: reads the request, fills the response.
 pub let Handler = fn(*Request, *mut Response) Error!void
@@ -14,14 +16,54 @@ pub struct Route {
 }
 
 /// The handler of the first route with this method and path, or null.
-/// Both sides drop one trailing `/`, so `/about/` is `/about`.
+/// Both sides drop one trailing `/`, so `/about/` is `/about`. `Head` finds
+/// the `Get` route.
 pub fn find(routes: []Route, method: Method, path: []u8) ?Handler {
     for r in routes {
-        if r.method == method && sameSegments(r.pattern, path) {
+        let same = r.method == method || (method == Method.Head && r.method == Method.Get)
+        if same && sameSegments(r.pattern, path) {
             return r.handler
         }
     }
     return null
+}
+
+/// The methods the routes have for `path`, as an `Allow` header value
+/// (`GET, HEAD`), in table order, with `HEAD` after `GET`; null when no
+/// route has the path.
+pub fn allow(alloc: Allocator, routes: []Route, path: []u8) Error!?[]u8 {
+    var out = Builder.init(alloc)
+    for r in routes {
+        if sameSegments(r.pattern, path) {
+            if out.len() > 0 {
+                try out.append(", ")
+            }
+            try out.append(nameOf(r.method))
+            if r.method == Method.Get {
+                try out.append(", HEAD")
+            }
+        }
+    }
+    if out.len() == 0 {
+        return null
+    }
+    return out.bytes()
+}
+
+fn nameOf(m: Method) []u8 {
+    if m == Method.Get {
+        return "GET"
+    }
+    if m == Method.Post {
+        return "POST"
+    }
+    if m == Method.Put {
+        return "PUT"
+    }
+    if m == Method.Patch {
+        return "PATCH"
+    }
+    return "DELETE"
 }
 
 fn trimSlash(s: []u8) []u8 {

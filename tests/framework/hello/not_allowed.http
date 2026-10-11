@@ -1,0 +1,7 @@
+HTTP/1.1 405 Method Not Allowed
+Content-Type: text/plain; charset=utf-8
+Allow: GET, HEAD
+Connection: close
+Content-Length: 18
+
+Method Not Allowed
