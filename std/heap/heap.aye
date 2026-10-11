@@ -6,3 +6,6 @@
 //     Arena.init(backing: Allocator) Arena
 //     x.allocator() Allocator              (x must be a `var`)
 //     x.deinit()
+//     arena.reset()                        frees all but the first block and
+//                                          reuses it; earlier allocations
+//                                          are invalid

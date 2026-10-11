@@ -1,0 +1,16 @@
+// O7.4: a read through a pointer the arena gave out before `reset`. The
+// kept block is poisoned at `reset`, so AddressSanitizer reports the read.
+
+import std.heap.Arena
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let alloc = arena.allocator()
+    let p = try alloc.create(1 as i64)
+    arena.reset()
+    @println(p.*)
+}

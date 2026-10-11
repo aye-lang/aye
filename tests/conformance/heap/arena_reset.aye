@@ -1,0 +1,22 @@
+import std.heap.Arena
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let alloc = arena.allocator()
+    let first = try alloc.create(0 as i64)
+    var total: i64 = 0
+    var same = true
+    for i in 0..50 {
+        arena.reset()
+        let p = try alloc.create(i as i64)
+        same = same && p == first
+        let s = try alloc.alloc(1 as u8, 5000)
+        total += p.* + s.len as i64
+    }
+    @println(total)
+    @println(same)
+}

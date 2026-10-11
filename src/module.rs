@@ -177,6 +177,7 @@ const BUILTIN_METHODS: &[(&str, &str)] = &[
     ("std.heap", "Arena.init"),
     ("std.heap", "Arena.allocator"),
     ("std.heap", "Arena.deinit"),
+    ("std.heap", "Arena.reset"),
     ("std.mem", "Allocator.create"),
     ("std.mem", "Allocator.destroy"),
     ("std.mem", "Allocator.alloc"),
