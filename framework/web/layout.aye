@@ -11,7 +11,7 @@ pub let Layout = fn(*Request, *mut Html, []u8) Error!void
 /// response `text/html`. The status and headers stay. Call it once per
 /// layout, innermost first (`web gen` writes these calls).
 pub fn wrap(req: *Request, res: *mut Response, layout: Layout) Error!void {
-    var out = Html { buf: Builder.init(req.arena) }
+    var out = Html { buf: Builder.init(req.arena), islands: res.page.islands }
     try layout(req, &mut out, res.page.bytes())
     res.page = out
     res.contentType = "text/html; charset=utf-8"

@@ -29,7 +29,7 @@ pub struct Response {
             status: 200,
             contentType: "text/plain; charset=utf-8",
             headers: List(http.Header).init(alloc),
-            page: Html { buf: Builder.init(alloc) },
+            page: Html { buf: Builder.init(alloc), islands: false },
             alloc: alloc,
         }
     }

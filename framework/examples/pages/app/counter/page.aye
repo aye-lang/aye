@@ -1,0 +1,14 @@
+// The counter page of the pages app: `/counter` has the counter island (FD6),
+// server-rendered here and made live in the browser by its `client.aye`.
+
+import islands.counter.view
+import web.Error
+import web.Request
+import web.Response
+import web.island
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let html = res.html()
+    try html.raw("<h1>Counter</h1>")
+    try island(html, "counter", "{\"start\":3}", view.render)
+}

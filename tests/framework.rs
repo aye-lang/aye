@@ -23,7 +23,9 @@
 //!   with `AYE` set to the `aye` under test. It also builds the counter
 //!   island into `.web/client/counter.wasm` (only where the wasm32 toolchain
 //!   is; else it prints a warning and the island cases are skipped): the
-//!   server answers `/_web/islands.js` (`PAGES_CASES`), and
+//!   server answers `/_web/islands.js` (`PAGES_CASES`); `/counter` has the
+//!   island `div` that `web.island` writes and, once, the script tag that the
+//!   server adds (`/about` has none); and
 //!   `/_web/islands/<name>.wasm` with `application/wasm`, a 404 for a
 //!   missing name and a 400 for `..` (`PAGES_ISLAND_CASES`,
 //!   `PAGES_BINARY_CASES`; the body of the `.wasm` must start with `\0asm`).
@@ -95,6 +97,7 @@ const HELLO_CASES: &[(&str, &str, &str)] = &[
 const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/", "root.http"),
     ("GET", "/about", "about.http"),
+    ("GET", "/counter", "counter.http"),
     ("GET", "/blog/hello", "blog_hello.http"),
     ("GET", "/blog/layouts", "blog_layouts.http"),
     ("GET", "/api/items/1", "api_item.http"),
