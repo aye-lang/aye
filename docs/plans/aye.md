@@ -131,7 +131,7 @@ brackets.
 - O1.17b first-exec stall, round 2 (cause known, `decisions.md` "First-exec stall"): try `-Wl,-no_adhoc_codesign` and `-mmacosx-version-min`; count the executables golden links; if nothing hides the stall, run a case's debug/safe/fast binaries in parallel in `tests/golden.rs`. Verify: golden wall time under 250 s on a quiet machine.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
 - O1.15a `aye doc std.<x>` for an unknown module prints the same module list and suggestion as E0081 (`src/doc.rs`; O1.15 report). Verify: a CLI golden.
-- O1.16 `aye fix` removes `;` statement terminators (E0002; one eval run spent ~12 turns on one-line edits). Verify: a `tests/fix` golden.
+- O1.16a `aye fix` for `;` inside `(` or `[` (e.g. a C-style `for (a; b; c)`) still applies the newline fix, which is wrong there; the lexer does not track bracket depth (O1.16 report). Verify: a `tests/fix` case leaves such a `;` alone or suggests nothing.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O4.1 manifest and `aye.lock` design; `docs/framework.md` already fixed "declarative file, not a `build.aye` run" (old O4 table).
