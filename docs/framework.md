@@ -152,9 +152,12 @@ method gets 405 with `Allow`.
   request). Handlers allocate from it and never free.
 - **Errors:** `pub error Error { BadRequest, Unauthorized, Forbidden,
   NotFound, MethodNotAllowed, Conflict, PayloadTooLarge, OutOfMemory,
-  Internal }`, mapped to 400, 401, 403, 404, 405, 409, 413, 500, 500. For
-  a page the framework renders the app's `not-found.aye` (404) or a
-  plain error page; for a `route.aye`, `{"error":"NotFound"}`. A handler
+  Internal }`, mapped to 400, 401, 403, 404, 405, 409, 413, 500, 500. A
+  request that matches no route and no `public/` file gets the app's
+  `not-found.aye` (404, inside the root layout; without the file, a plain
+  404). A handler that returns `NotFound` still gets the plain page for
+  now (not yet `not-found.aye`); for a `route.aye`, `{"error":"NotFound"}`
+  is the plan. A handler
   that wants another status sets `res.status` and returns normally.
   Errors of other sets are handled where they happen:
   `std.fs.open(p) catch |e| { std.log.err("open {}: {}", p, e); return
@@ -232,7 +235,10 @@ pub fn layout(req: *web.Request, h: *mut web.Html, body: []u8) web.Error!void {
 ```
 
 Aye has no closures, so a layout gets the rendered page as bytes rather
-than a callback. Nested layouts are applied inside out.
+than a callback. Nested layouts are applied inside out: `web gen` writes,
+for each page under a layout, a function that calls the page, then
+`web.wrap(req, res, <layout>)` for each layout from the innermost to
+`app/layout.aye`. `route.aye` functions are never wrapped.
 
 Hydration and islands come in F4 (section "Client code").
 
