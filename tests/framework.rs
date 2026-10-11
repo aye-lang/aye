@@ -40,6 +40,11 @@
 //!   `aye_write`, `aye_abort` and `strtod` (from `std.json`), no others;
 //!   `mount`, `event`, `memory` and `malloc` among the exports. Skipped
 //!   without clang's wasm32 backend or `node`.
+//! - `tests/framework/islands_glue.mjs` (Node 22) runs the text of
+//!   `islandsScript()` in a `vm` sandbox with a fake DOM: the counter island
+//!   (built as above) starts at `Count: 3`, two clicks give `Count: 5`, and
+//!   an island whose `.wasm` is missing logs one `console.error`. Skipped
+//!   like `island_build`.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use aye::driver;
@@ -986,4 +991,40 @@ fn island_build() {
             "no export {export}:\n{lines}"
         );
     }
+}
+
+#[test]
+fn islands_glue() {
+    let target = driver::find_target("wasm32-freestanding").unwrap();
+    if !target.toolchain_available() || !driver::node_available() || !node_22() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let wasm = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-glue-counter.wasm");
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .args(["build", "--target", "wasm32-freestanding"])
+        .arg(root().join("framework/examples/pages/islands/counter"))
+        .arg("-o")
+        .arg(&wasm)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "building the counter island failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = Command::new("node")
+        .arg(root().join("tests/framework/islands_glue.mjs"))
+        .arg(root().join("framework/web/islands.aye"))
+        .arg(&wasm)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the glue test failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Count: 5");
 }

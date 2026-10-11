@@ -1,0 +1,36 @@
+// web.islands: the browser script for the islands of a page (docs/framework.md
+// section 6, FD6): it finds every `[data-island]` element, loads
+// `/_web/islands/<name>.wasm` and runs the island's `mount` over that
+// element's subtree.
+
+import std.text
+
+/// The script that `/_web/islands.js` serves. For each element with a
+/// `data-island` attribute it fetches `/_web/islands/<name>.wasm` and
+/// instantiates it with the `env` the island's `client.aye` expects:
+///
+///     dom_query(root, sel, len) -> el       first match of the selector under
+///                                           root (0 = none); the element's
+///                                           root is handle 1
+///     dom_set_text(el, s, len)              textContent
+///     dom_on(el, name, len, id)             addEventListener(name) that calls
+///                                           the module's `event(id)`
+///     strtod(ptr, end) -> f64               what std.json needs
+///     aye_write(fd, ptr, len), aye_abort()  console output and a throw
+///
+/// then writes the `data-props` text into memory from the module's
+/// `malloc` and calls `mount(1, ptr, len)`. A failure (fetch, instantiate
+/// or `mount`) logs one `console.error` and leaves the other islands alone.
+pub fn islandsScript() []u8 {
+    return "(function () {\n  var decoder = new TextDecoder();\n  var encoder = new TextEncoder();\n  var number = /^[+-]?(?:inf(?:inity)?|nan|(?:[0-9]+[.]?[0-9]*|[.][0-9]+)(?:e[+-]?[0-9]+)?)/i;\n\n  function start(root) {\n    var name = root.getAttribute('data-island');\n    var memory = null;\n    var wasm = null;\n    var elements = [null, root];\n\n    function bytes(ptr, len) {\n      return new Uint8Array(memory.buffer, ptr, len);\n    }\n    function string(ptr, len) {\n      return decoder.decode(bytes(ptr, len));\n    }\n    function element(id) {\n      return elements[id] || null;\n    }\n\n    var env = {\n      aye_write: function (fd, ptr, len) {\n        (fd === 2 ? console.error : console.log)(string(ptr, len));\n      },\n      aye_abort: function () {\n        throw new Error('island ' + name + ' aborted');\n      },\n      strtod: function (ptr, end) {\n        var all = new Uint8Array(memory.buffer);\n        var stop = ptr;\n        while (all[stop] !== 0) stop += 1;\n        var text = decoder.decode(all.subarray(ptr, stop));\n        var lead = text.length - text.trimStart().length;\n        var m = number.exec(text.slice(lead));\n        if (end) new DataView(memory.buffer).setUint32(end, ptr + (m ? lead + m[0].length : 0), true);\n        if (!m) return 0;\n        var t = m[0].toLowerCase().replace(/^[+]/, '');\n        if (/nan$/.test(t)) return NaN;\n        if (/inf(inity)?$/.test(t)) return t[0] === '-' ? -Infinity : Infinity;\n        return Number(t);\n      },\n      dom_query: function (rootId, sel, len) {\n        var from = element(rootId);\n        var found = from ? from.querySelector(string(sel, len)) : null;\n        if (!found) return 0;\n        elements.push(found);\n        return elements.length - 1;\n      },\n      dom_set_text: function (id, s, len) {\n        var el = element(id);\n        if (el) el.textContent = string(s, len);\n      },\n      dom_on: function (id, type, len, handler) {\n        var el = element(id);\n        if (el) el.addEventListener(string(type, len), function () {\n          wasm.event(handler);\n        });\n      }\n    };\n\n    return fetch('/_web/islands/' + encodeURIComponent(name) + '.wasm')\n      .then(function (res) {\n        if (!res.ok) throw new Error('status ' + res.status);\n        return res.arrayBuffer();\n      })\n      .then(function (buffer) {\n        return WebAssembly.instantiate(buffer, { env: env });\n      })\n      .then(function (result) {\n        wasm = result.instance.exports;\n        memory = wasm.memory;\n        var props = encoder.encode(root.getAttribute('data-props') || '{}');\n        var ptr = wasm.malloc(props.length);\n        bytes(ptr, props.length).set(props);\n        wasm.mount(1, ptr, props.length);\n      })\n      .catch(function (e) {\n        console.error('island ' + name + ': ' + e);\n      });\n  }\n\n  function run() {\n    var roots = document.querySelectorAll('[data-island]');\n    for (var i = 0; i < roots.length; i++) start(roots[i]);\n  }\n\n  if (document.readyState === 'loading') {\n    document.addEventListener('DOMContentLoaded', run);\n  } else {\n    run();\n  }\n})();\n"
+}
+
+test "the islands script finds the data-island elements" {
+    let script = islandsScript()
+    @expect(script.len > 0)
+    if text.indexOf(script, "data-island") |at| {
+        @expect(at > 0)
+    } else {
+        @expect(false)
+    }
+}
