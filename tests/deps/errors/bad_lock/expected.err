@@ -1,0 +1,1 @@
+./aye.lock:3:63: error[E0119]: `sha256` is 64 lowercase hex digits; expected `[deps]`, then lines such as `lib = { url = "https://example.com/lib.tar.gz", sha256 = "<64 lowercase hex digits>" }`
