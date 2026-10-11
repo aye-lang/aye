@@ -1,0 +1,12 @@
+// The layout of the `(marketing)` group of the pages app: the group adds no
+// segment to the path, but this layout wraps the pages below it.
+
+import web.Error
+import web.Html
+import web.Request
+
+pub fn layout(req: *Request, h: *mut Html, body: []u8) Error!void {
+    try h.raw("<section class=\"marketing\">")
+    try h.raw(body)
+    try h.raw("</section>")
+}

@@ -2,8 +2,10 @@
 
 import std.heap.Arena
 import std.http
+import std.mem.AllocError
 import std.mem.Allocator
 import std.text
+import std.text.Builder
 
 /// The request methods a route can name. Any other method is `Other`. A
 /// `HEAD` request is answered from the route's `Get`, so no route names
@@ -24,16 +26,32 @@ pub struct Request {
     body: []u8
     arena: Allocator
 
-    /// The part of the path that the `[name]` segment of the route matched.
-    /// A `name` that is no segment of the route is a bug: it panics.
+    /// The part of the path that the `[name]` segment of the route matched,
+    /// or, for `[...name]`, the rest of the path (`a/b/c`, the segments
+    /// joined by `/`), each segment percent-decoded after the path was split
+    /// at `/` (a `%2F` is part of a segment, so `[name]` gets `a/b` from
+    /// `a%2Fb`). A `%` without two hex digits stays. A `name` that is no
+    /// segment of the route is a bug: it panics, and so does an arena that
+    /// is out of memory.
     pub fn param(self: *Self, name: []u8) []u8 {
+        let path = trimSlash(self.path)
         var ps = text.split(trimSlash(self.route), "/")
-        var xs = text.split(trimSlash(self.path), "/")
+        var xs = text.split(path, "/")
+        var pos: usize = 0
         while ps.next() |p| {
             let x = xs.next() orelse unreachable
-            if isParam(p) && text.eql(p[1..p.len - 1], name) {
-                return x
+            if isRest(p) {
+                if text.eql(p[4..p.len - 1], name) {
+                    return decodeSegments(self.arena, path[pos..]) catch |e| {
+                        unreachable
+                    }
+                }
+            } else if isParam(p) && text.eql(p[1..p.len - 1], name) {
+                return decodeSegments(self.arena, x) catch |e| {
+                    unreachable
+                }
             }
+            pos += x.len + 1
         }
         unreachable
     }
@@ -70,6 +88,25 @@ pub struct Request {
         }
         return null
     }
+}
+
+// `s`, a run of path segments, with each segment percent-decoded in `alloc`
+// (no copy when there is no `%`).
+fn decodeSegments(alloc: Allocator, s: []u8) AllocError![]u8 {
+    if text.indexOf(s, "%") == null {
+        return s
+    }
+    var b = Builder.init(alloc)
+    var parts = text.split(s, "/")
+    var first = true
+    while parts.next() |seg| {
+        if !first {
+            try b.append("/")
+        }
+        first = false
+        try b.append(try http.percentDecode(alloc, seg))
+    }
+    return b.bytes()
 }
 
 test "header ignores case" {
@@ -127,4 +164,29 @@ test "query, form and cookie" {
     @expectEqual("hi you!", (try req.form("msg")).?)
     @expectEqual("dark", req.cookie("theme").?)
     @expect(req.cookie("none") == null)
+}
+
+test "param reads a [...name] segment and decodes" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let req = Request {
+        method: Method.Get,
+        path: "/docs/a/b%20c/",
+        rawQuery: "",
+        route: "/docs/[...path]",
+        headers: []http.Header{},
+        body: "",
+        arena: arena.allocator(),
+    }
+    @expectEqual("a/b c", req.param("path"))
+    let one = Request {
+        method: Method.Get,
+        path: "/blog/a%2Fb%zz/x",
+        rawQuery: "",
+        route: "/blog/[slug]/x",
+        headers: []http.Header{},
+        body: "",
+        arena: arena.allocator(),
+    }
+    @expectEqual("a/b%zz", one.param("slug"))
 }

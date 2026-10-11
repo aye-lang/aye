@@ -1,0 +1,10 @@
+// The pricing page of the pages app: `/pricing`, in the `(marketing)` group.
+
+import web.Error
+import web.Request
+import web.Response
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let html = res.html()
+    try html.raw("<h1>Pricing</h1>")
+}
