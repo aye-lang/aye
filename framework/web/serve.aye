@@ -47,7 +47,7 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// 127.0.0.1:<port>`, and serves `routes` until the process ends. A path
 /// that no route has gets 404; a path with other methods only gets 405 and
 /// an `Allow` header. `HEAD` is answered from the `Get` route with the same
-/// headers and an empty body. When no route matches a `GET` or `HEAD`, the
+/// headers and `Content-Length`, and no body (`std.http.Server` leaves it out). When no route matches a `GET` or `HEAD`, the
 /// file of that path under `public` is served (see `serveFile`); `public` is
 /// the path of the directory, absolute or relative to the working directory,
 /// or empty for none.
@@ -102,11 +102,7 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
     }
     hres.status = res.status
     hres.headers = hs
-    if req.method == Method.Head {
-        hres.body = []u8{}
-    } else {
-        hres.body = res.page.bytes()
-    }
+    hres.body = res.page.bytes()
 }
 
 // Does `public` have the file of a `GET` or `HEAD` request? Then `res` is

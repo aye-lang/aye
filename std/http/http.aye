@@ -509,7 +509,9 @@ pub fn listen(comptime T: type, host: []u8, port: u16, ctx: *mut T, handler: fn(
 /// `alloc` is an arena that lives until the response is written, so a
 /// handler allocates and never frees. Handlers run on many threads at once:
 /// what they share through `ctx` needs a `std.sync.Mutex` or an `Atomic`.
-/// `HEAD` is not special: the body is sent.
+/// A `HEAD` request is answered like a `GET` (the handler sees the method and
+/// may fill the same body): the server writes the status line, the headers
+/// and the `Content-Length` of `res.body`, and not the body.
 ///
 /// Make it with `listen` (which listens, so `port()` is known at once, also
 /// for port 0), run `run` on a thread, and end it with `stop`.
@@ -602,7 +604,7 @@ pub struct Server {
                     continue
                 }
                 let bad = Response { status: errorStatus(e), headers: []Header{}, body: []u8{} }
-                send(a, conn, bad, "close")
+                send(a, conn, bad, "close", false)
                 return
             }
             var req = parsed.request
@@ -616,7 +618,7 @@ pub struct Server {
             } else if req.minor == 0 {
                 how = "keep-alive"
             }
-            send(a, conn, res, how)
+            send(a, conn, res, how, text.eql(req.method, "HEAD"))
             req.deinit()
             if !keep {
                 return
@@ -661,8 +663,9 @@ fn jobMain(job: *mut Job) {
     job.done.store(1)
 }
 
-// Writes `res`, with a `Connection` header when `how` is not empty.
-fn send(a: Allocator, conn: Conn, res: Response, how: []u8) {
+// Writes `res`, with a `Connection` header when `how` is not empty; with
+// `head`, the body is left out (its length stays in `Content-Length`).
+fn send(a: Allocator, conn: Conn, res: Response, how: []u8, head: bool) {
     var out = Builder.init(a)
     var r = res
     if how.len > 0 {
@@ -673,7 +676,11 @@ fn send(a: Allocator, conn: Conn, res: Response, how: []u8) {
     writeResponse(&mut out, r) catch |e| {
         return
     }
-    conn.write(out.bytes()) catch |e| {
+    var wire = out.bytes()
+    if head {
+        wire = wire[0..wire.len - r.body.len]
+    }
+    conn.write(wire) catch |e| {
         return
     }
 }

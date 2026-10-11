@@ -1611,7 +1611,8 @@ port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves, a thread per
 connection, until `s.stop()`. The handler reads `req.method`,
 `req.target`, `req.body` and `req.header(name)`, and fills `res.status`
 (200), `res.headers` and `res.body`; its `alloc` is an arena that lives
-until the response is written. The client is `http.get(arena,
+until the response is written (a `HEAD` response omits the body, not its
+`Content-Length`). The client is `http.get(arena,
 "http://host:8080/path")` (also `post`, `request`, `requestWith`): a
 `Response` with `status`, `headers`, `body` and `header(name)`, allocated
 in the arena; redirects are followed only on request; `https://` goes
