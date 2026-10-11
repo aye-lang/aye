@@ -1,0 +1,14 @@
+// `aye test treebroken` runs the tests of every module under the
+// directory. `util` is imported by the root and is tested once; `lonely`
+// is not imported, does not compile, and is reported as one failed entry
+// while the run goes on.
+
+import util
+
+pub fn main() {
+    @println(util.twice(21))
+}
+
+test "root" {
+    @expectEqual(42, util.twice(21))
+}

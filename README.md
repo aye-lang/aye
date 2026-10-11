@@ -152,7 +152,9 @@ leave them out; `aye test` runs each one of every module of the program
 ends only that test. A test of another module than the root shows as
 `test "html: name"`. With a
 directory, `aye test dir` also runs the modules under it that nothing
-imports, each module once. A test
+imports, each module once; one that does not compile is a single failed
+entry, `test "sub" ... FAILED (compile)` with its diagnostics on stderr, and
+the run goes on. A test
 fails when it panics, fails an assertion, returns an error, or leaks memory
 from `@testAllocator()`:
 

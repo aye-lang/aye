@@ -603,6 +603,9 @@ pub enum Failure {
     },
     /// Ended in another way, such as a signal.
     Crash(String),
+    /// The root (a directory under `aye test DIR`) did not compile; the
+    /// message holds its diagnostics.
+    Compile(String),
 }
 
 pub enum TestError {
@@ -646,7 +649,9 @@ fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// only those of that module. `cflags` are more flags for clang. Up to
 /// `jobs` test processes run at once; `results` stay in test order. A test
 /// process that uses more than `time_limit` seconds of CPU time (0: no
-/// limit) is killed and fails.
+/// limit) is killed and fails. Of several directory roots, one that does
+/// not compile is a failed result (`Failure::Compile`) and the run goes on;
+/// a single root that does not compile is an error.
 pub fn run_tests(
     path: &str,
     target: &'static Target,
@@ -668,6 +673,7 @@ pub fn run_tests(
     } else {
         roots.push(top.to_path_buf());
     }
+    let roots_n = roots.len();
     let exe = std::env::temp_dir().join(format!("aye-test-{}", std::process::id()));
     let mut reached: HashSet<PathBuf> = HashSet::new();
     let mut with_tests: Vec<String> = Vec::new();
@@ -681,9 +687,6 @@ pub fn run_tests(
         let mut root = Root::load(&dir.to_string_lossy()).map_err(TestError::Run)?;
         root.target = target;
         let base = root.base.clone();
-        let (mut c, tests, files, dirs) =
-            compile_tests_to_c(root, mode).map_err(TestError::Compile)?;
-        c.cflags = cflags.to_vec();
         let prefix: Vec<String> = base
             .strip_prefix(top)
             .map(|p| {
@@ -692,6 +695,34 @@ pub fn run_tests(
                     .collect()
             })
             .unwrap_or_default();
+        let (mut c, tests, files, dirs) = match compile_tests_to_c(root, mode) {
+            Ok(r) => r,
+            Err(ds) if roots_n > 1 => {
+                // A root that does not compile is one failed entry; the
+                // other roots still run.
+                let name = if prefix.is_empty() {
+                    path.to_string()
+                } else {
+                    prefix.join(".")
+                };
+                if name.contains(filter) && module.is_none_or(|m| m == prefix.join(".")) {
+                    let message = ds.iter().map(|d| d.render()).collect::<Vec<_>>().join("\n");
+                    results.push(TestResult {
+                        name,
+                        passed: false,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        failures: vec![Failure::Compile(message)],
+                        ms: 0,
+                        cpu_ms: 0,
+                        timed_out: false,
+                    });
+                }
+                continue;
+            }
+            Err(ds) => return Err(TestError::Compile(ds)),
+        };
+        c.cflags = cflags.to_vec();
         let mut todo = Vec::new();
         for (i, mut test) in tests.into_iter().enumerate() {
             let at =
@@ -1022,6 +1053,9 @@ impl TestResult {
                     )
                 }
                 Failure::Crash(m) => format!(r#"{{"kind":"crash","message":{}}}"#, json_str(m)),
+                Failure::Compile(m) => {
+                    format!(r#"{{"kind":"compile","message":{}}}"#, json_str(m))
+                }
             })
             .collect();
         format!(
