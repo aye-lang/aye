@@ -1,0 +1,123 @@
+// web.dev: what the app server adds with `--dev`: the script tag in every
+// HTML page, the script itself and the event stream that tells it when the
+// server was started anew (docs/framework.md section 5).
+
+import std.heap.Arena
+import std.heap.General
+import std.http
+import std.mem.AllocError
+import std.mem.Allocator
+import std.os
+import std.text
+import std.text.Builder
+import std.thread
+import std.time
+
+/// How often the server sends the build id to the open event streams, in
+/// milliseconds. A handler cannot write the first event of its own stream,
+/// so a page that has just connected gets the id on the next beat.
+let beatMs: u64 = 200
+
+/// The tag `devInject` puts in a page.
+let scriptTag = "<script src=\"/_web/dev.js\"></script>"
+
+/// What the thread that sends the beats needs: the listener and the id.
+struct Beat {
+    server: *mut http.Server
+    id: []u8
+}
+
+/// True when the program's arguments have `--dev`.
+pub fn devArg(alloc: Allocator) bool {
+    let args = os.args(alloc) catch |e| {
+        return false
+    }
+    var i: usize = 1
+    while i < args.len {
+        if text.eql(args[i], "--dev") {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+/// The build id: the time of this call in milliseconds since 1970, as
+/// text. `web.run` calls it once at start.
+pub fn devBuildId(alloc: Allocator) AllocError![]u8 {
+    var b = Builder.init(alloc)
+    try b.appendInt(time.now())
+    return b.bytes()
+}
+
+/// The script that `/_web/dev.js` serves. It remembers the first build id
+/// the event stream sends, and reloads the page when a build message has
+/// another id (the browser reconnects by itself after the server restarts).
+pub fn devScript() []u8 {
+    return "(function () {\n  var id = null;\n  var source = new EventSource(\"/_web/events\");\n  source.addEventListener(\"build\", function (e) {\n    if (id === null) {\n      id = e.data;\n    } else if (e.data !== id) {\n      location.reload();\n    }\n  });\n})();\n"
+}
+
+/// True when `res` is an HTML page (its `Content-Type` is `text/html`).
+pub fn devIsHtml(res: *Response) bool {
+    return text.startsWith(res.contentType, "text/html")
+}
+
+/// Puts the script tag in the page of `res`: before the last `</body>`, or
+/// at the end when the page has none.
+pub fn devInject(res: *mut Response) AllocError!void {
+    let page = res.page.bytes()
+    var at = page.len
+    var i: usize = 0
+    while i + 7 <= page.len {
+        if text.eql(page[i..i + 7], "</body>") {
+            at = i
+        }
+        i += 1
+    }
+    var out = Builder.init(res.alloc)
+    try out.append(page[0..at])
+    try out.append(scriptTag)
+    try out.append(page[at..page.len])
+    res.page.buf = out
+}
+
+/// Starts the thread that sends `event: build` with `id` to every open
+/// event stream of `server` each `beatMs`, until the process ends.
+pub fn devBeats(alloc: Allocator, server: *mut http.Server, id: []u8) thread.SpawnError!void {
+    let job = alloc.alloc(Beat { server: server, id: id }, 1) catch |e| {
+        return thread.SpawnError.SystemResources
+    }
+    let t = try thread.spawn(Beat, beat, &mut job[0])
+}
+
+fn beat(job: *mut Beat) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    while true {
+        time.sleep(beatMs)
+        let sent = job.server.broadcast(gpa.allocator(), "build", job.id) catch |e| {
+            continue
+        }
+    }
+}
+
+test "the tag goes before the last closing body tag" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var res = Response.init(arena.allocator())
+    res.contentType = "text/html; charset=utf-8"
+    try res.page.raw("<body>a</body></html>")
+    try devInject(&mut res)
+    @expectEqual("<body>a<script src=\"/_web/dev.js\"></script></body></html>", res.page.bytes())
+    @expectEqual(true, devIsHtml(&res))
+}
+
+test "a page without a closing body tag gets the tag at the end" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    var res = Response.init(arena.allocator())
+    try res.page.raw("<p>hi</p>")
+    try devInject(&mut res)
+    @expectEqual("<p>hi</p><script src=\"/_web/dev.js\"></script>", res.page.bytes())
+    @expectEqual(false, devIsHtml(&res))
+}

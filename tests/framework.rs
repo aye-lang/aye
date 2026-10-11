@@ -325,8 +325,14 @@ fn build_dir(name: &str, dir: &Path) -> PathBuf {
 
 /// Starts `exe --port 0` and reads the port from its first line.
 fn start(exe: &Path) -> App {
+    start_with(exe, &[])
+}
+
+/// Like `start`, with `extra` arguments after `--port 0`.
+fn start_with(exe: &Path, extra: &[&str]) -> App {
     let mut child = Command::new(exe)
         .args(["--port", "0"])
+        .args(extra)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
@@ -467,6 +473,92 @@ fn pages() {
     }
 }
 
+/// The build id in the first `build` frame of `GET /_web/events` on `app`:
+/// the status line and headers are checked on the way. Reads for up to 5 s.
+fn first_build_id(app: &App) -> String {
+    let mut s = TcpStream::connect(("127.0.0.1", app.port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    write!(
+        s,
+        "GET /_web/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n"
+    )
+    .unwrap();
+    let limit = Instant::now() + Duration::from_secs(5);
+    let mut got = String::new();
+    while Instant::now() < limit {
+        let mut buf = [0u8; 512];
+        match s.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => got.push_str(&String::from_utf8_lossy(&buf[..n]).replace("\r\n", "\n")),
+            Err(_) => {}
+        }
+        if let Some(at) = got.find("event: build\ndata: ") {
+            let rest = &got[at + "event: build\ndata: ".len()..];
+            if let Some(end) = rest.find("\n\n") {
+                assert!(got.starts_with("HTTP/1.1 200 OK\n"), "{got:?}");
+                assert_eq!(header_value(&got, "Content-Type"), "text/event-stream");
+                return rest[..end].to_string();
+            }
+        }
+    }
+    panic!("no build frame: {got:?}");
+}
+
+#[test]
+fn dev_script() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-script");
+    let _ = std::fs::remove_dir_all(&dir);
+    copy_dir(&root().join("framework/examples/pages"), &dir);
+    let generated = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(root().join("framework").join("gen"))
+        .arg("--")
+        .arg(&dir)
+        .arg("--web")
+        .arg(root().join("framework").join("web"))
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "web gen failed:\n{}{}",
+        String::from_utf8_lossy(&generated.stdout),
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let exe = build_dir("dev-script-server", &dir.join(".web"));
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+
+    let app = start_with(&exe, &["--dev"]);
+    let about = request(&app, "GET", "/about");
+    assert_eq!(about.matches(tag).count(), 1, "{about}");
+    assert!(about.contains(&format!("{tag}</body>")), "{about}");
+    assert!(request(&app, "GET", "/").contains(tag));
+    let js = request(&app, "GET", "/_web/dev.js");
+    assert!(js.starts_with("HTTP/1.1 200 OK\n"), "{js}");
+    assert!(
+        header_value(&js, "Content-Type").starts_with("text/javascript"),
+        "{js}"
+    );
+    assert!(js.contains("new EventSource(\"/_web/events\")"), "{js}");
+    assert!(js.contains("location.reload()"), "{js}");
+    let api = request(&app, "GET", "/api/items/1");
+    assert!(!api.contains(tag), "{api}");
+    let id = first_build_id(&app);
+    assert!(id.parse::<u64>().is_ok(), "{id:?}");
+    assert_eq!(first_build_id(&app), id, "same id on a second connection");
+
+    std::thread::sleep(Duration::from_millis(20));
+    let again = start_with(&exe, &["--dev"]);
+    assert_ne!(first_build_id(&again), id, "another id after a restart");
+
+    let plain = start(&exe);
+    assert!(!request(&plain, "GET", "/about").contains(tag));
+    assert!(request(&plain, "GET", "/_web/dev.js").starts_with("HTTP/1.1 404 "));
+    assert!(request(&plain, "GET", "/_web/events").starts_with("HTTP/1.1 404 "));
+}
+
 #[test]
 fn dev_start() {
     let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-start");
@@ -478,7 +570,13 @@ fn dev_start() {
         child: Command::new("true").spawn().unwrap(),
         port: dev.port,
     };
-    assert_eq!(request(&server, "GET", "/about"), want);
+    // The CLI starts the server with `--dev`: the page has the script tag
+    // and the length of it, and is the transcript otherwise.
+    let got = request(&server, "GET", "/about");
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+    assert!(got.contains(&format!("{tag}</body>")), "{got}");
+    let body = |s: &str| s.split_once("\n\n").unwrap().1.replace(tag, "");
+    assert_eq!(body(&got), body(&want));
     dev.kill_group();
     let mut gone = false;
     for _ in 0..50 {
