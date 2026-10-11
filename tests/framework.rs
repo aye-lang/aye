@@ -539,3 +539,19 @@ fn web_units() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn dev_units() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .arg("test")
+        .arg(root().join("framework").join("dev"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("; 0 failed;"),
+        "aye test failed:\n{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
