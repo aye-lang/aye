@@ -1711,6 +1711,46 @@ fn cli_doc_unknown_std() -> Result<(), String> {
     Ok(())
 }
 
+/// `aye doc --html` on `tests/doc/shapes` (a module with a submodule, `///`
+/// comments with `<`, `&` and quotes, an indented and a fenced block) writes
+/// the pages of `tests/doc/expected` and nothing else.
+fn cli_doc_html(work: &Path) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/doc");
+    let dir = work.join("doc-html");
+    let to = dir.to_string_lossy();
+    let (out, err, code) = aye(&root, &["doc", "--html", "shapes", "-o", &to])?;
+    if code != Some(0) || !err.is_empty() {
+        return Err(format!("`aye doc --html shapes`: {code:?}\n{out}{err}"));
+    }
+    let want = tree(&root.join("expected"));
+    let got = tree(&dir);
+    if want.is_empty() || got != want {
+        let names = |t: &[(String, String)]| {
+            t.iter()
+                .map(|(n, _)| n.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let diff = want
+            .iter()
+            .find(|w| !got.contains(w))
+            .map(|(n, text)| {
+                let g = got
+                    .iter()
+                    .find(|(m, _)| m == n)
+                    .map_or("", |(_, t)| t.as_str());
+                format!("--- expected {n}\n{text}--- got\n{g}")
+            })
+            .unwrap_or_default();
+        return Err(format!(
+            "`aye doc --html shapes`: files [{}], expected [{}]\n{diff}",
+            names(&got),
+            names(&want)
+        ));
+    }
+    Ok(())
+}
+
 fn main() {
     let work = std::env::temp_dir().join(format!("aye-golden-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
@@ -1877,6 +1917,9 @@ fn main() {
             "cli/aye doc: an unknown std module".to_string(),
             cli_doc_unknown_std,
         );
+        add(&mut jobs, "cli/aye doc --html".to_string(), move || {
+            cli_doc_html(w)
+        });
         add(
             &mut jobs,
             "cli/aye test: an error in a doc example".to_string(),

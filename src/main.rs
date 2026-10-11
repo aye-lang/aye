@@ -15,6 +15,7 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
   (--target: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding; default: this machine)
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
   aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
+  aye doc --html <path> [-o <dir>]   (HTML pages of the same documentation into <dir>, default `doc`)
   aye cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Aye declarations `@cimport` makes of a C header)
   aye lsp                       (a language server on stdin and stdout: diagnostics and formatting)
   aye explain <code>
@@ -443,15 +444,42 @@ fn aye_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 }
 
 /// `aye doc --signatures <path>`: the pub declarations of the modules at
-/// `path` (see `doc::signatures`).
+/// `path` (see `doc::signatures`). `aye doc --html <path> [-o <dir>]`: the
+/// same as HTML pages in `dir` (see `doc::html`).
 fn doc_cmd(args: Vec<String>) -> ExitCode {
-    let [flag, path] = &args[..] else {
-        eprintln!("aye: `doc` needs `--signatures` and one path\n{USAGE}");
-        return ExitCode::from(2);
+    let html = args.first().is_some_and(|a| a == "--html");
+    let (path, out_dir) = match &args[..] {
+        [flag, path] if flag == "--signatures" || flag == "--html" => (path, None),
+        [flag, path, o, dir] | [flag, o, dir, path]
+            if flag == "--html" && o == "-o" && path != "-o" =>
+        {
+            (path, Some(dir))
+        }
+        _ if html => {
+            eprintln!("aye: `doc --html` needs one path and optionally `-o <dir>`\n{USAGE}");
+            return ExitCode::from(2);
+        }
+        [flag, ..] if flag != "--signatures" => {
+            eprintln!("aye: unexpected argument `{flag}`\n{USAGE}");
+            return ExitCode::from(2);
+        }
+        _ => {
+            eprintln!("aye: `doc` needs `--signatures` or `--html` and one path\n{USAGE}");
+            return ExitCode::from(2);
+        }
     };
-    if flag != "--signatures" {
-        eprintln!("aye: unexpected argument `{flag}`\n{USAGE}");
-        return ExitCode::from(2);
+    if html {
+        let dir = std::path::Path::new(out_dir.map_or("doc", |d| d.as_str()));
+        return match doc::html(path, dir) {
+            Ok(n) => {
+                println!("wrote {} ({n} modules)", dir.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
     }
     match doc::signatures(path) {
         Ok(text) => {

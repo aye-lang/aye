@@ -51,7 +51,8 @@ Then, in order:
    O4.3a/b and O1.18a done. **O11 holds** (conformance prints
    passed/total per area and target, 100% native and wasm32-wasip1 with
    the impossible entries listed, since O2.3). Phase O6.x (LSP, O10):
-   O6.1 and O6.3 in flight. O2.8b done; a cloud routine re-runs the
+   O6.1 and O6.3 done (merge pending the suite), O6.2 in flight: O10
+   holds once O6.2 lands. O2.8b done; a cloud routine re-runs the
    Linux suite on the no-IPv6 VM. Eval 2026-10-11: 15/15, mean turns 15.1 → 11.1, tokens −35%, 0 refused
    calls (`docs/aye-eval.md`). Next: O1.18–O1.20 (eval costs), P-flaky,
    then the O6.x LSP phase.
@@ -68,7 +69,7 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O6.1, O6.3; then O6.2 | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O6.2, then the O10 check | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 

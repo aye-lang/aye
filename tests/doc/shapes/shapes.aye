@@ -1,0 +1,32 @@
+// shapes: plane figures.
+//
+// Only the pub API is documented.
+
+/// A point on the plane.
+///
+/// Compare with `a < b` & `a > b` by `x` first.
+pub struct Point {
+    /// The x coordinate.
+    x: i64,
+    y: i64,
+}
+
+/// The sum of the sides of a "box" with width `w` and height `h`.
+///
+/// Example:
+///     perimeter(2, 3) == 10
+/// Or fenced:
+/// ```
+/// let p = perimeter(1, 1)
+///
+/// @expect(p == 4)
+/// ```
+pub fn perimeter(w: i64, h: i64) i64 {
+    return 2 * (w + h)
+}
+
+pub let ORIGIN: i64 = 0
+
+fn hidden() i64 {
+    return 1
+}
