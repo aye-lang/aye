@@ -321,6 +321,7 @@ fn main() -> ExitCode {
     }
     let status = target.run_command(&exe).args(&args.prog_args).status();
     let _ = std::fs::remove_file(&exe);
+    driver::remove_dsym(&exe);
     match status {
         Ok(s) => match s.code() {
             Some(code) => ExitCode::from(code as u8),
