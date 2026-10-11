@@ -1,35 +1,46 @@
 //! Hover and go to definition for `aye lsp`.
 //!
-//! Both work on tokens (like `aye fmt` and `aye doc`), not on the typed
-//! program: sema keeps no definition spans, resolves names while it lowers
-//! the program, and gives nothing at all for a document with a type error,
-//! which is what a document being typed usually has. So a name is resolved
-//! here, from the document's own tokens and the files of the modules it
-//! imports, in this order:
+//! A name after a dot (`p.len()`, `a.b.c`) is first looked up in what sema
+//! resolved: the front end runs on the document with `Root::members`, and
+//! the field or method of a struct or enum value it found for the name
+//! (`driver::Checked::members`) is the answer. That covers locals,
+//! parameters, globals and chains, whatever the type of the value before
+//! the dot, even in a document with type errors elsewhere; it gives nothing
+//! for a document that does not parse, or an access sema did not get to.
+//!
+//! Everything else works on tokens (like `aye fmt` and `aye doc`), from the
+//! document's own tokens and the files of the modules it imports, in this
+//! order:
 //!
 //! - a declaration whose name is the token itself (a method or a field in a
 //!   struct, say),
 //! - a local of the enclosing function: its parameter, or the `let`, `var`,
-//!   `for` or capture name nearest above (block scopes are not tracked),
+//!   `for` or capture name nearest above whose block the name is in,
 //! - a top-level declaration of the document's own file,
 //! - an `import` of the document: a module, or an item of a module.
 //!
 //! After a dot, `a.b.c` is resolved from the left: `a` as above (never a
-//! local, whose type is not known), then each name as a pub declaration or
+//! local, whose type sema gives), then each name as a pub declaration or
 //! submodule of a module, or a member (method, field, variant) of a struct,
-//! enum or interface. Anything else, such as the method of a value, has no
-//! answer.
+//! enum or interface.
+//!
+//! A cursor just past the end of a name is on the name.
 //!
 //! Modules are the `.aye` files of the directory `import a.b` names under the
-//! document's directory, or std. std is embedded in the compiler; its files
-//! are located under this compiler's source tree (`CARGO_MANIFEST_DIR`) if
-//! that is still on disk; if not, hover works and definition gives `null`.
-//! Dependencies of `aye.toml` are not searched.
+//! document's directory, under a path dependency's directory (the `aye.toml`
+//! next to the document) if `a` is its key, or std. std is embedded in the
+//! compiler; its files are located under this compiler's source tree
+//! (`CARGO_MANIFEST_DIR`) if that is still on disk; if not, hover works and
+//! definition gives `null`. URL dependencies are searched only through
+//! sema; `@cimport` modules have no Aye source and are not searched.
 
 use super::utf16_col;
 use crate::diag::json_str;
+use crate::doc::{self, body, code_lines, doc_above, flat, matching, split};
+use crate::driver;
 use crate::fmt::{self, Br, Item, Role, Scan};
 use crate::lexer::{Kw, Tok};
+use crate::manifest::{self, ManifestFile, Source};
 use crate::module::STD_FILES;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -152,7 +163,7 @@ fn lookup(uri: &str, path: &str, text: &str, line: u32, character: u32) -> Optio
         matches!(it.tok, Tok::Ident(_))
             && it.line == line + 1
             && start <= at
-            && at < start + it.text.chars().count()
+            && at <= start + it.text.chars().count()
     })?;
     let start = items[t].col as usize - 1;
     let range = range_json(
@@ -161,11 +172,19 @@ fn lookup(uri: &str, path: &str, text: &str, line: u32, character: u32) -> Optio
         utf16_col(line_text, start + items[t].text.chars().count()),
     );
     let me = Rc::new(index(&scan, text, Some(uri.to_string())));
+    if t >= 1
+        && items[t - 1].tok == Tok::Dot
+        && let Some(found) = typed(path, text, &items[t], &me)
+    {
+        return Some((range, found));
+    }
+    let base = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_path_buf();
     let r = Resolver {
-        base: Path::new(path)
-            .parent()
-            .unwrap_or(Path::new(""))
-            .to_path_buf(),
+        deps: path_deps(&base),
+        base,
     };
     // `a.b.` before the name.
     let mut chain: Vec<&str> = Vec::new();
@@ -196,17 +215,87 @@ fn lookup(uri: &str, path: &str, text: &str, line: u32, character: u32) -> Optio
 
 /// The declaration (top-level or member) whose name is the token `it`.
 fn at_name(src: &Rc<Src>, it: &Item) -> Option<Found> {
+    decl_at(src, it.line, it.col).map(|d| Found::Item(src.clone(), d))
+}
+
+/// The declaration (top-level or member) whose name is at `line`, `col`.
+fn decl_at(src: &Src, line: u32, col: u32) -> Option<Decl> {
     src.decls
         .iter()
         .flat_map(|d| std::iter::once(d).chain(&d.members))
-        .find(|d| d.line == it.line && d.col == it.col)
-        .map(|d| Found::Item(src.clone(), d.clone()))
+        .find(|d| d.line == line && d.col == col)
+        .cloned()
+}
+
+/// The member that sema resolved the name `it` after a dot in the document
+/// (`path`, text `text`, declarations `me`) to: its declaration in the file
+/// that declares it; sema's own rendering of it for a member the tokens do
+/// not show as one (in a type function's struct).
+fn typed(path: &str, text: &str, it: &Item, me: &Rc<Src>) -> Option<Found> {
+    let mut root = super::root(path, text);
+    root.members = true;
+    let name = root.files[0].name.clone();
+    let checked = driver::front_end(root, None);
+    let file = checked.files.iter().position(|f| f.name == name)?;
+    let (_, m) = checked
+        .members
+        .iter()
+        .find(|(s, _)| s.file as usize == file && s.line == it.line && s.col == it.col)?;
+    let at = m.decl;
+    let src = if at.file as usize == file {
+        me.clone()
+    } else {
+        let f = checked.files.get(at.file as usize)?;
+        let disk = if f.std {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(&f.name)
+        } else {
+            PathBuf::from(&f.name)
+        };
+        source(&f.text, disk.is_file().then(|| file_uri(&disk)))?
+    };
+    let decl = decl_at(&src, at.line, at.col).unwrap_or_else(|| {
+        let doc = fmt::scan(&src.text)
+            .map(|scan| strip_doc(&doc_above(&scan, &code_lines(&scan), at.line)))
+            .unwrap_or_default();
+        Decl {
+            name: it.text.clone(),
+            line: at.line,
+            col: at.col,
+            is_pub: true,
+            sig: m.sig.clone(),
+            doc,
+            members: Vec::new(),
+        }
+    });
+    Some(Found::Item(src, decl))
+}
+
+/// The path dependencies of the `aye.toml` in `dir`: (key, directory).
+fn path_deps(dir: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(Some(mf)) = ManifestFile::read(dir) else {
+        return Vec::new();
+    };
+    let Ok(m) = manifest::parse(&mf.file.text) else {
+        return Vec::new();
+    };
+    m.deps
+        .into_iter()
+        .filter_map(|d| match d.source {
+            Source::Path(p) => {
+                let dir = mf.dir.join(p);
+                Some((d.key, std::fs::canonicalize(&dir).unwrap_or(dir)))
+            }
+            Source::Url(_) => None,
+        })
+        .collect()
 }
 
 /// Finds modules and what they declare.
 struct Resolver {
     /// The directory that `import` paths start from.
     base: PathBuf,
+    /// The path dependencies: (key, directory).
+    deps: Vec<(String, PathBuf)>,
 }
 
 impl Resolver {
@@ -223,7 +312,14 @@ impl Resolver {
             }
             return out;
         }
-        let dir = self.base.join(path.replace('.', "/"));
+        let first = path.split('.').next().unwrap_or("");
+        let dir = match self.deps.iter().find(|(key, _)| key == first) {
+            Some((_, dep)) => {
+                let rest = path.split_once('.').map_or("", |(_, r)| r);
+                dep.join(rest.replace('.', "/"))
+            }
+            None => self.base.join(path.replace('.', "/")),
+        };
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return out;
         };
@@ -362,7 +458,24 @@ fn declaration(scan: &Scan, has_code: &[bool], d: &[Item]) -> Option<Decl> {
         Some(b) if is_fn => (flat(&d[..b.0]), Vec::new()),
         Some(b) if is_type => {
             let interface = *kw == Tok::Kw(Kw::Interface);
-            let (lines, members) = members(scan, has_code, d, b.0 + 1, b.1, interface);
+            let found = doc::members(scan, has_code, d, b.0 + 1, b.1);
+            let mut lines = String::new();
+            doc::render_members(&found, interface, "    ", &mut lines);
+            let members = found
+                .iter()
+                .filter_map(|m| {
+                    let n = m.name()?;
+                    Some(Decl {
+                        name: n.text.clone(),
+                        line: n.line,
+                        col: n.col,
+                        is_pub: m.is_pub,
+                        sig: m.sig.clone(),
+                        doc: strip_doc(&m.doc),
+                        members: Vec::new(),
+                    })
+                })
+                .collect();
             let sig = if d[0].line != d[d.len() - 1].line {
                 format!("{} {{\n{lines}}}", flat(&d[..b.0]))
             } else {
@@ -387,63 +500,9 @@ fn declaration(scan: &Scan, has_code: &[bool], d: &[Item]) -> Option<Decl> {
     })
 }
 
-/// The members of a struct, enum or interface body `d[from..to]`, and the
-/// lines that show them in the declaration: fields and variants, and the
-/// signatures of methods (only the pub ones unless `all_methods`), each
-/// with its doc comment.
-fn members(
-    scan: &Scan,
-    has_code: &[bool],
-    d: &[Item],
-    from: usize,
-    to: usize,
-    all_methods: bool,
-) -> (String, Vec<Decl>) {
-    let mut out = String::new();
-    let mut found = Vec::new();
-    for (s, e) in split(d, from, to) {
-        let m = &d[s..e];
-        let is_pub = m[0].tok == Tok::Kw(Kw::Pub);
-        let at_fn = m.iter().take(2).position(|it| it.tok == Tok::Kw(Kw::Fn));
-        // A doc comment belongs to a member that starts its line.
-        let doc = if s == 0 || d[s - 1].role == Role::Semi || d[s - 1].line != m[0].line {
-            doc_above(scan, has_code, m[0].line)
-        } else {
-            Vec::new()
-        };
-        let sig = match (at_fn, body(m)) {
-            (Some(_), Some((b, _))) => flat(&m[..b]),
-            _ => flat(m),
-        };
-        let name = match at_fn {
-            Some(f) => m.get(f + 1),
-            None => m.iter().find(|it| matches!(it.tok, Tok::Ident(_))),
-        };
-        if let Some(n) = name.filter(|n| matches!(n.tok, Tok::Ident(_))) {
-            found.push(Decl {
-                name: n.text.clone(),
-                line: n.line,
-                col: n.col,
-                is_pub,
-                sig: sig.clone(),
-                doc: strip_doc(&doc),
-                members: Vec::new(),
-            });
-        }
-        if at_fn.is_some() && !is_pub && !all_methods {
-            continue;
-        }
-        for c in doc {
-            out.push_str(&format!("    {c}\n"));
-        }
-        out.push_str(&format!("    {sig}\n"));
-    }
-    (out, found)
-}
-
 /// The local named like token `t`, declared above it in the function that
-/// encloses it: a parameter, or a name after `let`, `var`, `for` or in a
-/// capture.
+/// encloses it, whose scope `t` is in: a parameter, or a name after `let`,
+/// `var`, `for` or in a capture.
 fn local(items: &[Item], t: usize) -> Option<Decl> {
     let name = &items[t].text;
     // The innermost function: its `fn`, the `)` of its parameters, its `}`.
@@ -475,7 +534,7 @@ fn local(items: &[Item], t: usize) -> Option<Decl> {
         })
         .max_by_key(|&(f, _)| f)?;
     let mut depth = 0usize;
-    let mut found = None;
+    let mut found = Vec::new();
     for k in f + 2..=t {
         match items[k].role {
             Role::Open(_) => depth += 1,
@@ -492,10 +551,13 @@ fn local(items: &[Item], t: usize) -> Option<Decl> {
             matches!(prev.tok, Tok::Kw(Kw::Let | Kw::Var | Kw::For)) || prev.role == Role::CapOpen
         };
         if binds {
-            found = Some(k);
+            found.push(k);
         }
     }
-    let k = found?;
+    let k = found
+        .into_iter()
+        .rev()
+        .find(|&k| k < close || in_scope(items, k, t))?;
     let sig = if k < close {
         // `name: T`, up to the comma or the `)`.
         let start = if items[k - 1].tok == Tok::Kw(Kw::Comptime) {
@@ -545,26 +607,36 @@ fn local(items: &[Item], t: usize) -> Option<Decl> {
     })
 }
 
-/// The lines (1-based) that have tokens.
-fn code_lines(scan: &Scan) -> Vec<bool> {
-    let mut has = vec![false; scan.comments.len() + 1];
-    for it in scan.items.iter().filter(|it| it.role != Role::Semi) {
-        has[it.line as usize] = true;
+/// Is the token `t` in the scope of the local named at `k` (after the
+/// parameters)? A `for` name's, and that of a capture before a `{`, is that
+/// block; a `let` or `var` name's the rest of its block.
+fn in_scope(items: &[Item], k: usize, t: usize) -> bool {
+    let in_block = |b: Option<usize>| b.is_some_and(|b| b < t && t <= matching(items, b));
+    if items[k - 1].tok == Tok::Kw(Kw::For) {
+        return in_block((k..t).find(|&j| items[j].role == Role::Open(Br::Brace)));
     }
-    has
-}
-
-/// The `///` comment lines right above `line`, in order.
-fn doc_above(scan: &Scan, has_code: &[bool], line: u32) -> Vec<String> {
-    let comment_only = |l: usize| !has_code[l] && scan.comments[l - 1].is_some();
-    let mut l = line as usize - 1;
-    let mut lines = Vec::new();
-    while l >= 1 && comment_only(l) && scan.comments[l - 1].as_ref().unwrap().starts_with("///") {
-        lines.push(scan.comments[l - 1].clone().unwrap());
-        l -= 1;
+    if items[k - 1].role == Role::CapOpen
+        && items.get(k + 1).is_some_and(|it| it.role == Role::CapClose)
+        && items
+            .get(k + 2)
+            .is_some_and(|it| it.role == Role::Open(Br::Brace))
+    {
+        return in_block(Some(k + 2));
     }
-    lines.reverse();
-    lines
+    let mut depth = 0i32;
+    for it in &items[k..t] {
+        match it.role {
+            Role::Open(_) => depth += 1,
+            Role::Close(_) => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 /// The text of `///` lines.
@@ -577,74 +649,4 @@ fn strip_doc(lines: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// The ranges of the declarations or members in `items[from..to]`: split
-/// at terminators and commas outside brackets; empty ones dropped.
-fn split(items: &[Item], from: usize, to: usize) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let mut depth = 0usize;
-    let mut start = from;
-    for (i, it) in items.iter().enumerate().take(to).skip(from) {
-        match it.role {
-            Role::Open(_) => depth += 1,
-            Role::Close(_) => depth = depth.saturating_sub(1),
-            Role::Semi | Role::Comma if depth == 0 => {
-                if start < i {
-                    out.push((start, i));
-                }
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    if start < to {
-        out.push((start, to));
-    }
-    out
-}
-
-/// The index of the bracket that closes the one opened at `open`; the end
-/// of `items` if there is none.
-fn matching(items: &[Item], open: usize) -> usize {
-    let mut depth = 0usize;
-    for (i, it) in items.iter().enumerate().skip(open) {
-        match it.role {
-            Role::Open(_) => depth += 1,
-            Role::Close(_) => {
-                depth -= 1;
-                if depth == 0 {
-                    return i;
-                }
-            }
-            _ => {}
-        }
-    }
-    items.len()
-}
-
-/// The first `{` outside brackets in a declaration, and its `}`.
-fn body(d: &[Item]) -> Option<(usize, usize)> {
-    let mut depth = 0usize;
-    for (i, it) in d.iter().enumerate() {
-        match it.role {
-            Role::Open(Br::Brace) if depth == 0 => return Some((i, matching(d, i))),
-            Role::Open(_) => depth += 1,
-            Role::Close(_) => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Tokens on one line, without the trailing comma of a multi-line list.
-fn flat(items: &[Item]) -> String {
-    let keep = (0..items.len())
-        .filter(|&i| {
-            let next = items[i + 1..].iter().find(|it| it.role != Role::Semi);
-            !(items[i].role == Role::Comma
-                && next.is_some_and(|n| matches!(n.role, Role::Close(_))))
-        })
-        .map(|i| &items[i]);
-    fmt::join(keep)
 }

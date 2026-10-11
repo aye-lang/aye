@@ -142,7 +142,7 @@ fn collect(
 }
 
 /// The lines (1-based) that have tokens.
-fn code_lines(scan: &Scan) -> Vec<bool> {
+pub(crate) fn code_lines(scan: &Scan) -> Vec<bool> {
     let mut has = vec![false; scan.comments.len() + 1];
     for it in scan.items.iter().filter(|it| it.role != Role::Semi) {
         has[it.line as usize] = true;
@@ -169,16 +169,9 @@ fn file_doc(scan: &Scan, out: &mut String) {
         }
     }
     let doc = |line: u32, indent: &str, out: &mut String| {
-        let mut l = line as usize - 1;
-        let mut lines = Vec::new();
-        while l >= 1 && comment_only(l) && scan.comments[l - 1].as_ref().unwrap().starts_with("///")
-        {
-            lines.push(scan.comments[l - 1].as_ref().unwrap());
-            l -= 1;
-        }
-        for c in lines.iter().rev() {
+        for c in doc_above(scan, &has_code, line) {
             out.push_str(indent);
-            out.push_str(c);
+            out.push_str(&c);
             out.push('\n');
         }
     };
@@ -210,7 +203,8 @@ fn file_doc(scan: &Scan, out: &mut String) {
                 {
                     let close = matching(d, o);
                     out.push_str(" {\n    return struct {\n");
-                    members(d, o + 1, close, false, "        ", &doc, out);
+                    let found = members(scan, &has_code, d, o + 1, close);
+                    render_members(&found, false, "        ", out);
                     out.push_str("    }\n}");
                 }
                 out.push('\n');
@@ -221,7 +215,8 @@ fn file_doc(scan: &Scan, out: &mut String) {
                 out.push_str(&flat(&d[..b.0]));
                 out.push_str(" {\n");
                 let all_methods = kw == Some(&Tok::Kw(Kw::Interface));
-                members(d, b.0 + 1, b.1, all_methods, "    ", &doc, out);
+                let found = members(scan, &has_code, d, b.0 + 1, b.1);
+                render_members(&found, all_methods, "    ", out);
                 out.push_str("}\n");
             }
             // `pub extern union Name { ... }`
@@ -229,7 +224,8 @@ fn file_doc(scan: &Scan, out: &mut String) {
                 out.push_str(&flat(&d[..b.0]));
                 out.push_str(" {\n");
                 let all_methods = kw == Some(&Tok::Kw(Kw::Interface));
-                members(d, b.0 + 1, b.1, all_methods, "    ", &doc, out);
+                let found = members(scan, &has_code, d, b.0 + 1, b.1);
+                render_members(&found, all_methods, "    ", out);
                 out.push_str("}\n");
             }
             _ => {
@@ -240,9 +236,22 @@ fn file_doc(scan: &Scan, out: &mut String) {
     }
 }
 
+/// The `///` comment lines right above `line`, in order.
+pub(crate) fn doc_above(scan: &Scan, has_code: &[bool], line: u32) -> Vec<String> {
+    let comment_only = |l: usize| !has_code[l] && scan.comments[l - 1].is_some();
+    let mut l = line as usize - 1;
+    let mut lines = Vec::new();
+    while l >= 1 && comment_only(l) && scan.comments[l - 1].as_ref().unwrap().starts_with("///") {
+        lines.push(scan.comments[l - 1].clone().unwrap());
+        l -= 1;
+    }
+    lines.reverse();
+    lines
+}
+
 /// The ranges of the declarations or members in `items[from..to]`: split
 /// at terminators and commas outside brackets; empty ones dropped.
-fn split(items: &[Item], from: usize, to: usize) -> Vec<(usize, usize)> {
+pub(crate) fn split(items: &[Item], from: usize, to: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut start = from;
@@ -265,8 +274,9 @@ fn split(items: &[Item], from: usize, to: usize) -> Vec<(usize, usize)> {
     out
 }
 
-/// The index of the bracket that closes the one opened at `open`.
-fn matching(items: &[Item], open: usize) -> usize {
+/// The index of the bracket that closes the one opened at `open`; the end
+/// of `items` if there is none.
+pub(crate) fn matching(items: &[Item], open: usize) -> usize {
     let mut depth = 0usize;
     for (i, it) in items.iter().enumerate().skip(open) {
         match it.role {
@@ -284,7 +294,7 @@ fn matching(items: &[Item], open: usize) -> usize {
 }
 
 /// The first `{` outside brackets in a declaration, and its `}`.
-fn body(d: &[Item]) -> Option<(usize, usize)> {
+pub(crate) fn body(d: &[Item]) -> Option<(usize, usize)> {
     let mut depth = 0usize;
     for (i, it) in d.iter().enumerate() {
         match it.role {
@@ -297,41 +307,90 @@ fn body(d: &[Item]) -> Option<(usize, usize)> {
     None
 }
 
-/// The members of a struct, enum or interface body `d[from..to]`: fields
-/// and variants, and the signatures of methods (only the pub ones unless
-/// `all_methods`), each with its doc comment.
-fn members(
-    d: &[Item],
+/// A member of a struct, enum or interface body: a field, a variant or a
+/// method.
+pub(crate) struct Member<'a> {
+    /// Its tokens.
+    pub items: &'a [Item],
+    /// The index of `fn` in `items`, for a method.
+    pub fn_at: Option<usize>,
+    pub is_pub: bool,
+    /// The member on one line; a method without its body.
+    pub sig: String,
+    /// The `///` lines above it, if it starts its line.
+    pub doc: Vec<String>,
+}
+
+impl Member<'_> {
+    /// The token of its name: a method's after `fn`, else the first
+    /// identifier.
+    pub fn name(&self) -> Option<&Item> {
+        let name = match self.fn_at {
+            Some(f) => self.items.get(f + 1),
+            None => self.items.iter().find(|it| matches!(it.tok, Tok::Ident(_))),
+        };
+        name.filter(|n| matches!(n.tok, Tok::Ident(_)))
+    }
+
+    /// Does the declaration show it: a field or variant always, a method if
+    /// it is pub or `all_methods` (an interface's).
+    pub fn shown(&self, all_methods: bool) -> bool {
+        self.fn_at.is_none() || self.is_pub || all_methods
+    }
+}
+
+/// The members of a struct, enum or interface body `d[from..to]`.
+pub(crate) fn members<'a>(
+    scan: &Scan,
+    has_code: &[bool],
+    d: &'a [Item],
     from: usize,
     to: usize,
-    all_methods: bool,
-    indent: &str,
-    doc: &dyn Fn(u32, &str, &mut String),
-    out: &mut String,
-) {
+) -> Vec<Member<'a>> {
+    let mut out = Vec::new();
     for (s, e) in split(d, from, to) {
         let m = &d[s..e];
-        let is_pub = m[0].tok == Tok::Kw(Kw::Pub);
-        let is_fn = m.iter().take(2).any(|it| it.tok == Tok::Kw(Kw::Fn));
-        if is_fn && !is_pub && !all_methods {
-            continue;
-        }
+        let fn_at = m.iter().take(2).position(|it| it.tok == Tok::Kw(Kw::Fn));
         // A doc comment belongs to a member that starts its line.
-        if s == 0 || d[s - 1].role == Role::Semi || d[s - 1].line != m[0].line {
-            doc(m[0].line, indent, out);
-        }
-        let sig = match (is_fn, body(m)) {
-            (true, Some((b, _))) => &m[..b],
-            _ => m,
+        let doc = if s == 0 || d[s - 1].role == Role::Semi || d[s - 1].line != m[0].line {
+            doc_above(scan, has_code, m[0].line)
+        } else {
+            Vec::new()
         };
-        out.push_str(indent);
-        out.push_str(&flat(sig));
-        out.push('\n');
+        let sig = match (fn_at, body(m)) {
+            (Some(_), Some((b, _))) => flat(&m[..b]),
+            _ => flat(m),
+        };
+        out.push(Member {
+            items: m,
+            fn_at,
+            is_pub: m[0].tok == Tok::Kw(Kw::Pub),
+            sig,
+            doc,
+        });
+    }
+    out
+}
+
+/// The lines of `members` that a declaration shows (`Member::shown`):
+/// each member after its doc comment, indented by `indent`.
+pub(crate) fn render_members(
+    members: &[Member],
+    all_methods: bool,
+    indent: &str,
+    out: &mut String,
+) {
+    for m in members.iter().filter(|m| m.shown(all_methods)) {
+        for c in m.doc.iter().chain([&m.sig]) {
+            out.push_str(indent);
+            out.push_str(c);
+            out.push('\n');
+        }
     }
 }
 
 /// Tokens on one line, without the trailing comma of a multi-line list.
-fn flat(items: &[Item]) -> String {
+pub(crate) fn flat(items: &[Item]) -> String {
     let keep = (0..items.len())
         .filter(|&i| {
             let next = items[i + 1..].iter().find(|it| it.role != Role::Semi);
