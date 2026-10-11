@@ -67,6 +67,109 @@ step that moves `browser/` into its own repo (P8.1). Finished steps:
 | P5 | B8 "What remains" resolved (W6) | the list is empty or out of scope | paused |
 | P6 | Release | manual checklist recorded; final site run; tag | paused |
 
+## P8 split plan
+
+P8.1 was a dry run (2026-10-11, no repo created). `browser/` was copied
+to a scratch directory with nothing else of this repo around it.
+`aye check`, `aye build` and `aye test` on the copy exit 0 (131 tests, 15
+modules), and the `tests/browser.rs` harness, run from a scratch root
+against the copy, passed 62 of 62 with one changed line.
+
+**What broke out of tree.** Almost nothing:
+
+- `browser/` has no symlinks, no import of `std/` or `framework/` files
+  (std is built into the compiler), and no source-level path into the
+  repo. The only `@cimport`s are system headers (`pthread.h`,
+  `dirent.h`, SDL2, FreeType, libcurl, HarfBuzz, brotli), found through
+  `pkg-config` and `~/.cache/aye`.
+- `aye build` named the binary after the directory (`browser`), not
+  `anyknown`. Fixed: `browser/aye.toml` has `name = "anyknown"` and no
+  `[deps]` (the browser imports no library besides std).
+- `browser/build.sh` ran `cargo build` and `target/release/aye` from the
+  parent directory, so it failed anywhere but the Aye repo. Fixed: it
+  uses `$AYE`, else `aye` on the PATH, and runs cargo only when the
+  parent directory is the Aye repo (`Cargo.toml` with `name = "aye"`).
+- `browser/README.md` showed only the Aye repo build. Fixed: it shows
+  the `aye build browser` and `AYE=... browser/build.sh` forms.
+- `tests/browser.rs` is the one piece that still needs a change at split
+  time (below): `aye()` uses `env!("CARGO_BIN_EXE_aye")`, which only
+  exists in the Aye crate.
+
+**Layout decision: keep the paths.** The new repo keeps the same
+paths (`browser/...`, `tests/browser.rs`, `docs/browser.md`), so no path
+in source comments, docs, `page_load.py`, `jsbench/run.sh` (they
+`cd` three levels up and call `browser/build.sh`), `sites.json` or the
+tests changes. `git subtree split` takes one prefix, so P8.2 uses `git
+filter-repo --path` for several (as the backlog already said). Flattening
+`browser/` to the repo root is a later, separate change.
+
+**Files that move** (history kept):
+
+- `browser/` whole: sources, `tests/` fixtures and goldens (including
+  `tests/screenshot`, `tests/paint` PNGs and `tests/server.py`),
+  `tools/page_load.py`, `tools/sites.json`, `tools/agent_tasks/`,
+  `COMPILER_GAPS.md`, `README.md`, `aye.toml`, `build.sh`. There is no
+  `scripts/page_load.py` and no tracked `sites/` directory: the site
+  archives live in untracked `target/sites/`, so they do not move (copy
+  them by hand when the lane resumes).
+- `tests/browser.rs` and `tests/browser/perf.rs`.
+- Docs: `docs/browser.md`, `docs/agent-protocol.md`,
+  `docs/browser-sites.md`, `docs/browser-manual-checklist.md`,
+  `docs/practices/browser.md`, `docs/plans/browser.md` (this file).
+
+**What stays in the Aye repo** (changed in P8.3, after the new repo is
+proven): `tests/common/mod.rs` (the new repo gets a copy; 79 lines, no
+Aye internals), `docs/practices/workflow.md` and `aye.md`,
+`scripts/setup-ubuntu.sh` (its comment names `browser/build.sh`; the
+new repo gets its own copy of the apt line), `scripts/rename-aye.py`
+(one-off, browser paths in its table), `README.md` (the Octane and
+jQuery notices name `browser/tests/jsbench` and `jsdom/scripts`; the
+notices move with the files), `CONTRIBUTING.md` (`browser/build.sh`),
+`site/public/index.html` (a link to the new repo), comments in
+`std/net/net.aye` and `std/http/http.aye` naming `browser/` files, and
+`docs/decisions.md`, `docs/plan.md`, `docs/plans/aye.md` (mentions of
+the browser as the largest program).
+
+**How the new repo finds the compiler.** `aye` is a tool, not a library:
+std is built in, so the browser has no `[deps]` entry. The repo pins the
+compiler in a file `AYE_REV` (a commit of `aye-lang/aye`; the Aye repo
+has no tags or releases yet) and installs it with `cargo install --git
+https://github.com/aye-lang/aye --rev $(cat AYE_REV) --locked aye`.
+Developers with a checkout of Aye set `AYE=/path/to/aye/target/release/aye`
+(read by `browser/build.sh` and by the test harness). When the framework
+(F4, P3.60) is split out, it comes in as `[deps] framework = { url =
+..., }` in `browser/aye.toml` (O4.3); until then P8's exit check "builds
+against Aye with a path or URL dependency" is met by the pinned
+compiler, since a library dependency does not exist.
+
+**How `tests/browser.rs` becomes the new repo's test.** It is a plain
+Rust integration test: it runs `aye build browser -o <tmp>/anyknown`
+once, then spawns that binary on fixtures under `browser/tests` and a
+Python `server.py`; it also runs `aye test browser`. The new repo gets a
+`Cargo.toml` with no dependencies (package `anyknown-tests`,
+`publish = false`) and the three files above. One line changes: `aye()`
+starts `std::env::var_os("AYE")` or `aye` instead of
+`env!("CARGO_BIN_EXE_aye")`. `current_dir(root())` and every
+`browser/...` path stay valid because the paths are kept. Run in a
+scratch root with `AYE` set, this passed (62 tests, 191 s).
+
+**P8.2 and later.** Run P8.2 when O6–O9 hold. It leaves the Aye repo
+untouched; P8.3 removes the browser from it after P8.2 is verified.
+
+#### P8.2: create `aye-lang/anyknown` with history
+- lane: browser
+- goal: a new repo `aye-lang/anyknown` holds `browser/`, its tests and docs with their git history, builds against a pinned Aye, and passes the browser tests in CI on macOS and Ubuntu.
+- serves: W1 (and P8's exit check)
+- files: in the new repo only: the moved files above, plus `Cargo.toml` (tests only), `AYE_REV`, `.github/workflows/ci.yml`, `scripts/setup-ubuntu.sh` (apt line copied), `README.md` at the root (one paragraph and the build commands), the one-line change in `tests/browser.rs`, and links fixed in `browser/README.md` (`../docs/practices/README.md` becomes `docs/practices/browser.md`)
+- steps: (1) `git clone --no-local` the Aye repo to a scratch directory, then `git filter-repo --path browser --path tests/browser.rs --path tests/browser --path docs/browser.md --path docs/agent-protocol.md --path docs/browser-sites.md --path docs/browser-manual-checklist.md --path docs/practices/browser.md --path docs/plans/browser.md`; (2) copy `tests/common/mod.rs` and the apt line; (3) add `Cargo.toml`, `AYE_REV` (the current `main` of Aye), the `AYE` change and the CI file; (4) the user creates the repo and pushes (do not push or create it from an agent); (5) CI: matrix macOS and Ubuntu 24.04, install the SDL2, FreeType, libcurl, HarfBuzz, brotli packages and python3, `cargo install --git ... --rev $(cat AYE_REV) --locked aye` (cached), then `aye check browser`, `aye test browser` and `cargo test --release --test browser`.
+- verify: in a fresh clone of the new repo with only the pinned `aye` installed, run one at a time: `aye check browser; echo $?` → 0; `aye test browser` → exit 0 and `131 passed; 0 failed; 15 modules` (or the then-current counts); `AYE=$(command -v aye) cargo test --release --test browser; echo $?` → 0 (62 tests); `aye build browser` writes `./anyknown`; `git log --oneline --follow browser/engine/sheets.aye | wc -l` is the same as in the Aye repo; the CI run is green on both systems.
+- depends on: O6–O9 hold; no `browser/` step in flight (merge them first; a branch cut before the split is rebased by `git filter-repo`'s commit map or redone by hand)
+- parallel with: nothing in `browser/`; Aye-lane steps may continue
+- where: local (the filter-repo run and the pinned install); the CI run is on GitHub
+- model: sonnet for the files; opus for the filter-repo path list check
+- time box: 90 min
+- notes: P8.3 (separate card, after this one): in the Aye repo delete the moved files, fix the stay-side mentions listed above, and add a downstream check (`scripts/downstream.sh`: clone `aye-lang/anyknown` at a rev recorded in `tests/downstream/ANYKNOWN_REV`, run `aye test browser` and the browser test with `AYE=target/release/aye`) that the merge agent runs after codegen, sema or std merges. That replaces M1, which `cargo test --release` no longer covers.
+
 ## Cards: PW wrap-up
 
 All wrap-up cards are done (`done.md`); the lane is frozen.
@@ -97,7 +200,7 @@ confirmed on current `main` (`docs/plan.md` rule 8). Source in brackets.
 
 - P7 flaky `http_failed_image_fetched_once` under load: the failed image was requested twice (`GET /fail/once.png` ×2) in the full suite on main 0e61757 with three agents building; 3/3 alone pass. P3.23 removed a sleep; a second fetch still races. Same class on Linux arm64: `window_relayout_after_image_load` failed once in the full suite (main 71fd28a, an amd64 Rosetta run beside it), 3/3 alone pass. Diagnose step; verify 30× under load (merge-agent check) (main, 2026-10-08).
 - P3.63 Mistral costs ~40 s CPU (was 4 s) since P3.48: its real animations run, and each forced layout re-runs layout over the whole document; the inline-style subtree restyle (0d7dddf) helps little because the main page notes other changes between writes, and one iframe uses container queries (`g.styles.queried`). Needs incremental layout; first log what the main page notes between layouts (P3.48b/d, 2026-10-08).
-- P8.1 split `browser/` into its own repo with `git filter-repo`, depend on Aye through O4.2/O4.3, move `tests/browser.rs` and the browser docs with it (decision 2026-10-08).
+- P8.2, P8.3 split `browser/` into its own repo with `git filter-repo`, move `tests/browser.rs` and the browser docs with it (decision 2026-10-08; P8.1 dry run done 2026-10-11; cards in "P8 split plan").
 - P1.6 `page_load.py` writes `last.stdout`/`last.stderr` into the archive folder; move them under `target/page-load-out/`; set a floor for the 0.8 CPU/wall warning (P1.5).
 - P1.14 `visual` field per site in `sites.json` (ok / defects / date), printed by `check`; W3 needs it (screens review 2026-10-08).
 - P3.7 Mistral: short iframe widgets, `setTransform` errors; recheck after P3.48 (old P3 table).
