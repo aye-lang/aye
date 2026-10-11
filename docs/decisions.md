@@ -594,3 +594,40 @@ O4.1 design for O7: an app with a local-path and a URL dependency builds with `a
   - E0123: a dependency with dependencies of its own.
 
   Each is reported at its line of `aye.toml` or `aye.lock` (the file becomes one of the program's source files for diagnostics), except the directory collision of E0120, which is reported at the `import`.
+
+## aye test compile time (O5.2d)
+
+`aye test browser` takes 9.3 s wall (131 passed): about 6.3 s of it is the one `clang` run on the generated C. Measured on macOS (Apple Silicon, 10 cores, Apple clang 17.0.0) with other agents running (load 5-6 for the timings below, 3 runs each unless the cell says otherwise; wall equals CPU for one `clang`, so the load shifts them by about 5%). To get the C, a temporary line in `compile` (`src/driver.rs`) copied the temp `.c` file; it is not committed. The clang command was copied from a `clang` wrapper on `PATH` (the link flags of `@link`, `-lm`, `-pthread`, `-x none` libraries), so every row below links, except where it says `-c`.
+
+**The C:** 27,645,544 bytes, 742,214 lines, 255,566 of them `#line` (one per OIR statement), about 5,300 function bodies, 11,121 `static` lines (prototypes and definitions), output executable 6.3 MB. No `-fsanitize` and no `-fstack-protector` is passed (Apple clang's default stack protector pass is 0.5% of the back end). `src` has no `backtrace`, `dladdr`, `atos` or `lldb` use: panic, leak and trace positions are constants from the span (`AYE_FILE`, `AYE_LINE`), not read from DWARF.
+
+| Run (one `clang` over the whole C) | Wall, s |
+| --- | --- |
+| `-O0 -g` (today), link and `dsymutil` included | 6.1-6.3 |
+| same, `-c` only (no link, no `dsymutil`) | 6.0 (so link + `dsymutil` is about 0.3) |
+| `-O0` (no `-g`) | 3.4-3.5 |
+| `-O0 -gline-tables-only` | 5.7 |
+| `-O0 -g1` | 5.7 |
+| `-O0 -g -fno-standalone-debug` / `-gdwarf-4` | 6.2 / 6.1 |
+| `-O0 -g -mllvm -global-isel=0` (with or without `-fast-isel`) | 5.5 (-12%) |
+| `-fsyntax-only` (parse and sema) | 0.83 |
+| `-O0 -g`, every `#line` removed from the C | 5.1-5.2 (-18%) |
+| `-O0 -g`, the 255,566 `#line` joined to 67,788 (statements of the same source line on one physical line, so the line numbers stay right) | 6.1-6.4 (no gain) |
+| `-O0` with no `#line` | 3.35 (so `#line` costs nothing without `-g`) |
+| `-O0 -g -c`, all functions made non-`static` | 7.1 (about 15% of the functions are dead; clang drops unused `static` ones) |
+| `-O0 -g -c`, the C split in 4 by function, 4 `clang` at once | 1.9-2.0 |
+| same, 8 parts at once | 1.4-1.6 |
+| split in 4 / 8, `-O0` without `-g` | 1.3 / 0.84 |
+
+`-ftime-report` (`-O0 -g`, taken under load 14-20, so the sums are inflated; read the shares): LLVM IR generation 2.16 s, code generation 4.17 s. Without `-g`: IR generation 0.29 s (the same front end), code generation 3.4 s. Parse and sema is 0.83 s (the `-fsyntax-only` row). In the back end at `-O0` this Apple clang uses GlobalISel (IRTranslator, Legalizer, InstructionSelect, RegBankSelect: about 1.4 s of 2.9 s); `-g` adds 0.3 s of "Live DEBUG_VALUE analysis" and 0.2 s more in the assembly printer.
+
+**Cause:** the time is code generation and not the front end, and it grows with the amount of C: 742 k lines of statements at `-O0` is 3.4 s, parse and sema only 0.83 s of it. On top, `-g` costs 2.7 s (45% more): every statement and every temporary (`t1`..`tN`, which Aye's OIR emits as C locals) gets a debug location and a debug variable, and the `#line` of each statement makes IR generation 7 times slower (0.3 s to 2.2 s). `-gline-tables-only`/`-g1` removes only a little of that (5.7 s), because the per-instruction locations remain. One `clang` is also one core of ten. A split of the same C into parts compiles at close to 1/K of the time (7.1 s of CPU in 4 parts of 1.9 s), so the work is parallel in the C: nothing in it ties the functions together except prototypes.
+
+**Not applied:** no flag alone gives 25% without losing something. Dropping `-g` gives 45% but `Mode::Debug` is also `build` and `run` (lldb, line tables for sanitizer reports under `--cflags`); `-gline-tables-only` gives 7-10%; `-mllvm -global-isel=0` gives 12%, is specific to this clang's `-O0` back end, and `-mllvm` flags are not stable across versions. Nothing changed in `src/`.
+
+**Recommended cards (the first is the one to do):**
+1. **Compile the C in N parts at once** (N = min(cores, 8)): `cgen` emits one shared header (types, prototypes, runtime) and K bodies with non-`static` functions (hidden visibility; the globals defined in one part and declared `extern` in the others); `cc` runs K `clang -c` and one link. Expected: 6.3 s to about 2.2 s (4 parts) or 1.8 s (8 parts) with `-g`; about 1.2 s without it. It costs about 15% more CPU (the dead functions are no longer dropped, and each part parses the 2.4 MB header again: 0.4 s each) and helps `build`/`run` of big programs the same way. Verify: `aye test browser` wall time and `cargo test --release --test golden` (the goldens use the same `cc`).
+2. **No `-g` for the executable of `aye test`** unless `--cflags` is given (a `cc` variant used only by `run_tests`; `build` and `run` keep `-g`). Expected: 6.3 s to 3.4 s (-45%), and about 1.2 s with the first card. It loses lldb and sanitizer line numbers in test executables (a test that needs them is run with `aye run` or `--cflags -g`); test failure positions do not change (they are the constants above).
+3. **Fewer statements in the C** (smaller and cheaper per test): the 15% dead functions are generated and then dropped by clang (the front end of `aye` and the parse of 0.83 s); reaching only the functions that tests call (tree-shake before `cgen`) would cut parse and IR work by about the same share. Expected: 0.5-1 s. Lowest priority; the first card makes it less useful.
+
+**Not measured:** the real link of the split parts (the experiment compiled the parts with `-c` and did not link, so `static` data was duplicated; a link of N objects and `dsymutil` is about 0.3 s for one); a run with no other agents on the machine.
