@@ -15,18 +15,23 @@
 //! Modules are named by their import path (`shapes`, `std.text`); the root
 //! module by the path given. A module's leading comment block (before the first blank line, unless it
 //! is a `///` comment) is printed as the module's documentation.
+//!
+//! `aye doc --html` writes the same documentation as HTML pages: see `html`.
 
 use crate::fmt::{self, Br, Item, Role, Scan};
 use crate::lexer::{Kw, Tok};
 use crate::module::{STD_FILES, std_module_hint};
 use std::path::{Path, PathBuf};
 
-/// The documentation of the modules at `path`: `std` (every std module) or
-/// `std.<name>` (one, from the embedded std), a `.aye` file, or a directory
-/// (it and every directory under it with `.aye` files is a module).
-pub fn signatures(path: &str) -> Result<String, String> {
-    // (module name, files as (name, text))
-    let mut modules: Vec<(String, Vec<(String, String)>)> = Vec::new();
+/// Modules as (module name, files as (name, text)).
+type Modules = Vec<(String, Vec<(String, String)>)>;
+
+/// The modules at `path` as (module name, files as (name, text)): `std`
+/// (every std module) or `std.<name>` (one, from the embedded std), a `.aye`
+/// file, or a directory (it and every directory under it with `.aye` files
+/// is a module).
+fn load(path: &str) -> Result<Modules, String> {
+    let mut modules: Modules = Vec::new();
     if path == "std" || path.starts_with("std.") {
         for (module, file, src) in STD_FILES {
             if *module == path || module.starts_with(&format!("{path}.")) {
@@ -53,22 +58,37 @@ pub fn signatures(path: &str) -> Result<String, String> {
             modules.push((path.to_string(), vec![(path.to_string(), text)]));
         }
     }
+    Ok(modules)
+}
+
+/// The documentation text of one module's files, as `signatures` prints it
+/// after the module's header line.
+fn module_text(files: &[(String, String)]) -> Result<String, String> {
     let mut out = String::new();
-    for (module, files) in &modules {
+    for (name, text) in files {
+        let scan = fmt::scan(text).map_err(|errs| {
+            let names = std::slice::from_ref(name);
+            errs.into_iter()
+                .map(|e| e.with_file(names).render())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
+        file_doc(&scan, &mut out);
+    }
+    Ok(out)
+}
+
+/// The documentation of the modules at `path`: `std` (every std module) or
+/// `std.<name>` (one, from the embedded std), a `.aye` file, or a directory
+/// (it and every directory under it with `.aye` files is a module).
+pub fn signatures(path: &str) -> Result<String, String> {
+    let mut out = String::new();
+    for (module, files) in &load(path)? {
         if !out.is_empty() {
             out.push('\n');
         }
         out.push_str(&format!("// module {module}\n"));
-        for (name, text) in files {
-            let scan = fmt::scan(text).map_err(|errs| {
-                let names = std::slice::from_ref(name);
-                errs.into_iter()
-                    .map(|e| e.with_file(names).render())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })?;
-            file_doc(&scan, &mut out);
-        }
+        out.push_str(&module_text(files)?);
     }
     Ok(out)
 }
@@ -322,6 +342,261 @@ fn flat(items: &[Item]) -> String {
     fmt::join(keep)
 }
 
+/// `aye doc --html`: write `index.html` (the module list) and one
+/// `<module>.html` per module of `path` (see `signatures`) into `out_dir`,
+/// which is created. Returns the number of modules.
+pub fn html(path: &str, out_dir: &Path) -> Result<usize, String> {
+    let mut modules = load(path)?;
+    let std = path == "std" || path.starts_with("std.");
+    // (module name, page file, documentation)
+    let mut pages: Vec<(String, String, Page)> = Vec::new();
+    for (module, files) in &mut modules {
+        if !std && module == path {
+            *module = root_name(path);
+        }
+        let page = parse_page(&module_text(files)?);
+        pages.push((module.clone(), page_file(module), page));
+    }
+    pages.sort_by(|a, b| a.0.cmp(&b.0));
+    for w in pages.windows(2) {
+        if w[0].1 == w[1].1 {
+            return Err(format!(
+                "aye: modules `{}` and `{}` have the same page `{}`",
+                w[0].0, w[1].0, w[0].1
+            ));
+        }
+    }
+    let list: Vec<(&str, &str)> = pages
+        .iter()
+        .map(|(m, f, _)| (m.as_str(), f.as_str()))
+        .collect();
+    std::fs::create_dir_all(out_dir)
+        .map_err(|e| format!("aye: cannot create {}: {e}", out_dir.display()))?;
+    let write = |file: &str, text: String| {
+        let p = out_dir.join(file);
+        std::fs::write(&p, text).map_err(|e| format!("aye: cannot write {}: {e}", p.display()))
+    };
+    write("index.html", index_html(&list))?;
+    for (module, file, page) in &pages {
+        write(file, module_html(module, page, &list))?;
+    }
+    Ok(pages.len())
+}
+
+/// The name of the root module of a file or directory `path`: its stem or
+/// its own name, so that it makes a file name.
+fn root_name(path: &str) -> String {
+    let p = Path::new(path);
+    let name = if p.is_dir() {
+        p.canonicalize()
+            .ok()
+            .and_then(|c| c.file_name().map(|n| n.to_string_lossy().into_owned()))
+    } else {
+        p.file_stem().map(|n| n.to_string_lossy().into_owned())
+    };
+    name.unwrap_or_else(|| "root".to_string())
+}
+
+/// The page file of a module: its name with other characters than letters,
+/// digits, `.`, `_` and `-` replaced by `_`; `index` is the module list's.
+fn page_file(module: &str) -> String {
+    let stem: String = module
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem == "index" {
+        "index_module.html".to_string()
+    } else {
+        format!("{stem}.html")
+    }
+}
+
+/// One module's documentation: its comment lines and its pub declarations.
+struct Page {
+    doc: Vec<String>,
+    decls: Vec<Decl>,
+}
+
+/// A pub declaration: its `///` lines (without the slashes) and its
+/// signature text.
+struct Decl {
+    doc: Vec<String>,
+    code: String,
+}
+
+/// Parse the text of `module_text`: paragraphs separated by blank lines;
+/// one of only `//` comment lines is module documentation, any other is a
+/// declaration with the `///` lines at its start as its documentation.
+fn parse_page(text: &str) -> Page {
+    let mut page = Page {
+        doc: Vec::new(),
+        decls: Vec::new(),
+    };
+    let strip = |l: &str, n: usize| {
+        let l = &l[n..];
+        l.strip_prefix(' ').unwrap_or(l).to_string()
+    };
+    let mut group: Vec<&str> = Vec::new();
+    for line in text.lines().chain(std::iter::once("")) {
+        if !line.is_empty() {
+            group.push(line);
+            continue;
+        }
+        let docs = group.iter().take_while(|l| l.starts_with("///")).count();
+        if docs == 0 && !group.is_empty() && group.iter().all(|l| l.starts_with("//")) {
+            if !page.doc.is_empty() {
+                page.doc.push(String::new());
+            }
+            page.doc.extend(group.iter().map(|l| strip(l, 2)));
+        } else if docs < group.len() {
+            page.decls.push(Decl {
+                doc: group[..docs].iter().map(|l| strip(l, 3)).collect(),
+                code: group[docs..].join("\n"),
+            });
+        }
+        group.clear();
+    }
+    page
+}
+
+/// `text` with the characters HTML treats specially escaped.
+fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Doc comment lines as HTML: a blank line ends a paragraph; lines that
+/// start with 4 spaces, and lines between fences, are `<pre>`; the rest is
+/// plain text in `<p>`.
+fn doc_html(lines: &[String]) -> String {
+    fn flush(para: &mut Vec<String>, pre: &mut Vec<String>, out: &mut String) {
+        if !para.is_empty() {
+            out.push_str(&format!("<p>{}</p>\n", escape(&para.join("\n"))));
+            para.clear();
+        }
+        if !pre.is_empty() {
+            out.push_str(&format!("<pre>{}</pre>\n", escape(&pre.join("\n"))));
+            pre.clear();
+        }
+    }
+    let (mut out, mut para, mut pre) = (String::new(), Vec::new(), Vec::new());
+    let mut fenced = false;
+    for line in lines {
+        if fenced {
+            if line.trim_start().starts_with("```") {
+                fenced = false;
+                flush(&mut para, &mut pre, &mut out);
+            } else {
+                pre.push(line.trim_end().to_string());
+            }
+        } else if line.trim_start().starts_with("```") {
+            flush(&mut para, &mut pre, &mut out);
+            fenced = true;
+        } else if line.trim().is_empty() {
+            flush(&mut para, &mut pre, &mut out);
+        } else if let Some(code) = line.strip_prefix("    ") {
+            flush(&mut para, &mut Vec::new(), &mut out);
+            pre.push(code.trim_end().to_string());
+        } else {
+            flush(&mut Vec::new(), &mut pre, &mut out);
+            para.push(line.trim().to_string());
+        }
+    }
+    flush(&mut para, &mut pre, &mut out);
+    out
+}
+
+/// The name a declaration introduces: `eql` for `pub fn eql(...)`.
+fn decl_name(code: &str) -> String {
+    let first = code.lines().next().unwrap_or("");
+    let mut words = first
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty() && !matches!(*w, "pub" | "extern"));
+    let kind = words.next().unwrap_or("");
+    words.next().unwrap_or(kind).to_string()
+}
+
+const STYLE: &str = "\
+:root { color-scheme: light dark; --bg: #fff; --fg: #1d2127; --dim: #5b6470; --code: #f3f4f6; --line: #d8dce1; --link: #0b5cad; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171b; --fg: #e3e6ea; --dim: #99a2ad; --code: #1f242a; --line: #333a42; --link: #7db4ee; }
+}
+body { margin: 0 auto; padding: 1rem 1rem 4rem; max-width: 46rem; background: var(--bg); color: var(--fg); font: 1rem/1.6 system-ui, sans-serif; }
+a { color: var(--link); }
+h1 { font-size: 1.8rem; margin: 1.5rem 0 1rem; }
+h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+pre { margin: .8rem 0; padding: .7rem 1rem; overflow-x: auto; background: var(--code); border-radius: 6px; font: .9rem/1.5 ui-monospace, monospace; }
+code { font-family: ui-monospace, monospace; }
+nav ul { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: .6rem 0 0; padding: 0; list-style: none; }
+nav [aria-current] { color: var(--fg); font-weight: 600; text-decoration: none; }
+header { padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
+";
+
+fn page_html(title: &str, nav: &str, body: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>{title}</title>\n<style>\n{STYLE}</style>\n</head>\n<body>\n\
+         <header>\n{nav}</header>\n<main>\n{body}</main>\n</body>\n</html>\n"
+    )
+}
+
+/// The link list of every module; the one `current` is marked.
+fn nav_html(modules: &[(&str, &str)], current: Option<&str>) -> String {
+    let mut out = String::from("<nav aria-label=\"Modules\">\n<ul>\n");
+    for (module, file) in modules {
+        let name = escape(module);
+        if current == Some(module) {
+            out.push_str(&format!(
+                "<li><a href=\"{file}\" aria-current=\"page\">{name}</a></li>\n"
+            ));
+        } else {
+            out.push_str(&format!("<li><a href=\"{file}\">{name}</a></li>\n"));
+        }
+    }
+    out.push_str("</ul>\n</nav>\n");
+    out
+}
+
+fn index_html(modules: &[(&str, &str)]) -> String {
+    let nav = "<a href=\"index.html\">Aye documentation</a>\n";
+    let mut body = String::from("<h1>Aye documentation</h1>\n<h2>Modules</h2>\n");
+    body.push_str(&nav_html(modules, None));
+    page_html("Aye documentation", nav, &body)
+}
+
+fn module_html(module: &str, page: &Page, modules: &[(&str, &str)]) -> String {
+    let name = escape(module);
+    let mut nav = String::from("<a href=\"index.html\">Aye documentation</a>\n");
+    nav.push_str(&nav_html(modules, Some(module)));
+    let mut body = format!("<h1>{name}</h1>\n");
+    body.push_str(&doc_html(&page.doc));
+    for d in &page.decls {
+        let id = escape(&decl_name(&d.code));
+        body.push_str(&format!(
+            "<h2 id=\"{id}\">{id}</h2>\n<pre><code>{}</code></pre>\n",
+            escape(&d.code)
+        ));
+        body.push_str(&doc_html(&d.doc));
+    }
+    page_html(&format!("{name} - Aye documentation"), &nav, &body)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -356,5 +631,44 @@ mod tests {
             out.contains("        pub fn append(self: *mut Self, value: T) AllocError!void\n"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn doc_comment_blocks() {
+        let lines: Vec<String> = [
+            "Compare <a> & \"b\".",
+            "Second line.",
+            "",
+            "New paragraph.",
+            "    indented()",
+            "    more <b>",
+            "Back to text.",
+            "```",
+            "fenced & raw",
+            "",
+            "still fenced",
+            "```",
+        ]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+        assert_eq!(
+            super::doc_html(&lines),
+            "<p>Compare &lt;a&gt; &amp; &quot;b&quot;.\nSecond line.</p>\n\
+             <p>New paragraph.</p>\n\
+             <pre>indented()\nmore &lt;b&gt;</pre>\n\
+             <p>Back to text.</p>\n\
+             <pre>fenced &amp; raw\n\nstill fenced</pre>\n"
+        );
+    }
+
+    #[test]
+    fn page_files_and_names() {
+        assert_eq!(super::page_file("std.text"), "std.text.html");
+        assert_eq!(super::page_file("a/b c"), "a_b_c.html");
+        assert_eq!(super::page_file("index"), "index_module.html");
+        assert_eq!(super::decl_name("pub fn eql(a: []u8) bool"), "eql");
+        assert_eq!(super::decl_name("pub extern union U {"), "U");
+        assert_eq!(super::decl_name("pub let MAX: i64 = 3"), "MAX");
     }
 }

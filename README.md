@@ -42,6 +42,7 @@ aye fix <path>                                        # apply the fix-its of `ay
 aye test <path> [--filter <text>] [--module <m>] [--json] [--time-limit <s>] [-j <n>] [--mode debug|safe|fast]   # run the `test` blocks of every module
 aye fmt [--check] <path>                              # format in place (a directory: every .aye file under it)
 aye doc --signatures <path>                           # every pub declaration with its /// comment (also `std`, `std.text`)
+aye doc --html <path> [-o <dir>]                      # the same as HTML pages: index.html and one page per module into <dir> (default `doc`)
 aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   # print the Aye declarations `@cimport` makes of a C header
 aye explain <code>                                    # explain an error code, with a wrong and a fixed example
 aye spec [<section> | all]                            # print the core of the language reference (docs/spec.md), one section, or all
@@ -65,7 +66,9 @@ do not match is reported and left alone. `aye doc --signatures` prints the pub
 API of a file, a directory module and its submodules, or the embedded std:
 signatures without bodies, fields and variants, pub methods, and each
 declaration's `///` doc comment, grouped by module. It is meant as context for
-an AI agent next to `aye spec`.
+an AI agent next to `aye spec`. `aye doc --html <path> [-o <dir>]` writes the same
+documentation as static HTML (an `index.html` that links every module and one page per
+module; one embedded stylesheet, no scripts) into `<dir>`, `doc` by default.
 
 `aye spec` prints the core of [`docs/spec.md`](docs/spec.md), a
 self-contained language reference meant to be given to an AI agent before

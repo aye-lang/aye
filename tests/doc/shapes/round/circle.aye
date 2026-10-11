@@ -1,0 +1,8 @@
+/// The area of a circle, in tenths: radius `r` in <1, 100> & whole.
+pub fn area(r: i64) i64 {
+    return 3 * r * r
+}
+
+pub fn undocumented() i64 {
+    return 0
+}

@@ -69,6 +69,7 @@ aye emit-c <path> [--mode m]                          print the generated C
 aye fmt [--check] <path>                              format in place (a directory: every .aye file under it); --check lists files that would change, exit 1
 aye lsp                                               language server on stdin/stdout: diagnostics and formatting
 aye doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
+aye doc --html <path> [-o <dir>]                      the same as HTML pages (index.html and one per module) into <dir>, default doc
 aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   print the Aye declarations that @cimport makes of a C header
 aye explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program
 aye spec [<name> | all]                               print the core of this document and list the other sections; one section; all
