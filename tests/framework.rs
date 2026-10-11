@@ -745,6 +745,13 @@ fn dev_start() {
 }
 
 #[test]
+fn dev_relative() {
+    // A relative app path: the CLI runs the server it built as `./...`.
+    let dev = start_dev(Path::new("framework/examples/pages"), free_port());
+    dev.kill_group();
+}
+
+#[test]
 fn dev_reload() {
     let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-reload");
     let _ = std::fs::remove_dir_all(&app);
