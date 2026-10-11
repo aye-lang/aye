@@ -1597,7 +1597,7 @@ std.process   child processes: spawn (piped or inherited streams), wait, kill  a
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
-std.json      JSON (RFC 8259): parse into an arena tree; write, stringify    aye doc --signatures std.json
+std.json      JSON: parse, get, asString, asNumber, at; write, stringify     below
 std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
 std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
 ```
@@ -2129,6 +2129,41 @@ pub fn main() !void {
         }
         return e
     }
+    @println(n)
+}
+```
+
+### std.json
+
+Never hand-parse JSON: `json.parse(&mut arena, text)` builds a tree in the
+arena (one `arena.deinit()` frees it), and each `Value` method gives null
+for the wrong kind of value.
+
+```
+std.json.parse(arena: *mut Arena, src: []u8) ParseError!Value
+std.json.parseDiag(arena: *mut Arena, src: []u8, diags: *mut Diagnostics) ParseError!Value   adds a diagnostic with the byte offset
+Value.get(self: *Self, key: []u8) ?*Value        member of an object; Value.at(i) ?*Value: element of an array
+Value.asString / asNumber / asBool / asArray / asObject   the payload, or null for another kind; Value.isNull() bool
+std.json.write(b: *mut Builder, v: *Value) AllocError!void           compact; std.json.writePretty(b, v, indent) indents
+std.json.stringify(alloc: Allocator, v: *Value) AllocError![]mut u8  free with alloc.free
+std.json.equals(a: *Value, b: *Value) bool
+std.json.writeNumber(b: *mut Builder, v: f64) AllocError!void
+```
+
+```aye
+import std.heap.Arena
+import std.heap.General
+import std.json
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    var v = try json.parse(&mut arena, "{\"name\": \"aye\", \"n\": [1, 2.5]}")
+    let name = v.get("name").?.asString().?
+    let n = v.get("n").?.at(1).?.asNumber().?
+    @println(name)
     @println(n)
 }
 ```
