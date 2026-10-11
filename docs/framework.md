@@ -105,8 +105,10 @@ Options:
   (Aye identifiers have no `-`; keywords and leading digits are out).
 - **B. Next.js names in the user's tree, a generated build root.** The
   generator writes `.web/`: a `main.aye`, a `routes/` module with the
-  table, and directory symlinks with identifier names
-  (`.web/r/r3_blog_slug -> ../../app/blog/[slug]`), plus one symlink per
+  table, and one module directory per app file with identifier names
+  (`.web/r/r3_blog_slug_page/page.aye -> ../../../app/blog/[slug]/page.aye`;
+  roles `page`, `route`, `layout`, `notfound`, so a page local may share a
+  name with a route's `pub fn`), plus one symlink per
   other top-level directory of the app (`.web/lib -> ../lib`) and one to
   the framework (`.web/web`). `aye check` and `aye build` run on `.web/`.
   Any URL segment works; the CLI maps `.web/r/...` paths in diagnostics
