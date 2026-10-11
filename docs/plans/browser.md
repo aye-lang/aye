@@ -6,7 +6,7 @@ The lane keeps `cargo test --release` green (the browser tests are the
 language's biggest integration test), fixes breakage caused by language
 changes, and records language gaps in `browser/COMPILER_GAPS.md`. It
 resumes when Aye criteria O6–O9 hold ([`aye.md`](aye.md)), in the same
-step that moves `browser/` into its own repo (P8.1). Finished steps:
+step that moves `browser/` into its own repo (P8.2). Finished steps:
 [`done.md`](done.md).
 
 ## Done criteria

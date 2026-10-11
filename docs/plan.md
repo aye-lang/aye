@@ -72,15 +72,15 @@ Then, in order:
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
 | Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O3.9 (std.http pool); then browser M4 | local; cloud routines for Linux |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold); O6–O9 hold, so it may resume | pick the first M4 card when a slot is free | local (archives in `target/sites/`, screenshots) |
-| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F1.1b/c, then F1.2, F1.3, then F2 cards | local or cloud |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | P8 split: P8.1 done (builds out of tree) | P8.2 (create `aye-lang/anyknown`, filter-repo, CI), then P8.3 | local (archives in `target/sites/`, screenshots) |
+| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F2.2 (layout, not-found) in flight; then F1.2a, F1.3a, F2 query/form, ETag/304 | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
 (X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are
 done, and so is Linux development (X1); next, lane cards in lane
 priority (F1.1 merged 2026-10-10; Aye-lane cards next). Project steps go when their condition
 holds. The browser resumes when Aye criteria O6–O9 are met, in the
-same step that splits `browser/` into its own repo (P8.1).
+same step that splits `browser/` into its own repo (P8.2; P8.1 made it build out of tree).
 
 ## Project
 
