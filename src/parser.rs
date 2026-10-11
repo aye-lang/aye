@@ -1927,8 +1927,9 @@ impl Parser {
 
     /// `pattern => body`, where the pattern is `_`, variant patterns
     /// separated by `,` (`.V`, `.V { a, b: c, .. }`) or integer patterns
-    /// separated by `,` (`'a'..='z', '_'`), and the body is a block or an
-    /// expression.
+    /// separated by `,` (`'a'..='z', '_'`), and the body is a block, an
+    /// expression, or `return [value]`, `break` or `continue` (a block of
+    /// that statement).
     fn match_arm(&mut self) -> Result<MatchArm> {
         let span = self.span();
         let (mut variants, mut values) = (Vec::new(), Vec::new());
@@ -1960,6 +1961,8 @@ impl Parser {
         self.expect(&Tok::FatArrow)?;
         let body = if self.at(&Tok::LBrace) {
             ArmBody::Block(self.block()?)
+        } else if matches!(self.peek(), Tok::Kw(Kw::Return | Kw::Break | Kw::Continue)) {
+            self.fallback()?
         } else {
             ArmBody::Expr(self.expr()?)
         };

@@ -927,11 +927,14 @@ errors per arm, `.A, .B { .. } =>`, bind no fields. Integer patterns:
 Arms are separated by newlines or `,`.
 
 - As an expression, each arm is an expression (not a block), and all arms
-  have the same type.
-- As a statement, each arm is a block or an expression statement: a call
-  (or builtin), `try`, `catch`, `match` or `unreachable`
-  (`.A => try self.f()`). `return` and assignments need a block:
-  `.A => { return 1 }`.
+  have the same type. An arm may also be `return [value]`, `break` or
+  `continue`: it leaves, so it has no value and takes the type of the
+  other arms (`let n = match o { .Some { n } => n, .None => return
+  error.Missing }`).
+- As a statement, each arm is a block, `return [value]`, `break`,
+  `continue` or an expression statement: a call (or builtin), `try`,
+  `catch`, `match` or `unreachable` (`.A => try self.f()`). Assignments
+  need a block: `.A => { n = 1 }`.
 - `x is .V` is `true` when the enum value `x` (or the enum that the
   pointer `x` points to) holds the variant `V`. It binds no fields (use
   `match` for them) and sits with the comparisons: `(x is .V) == b`,
