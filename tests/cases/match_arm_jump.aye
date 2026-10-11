@@ -1,0 +1,67 @@
+// A `match` that produces a value may have `return`, `break` and
+// `continue` as arm bodies: they leave, so they need no value.
+
+enum Opt {
+    Some { n: i64 }
+    None
+}
+
+error Missing { Gone }
+
+fn unwrap(o: Opt) Missing!i64 {
+    let v = match o {
+        .Some { n } => n
+        .None => return Missing.Gone
+    }
+    return v + 1
+}
+
+fn item(i: i64) Opt {
+    if i % 2 == 1 {
+        return Opt.None
+    }
+    return Opt.Some { n: i * i }
+}
+
+fn sumUntilBig(limit: i64) i64 {
+    var total: i64 = 0
+    for i in 0..limit {
+        let n = match item(i) {
+            .Some { n } => n
+            .None => continue
+        }
+        if n > 100 {
+            break
+        }
+        total += n
+    }
+    return total
+}
+
+fn stop(o: Opt) i64 {
+    let n = match o {
+        .Some { n } => n
+        .None => return -1
+    }
+    return n * 2
+}
+
+// A bare `return`, and a `defer` that runs on the way out.
+fn show(o: Opt) {
+    defer @println("done")
+    let n = match o {
+        .Some { n } => n
+        .None => return
+    }
+    @println(n)
+}
+
+pub fn main() {
+    @println(unwrap(Opt.Some { n: 4 }) catch 0)
+    @println(unwrap(Opt.None) catch 0)
+    @println(sumUntilBig(100))
+    @println(stop(Opt.Some { n: 21 }))
+    @println(stop(Opt.None))
+    show(Opt.Some { n: 7 })
+    show(Opt.None)
+}

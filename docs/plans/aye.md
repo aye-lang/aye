@@ -134,7 +134,7 @@ brackets.
 - O4.3a the `aye.lock: <key> sha256 <hex>` notice goes to stderr, not stdout (it precedes program output on the first `aye run` and the C text of `aye emit-c`; O4.3 report). Verify: `tests/deps.rs` step 1 checks stderr; `app.out` unchanged.
 - O4.3b `aye.lock` is read only when the manifest has a URL dep, so a malformed stale lock is silent (O4.3 report); read it whenever it exists. Verify: an `errors` case with a bad lock and no URL deps gives E0119.
 - O1.18a `std.log.line(format, args...)`: stderr, newline, no prefix; `std.log` is a compiler builtin (`src/sema.rs`, `module.rs`, `oir.rs`, `cgen.rs`, `codes.rs`), so this waits for O1.19 and O4.3 to merge; also the `error: `/`info: ` prefix clause in the §15 `std.log` line and a 2-line example in `### std.log`. Verify: a `tests/cases` golden with `.stderr`; `aye spec | wc -c` under 28000.
-- O1.19 E0006 for `return`/`break` as a match-arm expression names the fix (wrap in a block) or allows it (2026-10-11 eval, the only compile error in 15 runs). Verify: an `errors/` golden with the hint; `codes` example.
+- O1.19a a value `match` whose arms all `return`/`break`/`continue` gets type `void`, so `let v = match ...` fails downstream with an unhelpful message (O1.19 report). Verify: an `errors` golden with a clear E-code.
 - O1.20 `aye check <missing file>` says to write the file first (eval: http_hello probes `aye check` on a missing file every run; low value). Verify: a CLI golden.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).

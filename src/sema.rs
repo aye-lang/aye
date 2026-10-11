@@ -1331,6 +1331,28 @@ fn suggest<'n>(
     }
 }
 
+/// Is `b` just `return [value]`, `break` or `continue`, the form that a
+/// `match` arm may take in a `match` that produces a value?
+fn is_jump_block(b: &ast::Block) -> bool {
+    matches!(
+        &b.stmts[..],
+        [ast::Stmt {
+            kind: StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue,
+            ..
+        }]
+    )
+}
+
+/// Is a `match` at the end of a value block a statement? It is when an arm
+/// is a block that does more than leave, or when no arm gives a value.
+fn match_is_stmt(arms: &[ast::MatchArm]) -> bool {
+    let block = |a: &ast::MatchArm| matches!(a.body, ArmBody::Block(_));
+    let value = |a: &ast::MatchArm| matches!(&a.body, ArmBody::Expr(x) if !matches!(strip_parens(x).kind, ExprKind::Unreachable));
+    arms.iter()
+        .any(|a| matches!(&a.body, ArmBody::Block(b) if !is_jump_block(b)))
+        || (arms.iter().any(block) && !arms.iter().any(value))
+}
+
 /// Does every path through `stmts` end in `return` (or, with `or_jumps`,
 /// in `break` or `continue`)?
 fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
@@ -3651,7 +3673,7 @@ impl<'a> Checker<'a> {
             }
             if let (Some(want), StmtKind::Expr(e), true) = (value, &s.kind, i + 1 == b.stmts.len())
                 && !matches!(&strip_parens(e).kind, ExprKind::Unreachable)
-                && !matches!(&strip_parens(e).kind, ExprKind::Match { arms, .. } if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))))
+                && !matches!(&strip_parens(e).kind, ExprKind::Match { arms, .. } if match_is_stmt(arms))
             {
                 match self.tail_value(e, want) {
                     Ok(kind) => out.push(TStmt { kind, span: s.span }),
@@ -7903,10 +7925,17 @@ impl<'a> Checker<'a> {
             }
             checked[i] = Some(arm);
         }
+        // Arms that all leave (`return`, `break`, `continue`) give no type.
         let ty = if is_stmt {
             Type::Void
         } else {
-            want.unwrap_or(Type::Error)
+            want.unwrap_or(
+                if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))) {
+                    Type::Void
+                } else {
+                    Type::Error
+                },
+            )
         };
         let arms = checked.into_iter().map(Option::unwrap).collect();
         Ok(TExpr {
@@ -8017,7 +8046,7 @@ impl<'a> Checker<'a> {
             }
         }
         let body = match &arm.body {
-            ArmBody::Block(b) if is_stmt => TArmBody::Block(self.block(b)),
+            ArmBody::Block(b) if is_stmt || is_jump_block(b) => TArmBody::Block(self.block(b)),
             ArmBody::Block(b) => {
                 return err(
                     E0059,
