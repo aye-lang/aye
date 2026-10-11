@@ -3,6 +3,9 @@ Content-Type: text/event-stream
 Cache-Control: no-cache
 Connection: keep-alive
 
+event: hello
+data: first
+
 <end>
 streams: 1
 HTTP/1.1 200 OK
@@ -21,10 +24,21 @@ data: two
 data: lines
 
 <end>
+big: true
+big open: true
+after wrote to 2
+event: after
+data: ok
+
+<end>
+big dropped: true
 HTTP/1.1 200 OK
 Content-Type: text/event-stream
 Cache-Control: no-cache
 Connection: keep-alive
+
+event: hello
+data: first
 
 <end>
 streams: 2

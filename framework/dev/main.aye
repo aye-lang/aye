@@ -49,7 +49,7 @@ import std.text.Builder
 import std.thread
 import std.time
 import web.Response
-import web.beatMs
+import web.devBuildFrame
 import web.devInject
 import web.devScript
 
@@ -81,25 +81,16 @@ struct Server {
 /// What the error server of a broken build answers with.
 struct Page {
     body: []u8
-}
-
-/// What the thread that sends the beats of the error server needs: the
-/// listener, this build's id and whether to end.
-struct Beat {
-    server: *mut http.Server
-    id: []u8
-    done: Atomic(u32)
+    // The first event of `/_web/events`: `event: build` with this build's id.
+    frame: []u8
 }
 
 /// The error server: the listener (on the heap, as the thread has its
-/// address), the page it serves, the thread that runs it and the thread
-/// that sends the build id to its event streams.
+/// address), the page it serves and the thread that runs it.
 struct Fallback {
     cell: []mut http.Server
     page: []mut Page
     runner: thread.Thread
-    beat: []mut Beat
-    beater: thread.Thread
     port: u16
 }
 
@@ -424,7 +415,12 @@ fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
         note("cannot build the error page", "")
         return null
     }
-    let page = alloc.alloc(Page { body: body }, 1) catch |err| {
+    let frame = devBuildFrame(alloc, id) catch |err| {
+        note("cannot build the error page", "")
+        return null
+    }
+    alloc.free(id)
+    let page = alloc.alloc(Page { body: body, frame: frame }, 1) catch |err| {
         die("out of memory", "")
         unreachable
     }
@@ -439,21 +435,13 @@ fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
                 die("cannot start a thread", "")
                 unreachable
             }
-            let beat = alloc.alloc(Beat { server: &mut cell[0], id: id, done: Atomic(u32) { value: 0 } }, 1) catch |err| {
-                die("out of memory", "")
-                unreachable
-            }
-            let b = thread.spawn(Beat, beats, &mut beat[0]) catch |err| {
-                die("cannot start a thread", "")
-                unreachable
-            }
             let bound = cell[0].port()
             var addr = Builder.init(alloc)
             defer addr.deinit()
             addr.append("127.0.0.1:") catch |err| {}
             addr.appendUint(bound as u64) catch |err| {}
             note("serving the error page", addr.bytes())
-            return Fallback { cell: cell, page: page, runner: t, beat: beat, beater: b, port: bound }
+            return Fallback { cell: cell, page: page, runner: t, port: bound }
         } else |err| {
             if number == 0 || tries >= 10 {
                 note("cannot listen for the error page", port)
@@ -488,25 +476,13 @@ fn buildId(alloc: Allocator) ![]mut u8 {
     return b.toOwned()
 }
 
-/// Sends `event: build` with the id to every open event stream each
-/// `beatMs`, until `done`.
-fn beats(job: *mut Beat) {
-    var gpa = General.init()
-    defer gpa.deinit()
-    while job.done.load() == 0 {
-        time.sleep(beatMs)
-        let sent = job.server.broadcast(gpa.allocator(), "build", job.id) catch |err| {
-            continue
-        }
-    }
-}
-
 /// Answers `/_web/events` with an event stream and `/_web/dev.js` with the
 /// script, as the app server does with `--dev`, and every other request with
 /// the error page.
 fn answer(page: *mut Page, req: *http.Request, res: *mut http.Response, alloc: Allocator) {
     if text.eql(req.method, "GET") && text.eql(req.target, "/_web/events") {
         res.status = 200
+        res.body = page.frame
         res.stream()
         return
     }
@@ -538,12 +514,9 @@ fn runFallback(srv: *mut http.Server) {
 
 /// Ends the error server, waits for its thread and frees its page.
 fn stopFallback(alloc: Allocator, f: Fallback) {
-    f.beat[0].done.store(1)
-    f.beater.join()
     f.cell[0].stop()
     f.runner.join()
-    alloc.free(f.beat[0].id)
-    alloc.free(f.beat)
+    alloc.free(f.page[0].frame)
     alloc.free(f.page[0].body)
     alloc.free(f.page)
     alloc.free(f.cell)
