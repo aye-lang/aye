@@ -86,13 +86,14 @@ fn first_build_locks_then_builds_offline_then_rejects_a_changed_archive() {
     let want = std::fs::read_to_string(url_dir().join("app.out")).unwrap();
     let hex = aye::sha256::hex(&std::fs::read(&fx.tarball).unwrap());
 
-    // 1. The first build downloads, locks and prints the hash.
+    // 1. The first build downloads, locks and prints the hash on stderr,
+    // so stdout is the program's output alone.
     let (out, err, code) = fx.aye(&["run"]);
     assert_eq!(
         (out, err, code),
         (
-            format!("aye.lock: tinyjson sha256 {hex}\n{want}"),
-            String::new(),
+            want.clone(),
+            format!("aye.lock: tinyjson sha256 {hex}\n"),
             Some(0)
         )
     );

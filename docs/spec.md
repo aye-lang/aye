@@ -1476,7 +1476,9 @@ tinyjson = { url = "https://example.com/tinyjson-1.2.tar.gz", sha256 = "9f2c...6
 
 - A locked archive whose bytes hash differently is E0122; if the change
   is intended, delete its line in `aye.lock` and build again. A changed
-  `url` gets a new entry. Path dependencies are not locked.
+  `url` gets a new entry. Path dependencies are not locked. A new entry is
+  announced on stderr (`aye.lock: tinyjson sha256 <hex>`), never on stdout.
+  A malformed `aye.lock` is E0119, with or without URL dependencies.
 - Archives are unpacked into `$AYE_CACHE` (else `$XDG_CACHE_HOME/aye`, else `~/.cache/aye`) under
   `sha256/<hex>/`. When every URL dependency is locked and cached, the
   build uses no network. A dependency that cannot be read or downloaded
