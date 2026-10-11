@@ -146,7 +146,7 @@ file by hand. Tests run only the named case (`cargo test --release
 - goal: the server started with `--dev` adds `<script src="/_web/dev.js"></script>` to every HTML page, serves `/_web/dev.js`, and answers `/_web/events` with a server-sent event stream that sends the build id first.
 - serves: FD5
 - files: `framework/web/serve.aye`, `framework/web/dev.aye` (new: the script text, the injection, the events route), `tests/framework.rs`, `tests/framework/pages/dev_*.http` (new)
-- verify: `cargo test --release --test framework dev_mode` → exit 0; the test starts the built pages example with `--port 0 --dev`: `GET /about` has the script tag once, before `</body>`; `GET /_web/dev.js` is `200 text/javascript`; a raw TCP `GET /_web/events` returns `200`, `Content-Type: text/event-stream` and `data: <id>\n\n` within 2 s, the same id on a second connection and another id after a second server start; without `--dev` both paths are 404
+- verify: `cargo test --release --test framework dev_script` → exit 0; the test starts the built pages example with `--port 0 --dev`: `GET /about` has the script tag once, before `</body>`; `GET /_web/dev.js` is `200 text/javascript`; a raw TCP `GET /_web/events` returns `200`, `Content-Type: text/event-stream` and `data: <id>\n\n` within 2 s, the same id on a second connection and another id after a second server start; without `--dev` both paths are 404
 - depends on: O3.6b
 - parallel with: F3.1 to F3.4 (different files; `tests/framework.rs` merges by hand)
 - where: local
