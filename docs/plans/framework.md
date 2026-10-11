@@ -264,11 +264,11 @@ worktrees) and run only the named case.
 - where: local
 - model: sonnet
 - time box: 120 min
-- notes: ES module with no imports, `export` nothing; it runs on load, so a page needs only `<script type="module" src="/_web/islands.js">`. `dom_set_text` is `textContent`; `dom_on` is `addEventListener(name, () => exports.event(id))`. `window` and `document` are used only inside functions, so the file parses and loads under Node with the fake.
+- notes: ES module with no imports, `export` nothing; it runs on load, so a page needs only `<script defer src="/_web/islands.js">`. `dom_set_text` is `textContent`; `dom_on` is `addEventListener(name, () => exports.event(id))`. `window` and `document` are used only inside functions, so the file parses and loads under Node with the fake.
 
 #### F4.3: `web.island` writes the markup and the script tag
 - lane: framework
-- goal: `web.island(h, name, props, render)` writes `<div data-island="NAME" data-props="PROPS">` (both escaped), the island's server-rendered HTML and `</div>`, and marks the response so the server adds `<script type="module" src="/_web/islands.js"></script>` once before `</body>` (at the end when there is none).
+- goal: `web.island(h, name, props, render)` writes `<div data-island="NAME" data-props="PROPS">` (both escaped), the island's server-rendered HTML and `</div>`, and marks the response so the server adds `<script defer src="/_web/islands.js"></script>` once before `</body>` (at the end when there is none).
 - serves: FD6, FD2
 - files: `framework/web/islands.aye`, `framework/web/response.aye` (the flag), `framework/web/serve.aye` (the injection and `GET /_web/islands.js`, `Content-Type: text/javascript; charset=utf-8`), `framework/web/dev.aye` (share `devInject`'s search for `</body>`), `framework/examples/pages/app/counter/page.aye` (new), `tests/framework.rs`, `tests/framework/pages/counter*.http` (new)
 - verify: `cargo test --release --test framework pages` → exit 0 and `cargo test --release --test framework web_units` → exit 0; new cases: `GET /counter` has the island `div` with `data-props="{&quot;start&quot;:3}"`, `<button` and `Count: 3` inside it, the script tag once before `</body>`; `GET /about` has no script tag; `GET /_web/islands.js` is `200 text/javascript; charset=utf-8` and equals `islandsScript()` (the glue is an inline string in `framework/web/islands.aye`, no `.js` file); two islands on a page give one script tag (`test` block)
