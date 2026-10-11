@@ -146,9 +146,10 @@ impl BuiltinTy {
 /// error, `OutOfMemory`, has the error value 1.
 pub const ALLOC_ERROR: &str = "std::mem::AllocError";
 
-/// `std.log.err` and `std.log.info`.
+/// `std.log.err`, `std.log.info` and `std.log.line`.
 const LOG_ERR: &str = "std::log::err";
 const LOG_INFO: &str = "std::log::info";
+const LOG_LINE: &str = "std::log::line";
 /// `std.testing.allocator()`, the allocator of `@testAllocator()`.
 const TESTING_ALLOCATOR: &str = "std::testing::allocator";
 pub const OUT_OF_MEMORY: u16 = 1;
@@ -711,11 +712,11 @@ pub enum TExprKind {
     },
     /// `[]T{}`: the empty slice.
     EmptySlice,
-    /// `std.log.err(format, args...)` (`error` is true) or `std.log.info`:
-    /// the literal pieces of the format around its `{}`s (one more than the
-    /// arguments) and the arguments.
+    /// `std.log.err(format, args...)`, `std.log.info` or `std.log.line`
+    /// (`prefix` says which): the literal pieces of the format around its
+    /// `{}`s (one more than the arguments) and the arguments.
     Log {
-        error: bool,
+        prefix: LogPrefix,
         pieces: Vec<Vec<u8>>,
         args: Vec<TExpr>,
     },
@@ -727,6 +728,15 @@ pub enum TExprKind {
     OkWrap(Box<TExpr>),
     /// An error value returned from an `E!T` function.
     ErrWrap(Box<TExpr>),
+}
+
+/// What `std.log.err`, `std.log.info` and `std.log.line` write before the
+/// message: `error: `, `info: ` or nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogPrefix {
+    Err,
+    Info,
+    None,
 }
 
 /// Allocator methods and test builtins. Receivers are passed as pointers.
@@ -5019,8 +5029,15 @@ impl<'a> Checker<'a> {
                     ));
                 }
             },
-            ExprKind::Call { name, args } if name == LOG_ERR || name == LOG_INFO => {
-                return self.log(name == LOG_ERR, args, span);
+            ExprKind::Call { name, args }
+                if name == LOG_ERR || name == LOG_INFO || name == LOG_LINE =>
+            {
+                let prefix = match name.as_str() {
+                    LOG_ERR => LogPrefix::Err,
+                    LOG_INFO => LogPrefix::Info,
+                    _ => LogPrefix::None,
+                };
+                return self.log(prefix, args, span);
             }
             // A call of a function value in a local or a global.
             ExprKind::Call { name, args }
@@ -6187,12 +6204,17 @@ impl<'a> Checker<'a> {
         Ok(TExpr { kind, ty, span })
     }
 
-    /// `std.log.err(format, args...)` or `std.log.info(...)`: `format` is a
+    /// `std.log.err(format, args...)`, `std.log.info(...)` or
+    /// `std.log.line(...)`: `format` is a
     /// string literal or a constant (top-level `let`) that is one, and each
     /// `{}` in it takes the next argument, an integer, float, `bool`, `[]u8`
     /// or error value.
-    fn log(&mut self, error: bool, args: &[ast::Expr], span: Span) -> Result<TExpr> {
-        let f = if error { "std.log.err" } else { "std.log.info" };
+    fn log(&mut self, prefix: LogPrefix, args: &[ast::Expr], span: Span) -> Result<TExpr> {
+        let f = match prefix {
+            LogPrefix::Err => "std.log.err",
+            LogPrefix::Info => "std.log.info",
+            LogPrefix::None => "std.log.line",
+        };
         let Some(first) = args.first() else {
             return err(
                 E0086,
@@ -6267,7 +6289,7 @@ impl<'a> Checker<'a> {
         }
         Ok(TExpr {
             kind: TExprKind::Log {
-                error,
+                prefix,
                 pieces,
                 args: targs,
             },

@@ -22,7 +22,7 @@
 use crate::ast::{BinOp, UnOp};
 use crate::diag::Span;
 use crate::sema::{
-    self, FloatTy, IntTy, Intrinsic, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type,
+    self, FloatTy, IntTy, Intrinsic, LogPrefix, TArmBody, TExpr, TExprKind, TStmt, TStmtKind, Type,
 };
 use std::collections::HashMap;
 
@@ -286,10 +286,10 @@ pub enum Rvalue {
         arg: Option<(Operand, Type)>,
         newline: bool,
     },
-    /// `std.log.err`/`std.log.info`: the format's pieces around the
-    /// arguments, written to stderr.
+    /// `std.log.err`/`std.log.info`/`std.log.line`: the format's pieces
+    /// around the arguments, written to stderr.
     Log {
-        error: bool,
+        prefix: LogPrefix,
         pieces: Vec<Vec<u8>>,
         args: Vec<(Operand, Type)>,
     },
@@ -2160,7 +2160,7 @@ impl<'a> Lower<'a> {
                 }
             }
             TExprKind::Log {
-                error,
+                prefix,
                 pieces,
                 args,
             } => {
@@ -2169,7 +2169,7 @@ impl<'a> Lower<'a> {
                     .map(|a| (self.operand(a, out), a.ty.clone()))
                     .collect();
                 Rvalue::Log {
-                    error: *error,
+                    prefix: *prefix,
                     pieces: pieces.clone(),
                     args,
                 }
