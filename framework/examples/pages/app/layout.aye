@@ -1,11 +1,14 @@
 // The root layout of the pages app: the document around every page.
 
+import web
 import web.Error
 import web.Html
 import web.Request
 
 pub fn layout(req: *Request, h: *mut Html, body: []u8) Error!void {
-    try h.raw("<!doctype html><html><head><title>Pages</title><link rel=\"stylesheet\" href=\"/style.css\"></head>")
+    try h.raw("<!doctype html><html><head><title>Pages</title><link rel=\"stylesheet\" href=\"")
+    try h.raw(web.assetUrl("/style.css"))
+    try h.raw("\"></head>")
     try h.raw("<body><nav><a href=\"/\">Home</a> <a href=\"/about\">About</a> <a href=\"/blog/hello\">Blog</a></nav>")
     try h.raw(body)
     try h.raw("</body></html>")

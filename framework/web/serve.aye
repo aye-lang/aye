@@ -27,6 +27,7 @@ struct App {
     client: []u8
     notFound: ?Handler
     dev: bool
+    prod: bool
 }
 
 /// The port after `--port` in the program's arguments, or `fallback`.
@@ -63,14 +64,14 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// stream that sends `event: build` with the build id (the start time in
 /// milliseconds) every 200 ms; without `--dev` those two paths are not special.
 pub fn run(alloc: Allocator, port: u16, routes: []Route, public: []u8) ServeError!void {
-    try serve(alloc, port, routes, public, "", null)
+    try serve(alloc, port, routes, public, "", null, false)
 }
 
 /// `run` for an app with a `not-found.aye`: a request that no route and no
 /// file answers (any method) gets `notFound` called with the status set to
 /// 404. If `notFound` returns an error, the plain page of that error is sent.
 pub fn runApp(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFound: Handler) ServeError!void {
-    try serve(alloc, port, routes, public, "", notFound)
+    try serve(alloc, port, routes, public, "", notFound, false)
 }
 
 /// `run` and `runApp` for an app with islands (`web gen` writes the call):
@@ -79,12 +80,24 @@ pub fn runApp(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFou
 /// through to the 404 of the app), and `/_web/islands.js` serves
 /// `islandsScript()`. The script is served by every app, `client` or not.
 pub fn runClient(alloc: Allocator, port: u16, routes: []Route, public: []u8, client: []u8, notFound: ?Handler) ServeError!void {
-    try serve(alloc, port, routes, public, client, notFound)
+    try serve(alloc, port, routes, public, client, notFound, false)
 }
 
-fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, client: []u8, notFound: ?Handler) ServeError!void {
-    let dev = devArg(alloc)
-    var app = App { routes: routes, public: public, client: client, notFound: notFound, dev: dev }
+/// `run` for a production executable (`web gen --prod` writes the call):
+/// the files in `assets` are served from memory (see `serveAsset`) and no
+/// file is read from disk, neither `public/` nor the islands' `.wasm`
+/// (`/_web/islands/<name>.wasm` comes from the table); `/_web/islands.js`
+/// still serves `islandsScript()`. `--dev` is ignored: no script is
+/// injected and `/_web/dev.js` and `/_web/events` are like any other path.
+/// `notFound` is as for `runApp`.
+pub fn runProd(alloc: Allocator, port: u16, routes: []Route, assets: []Asset, notFound: ?Handler) ServeError!void {
+    useAssets(assets)
+    try serve(alloc, port, routes, "", "", notFound, true)
+}
+
+fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, client: []u8, notFound: ?Handler, prod: bool) ServeError!void {
+    let dev = !prod && devArg(alloc)
+    var app = App { routes: routes, public: public, client: client, notFound: notFound, dev: dev, prod: prod }
     var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
     if dev {
         try devBeats(alloc, &mut server, try devBuildId(alloc))
@@ -172,6 +185,13 @@ fn served(app: *mut App, req: *Request, res: *mut Response) bool {
     if req.method != Method.Get && req.method != Method.Head {
         return false
     }
+    if app.prod {
+        let hit = serveAsset(req, res) catch |e| {
+            fail(res, e)
+            return true
+        }
+        return hit
+    }
     let found = serveFile(req.arena, app.public, req.path, req, res) catch |e| {
         fail(res, e)
         return true
@@ -196,6 +216,13 @@ fn island(app: *mut App, req: *Request, res: *mut Response) bool {
     let prefix = "/_web/islands"
     if !text.startsWith(req.path, "/_web/islands/") {
         return false
+    }
+    if app.prod {
+        let hit = serveAsset(req, res) catch |e| {
+            fail(res, e)
+            return true
+        }
+        return hit
     }
     let found = serveFile(req.arena, app.client, req.path[prefix.len..req.path.len], req, res) catch |e| {
         fail(res, e)

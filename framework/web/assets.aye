@@ -1,0 +1,75 @@
+// web.serveAsset: the files that a production executable carries (FD7).
+// `web gen --prod` writes them as a table of `Asset` (`.web/assets.aye`) and
+// `runProd` serves it from memory: no file of `public/` is read.
+
+import std.text
+
+/// A file embedded in the executable: `path` is its URL (`/style.css`),
+/// `hashed` the URL with the first 8 hex digits of its SHA-256 in the name
+/// (`/style.4fe2a1b9.css`; equal to `path` for an island), `contentType` the
+/// `Content-Type`, `etag` the quoted full SHA-256 and `bytes` the content.
+pub struct Asset {
+    path: []u8
+    hashed: []u8
+    contentType: []u8
+    etag: []u8
+    bytes: []u8
+}
+
+// The table of `runProd`. It is set once, before the first thread starts,
+// and only read after that, so it needs no lock.
+var embedded: []Asset = []Asset{}
+
+// Sets the table that `serveAsset` and `assetUrl` use.
+fn useAssets(table: []Asset) {
+    embedded = table
+}
+
+/// The URL for the asset at `path` (`/style.css`): in a production
+/// executable the hashed one (`/style.4fe2a1b9.css`, which the cache may
+/// keep for a year), otherwise `path` itself.
+pub fn assetUrl(path: []u8) []u8 {
+    for a in embedded {
+        if text.eql(a.path, path) {
+            return a.hashed
+        }
+    }
+    return path
+}
+
+/// Answers `req` (a `GET` or `HEAD`) with the asset whose plain or hashed
+/// URL is `req.path`: 200, its `Content-Type`, an `ETag` and the bytes. A
+/// hashed URL gets `Cache-Control: public, max-age=31536000, immutable`, a
+/// plain one (and an island) `public, max-age=0`. When `req` has an
+/// `If-None-Match` that lists the ETag (as for `serveFile`) the answer is 304
+/// with the same headers and no body. There is no `Last-Modified`.
+/// Returns false when no asset has that path (the caller answers 404).
+pub fn serveAsset(req: *Request, res: *mut Response) Error!bool {
+    for a in embedded {
+        let hashed = text.eql(a.hashed, req.path) && !text.eql(a.path, req.path)
+        if !hashed && !text.eql(a.path, req.path) {
+            continue
+        }
+        res.contentType = a.contentType
+        if hashed {
+            try res.header("Cache-Control", "public, max-age=31536000, immutable")
+        } else {
+            try res.header("Cache-Control", "public, max-age=0")
+        }
+        try res.header("ETag", a.etag)
+        res.page.buf.clear()
+        if req.header("If-None-Match") |inm| {
+            if etagListed(inm, a.etag) {
+                res.status = 304
+                return true
+            }
+        }
+        try res.page.raw(a.bytes)
+        return true
+    }
+    return false
+}
+
+test "assetUrl without a table is the path" {
+    @expect(text.eql(assetUrl("/style.css"), "/style.css"))
+}
