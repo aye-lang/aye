@@ -1015,7 +1015,7 @@ pub fn main() {
 }
 E0059 = 59 {
     "block arm in a `match` value",
-    "When a `match` produces a value, each arm is an expression, not a block. To run statements, use `match` as a statement and assign or return in the arms.",
+    "When a `match` produces a value, each arm is an expression, not a block, except `return`, `break` and `continue`, which leave and need no value. To run statements, use `match` as a statement and assign or return in the arms.",
     r#"enum Color { Red, Green }
 
 fn code(c: Color) i32 {
