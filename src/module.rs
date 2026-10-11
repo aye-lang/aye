@@ -341,12 +341,27 @@ pub fn std_module_hint(seg: &str) -> String {
         "unknown std module `std.{seg}`; std has: {}",
         names.join(", ")
     );
-    if let Some(near) = names.iter().find(|n| {
-        n.as_bytes()[..2] == *seg.as_bytes().get(..2).unwrap_or(&[]) && edit_distance(n, seg) <= 2
-    }) {
+    if let Some(near) = closest_std_module(&names, seg) {
         msg.push_str(&format!("\ndid you mean `std.{near}`?"));
     }
     msg
+}
+
+/// The name in `names` closest to `seg` by edit distance, if it is close
+/// enough: at most 2 edits that are at most half the shorter name (so `io`
+/// does not suggest `os`), or 3 edits when both names have 7 letters or more.
+/// Ties go to the shorter name, then the alphabetical one.
+fn closest_std_module<'a>(names: &[&'a str], seg: &str) -> Option<&'a str> {
+    let seg_len = seg.chars().count();
+    names
+        .iter()
+        .map(|n| (edit_distance(n, seg), n.chars().count(), *n))
+        .min()
+        .filter(|&(d, len, _)| {
+            let short = len.min(seg_len);
+            (d <= 2 && d * 2 <= short) || (d == 3 && short >= 7)
+        })
+        .map(|(_, _, n)| n)
 }
 
 /// The Levenshtein distance of two names.
@@ -1696,5 +1711,41 @@ impl Loader<'_> {
             imports: Vec::new(),
             items,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NAMES: &[&str] = &["json", "os", "text", "time"];
+
+    #[test]
+    fn closest_std_module_picks_the_nearest() {
+        assert_eq!(closest_std_module(NAMES, "tex"), Some("text"));
+        assert_eq!(closest_std_module(NAMES, "txt"), Some("text"));
+        assert_eq!(closest_std_module(NAMES, "jsno"), Some("json"));
+    }
+
+    #[test]
+    fn closest_std_module_breaks_ties_by_length_then_name() {
+        assert_eq!(closest_std_module(&["abc", "ab"], "abd"), Some("ab"));
+        assert_eq!(closest_std_module(&["abd", "abc"], "abe"), Some("abc"));
+    }
+
+    #[test]
+    fn closest_std_module_allows_three_edits_for_long_names() {
+        assert_eq!(
+            closest_std_module(&["process"], "procesxyz"),
+            Some("process")
+        );
+        assert_eq!(closest_std_module(&["fs"], "xyz"), None);
+    }
+
+    #[test]
+    fn closest_std_module_gives_nothing_when_far() {
+        assert_eq!(closest_std_module(NAMES, "zzzzzz"), None);
+        assert_eq!(closest_std_module(NAMES, "string"), None);
+        assert_eq!(closest_std_module(NAMES, "io"), None);
     }
 }
