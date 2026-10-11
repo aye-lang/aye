@@ -235,6 +235,11 @@ fn free_port() -> u16 {
 /// Runs `aye run framework/dev -- <app> --port <port>` and reads its output
 /// until the `listening on` line.
 fn start_dev(app: &Path, port: u16) -> Dev {
+    start_dev_until(app, port, &format!("listening on 127.0.0.1:{port}"))
+}
+
+/// Like `start_dev`, and reads until the line `want`.
+fn start_dev_until(app: &Path, port: u16, want: &str) -> Dev {
     let child = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(root())
         .env("AYE", env!("CARGO_BIN_EXE_aye"))
@@ -245,7 +250,6 @@ fn start_dev(app: &Path, port: u16) -> Dev {
         .process_group(0)
         .spawn()
         .unwrap();
-    let want = format!("listening on 127.0.0.1:{port}");
     let mut dev = Dev {
         child,
         port,
@@ -256,7 +260,7 @@ fn start_dev(app: &Path, port: u16) -> Dev {
         let mut line = String::new();
         let n = lines.read_line(&mut line).unwrap();
         assert!(n > 0, "web dev ended before it printed {want:?}");
-        if line.trim() == want {
+        if line.trim().ends_with(want) {
             break;
         }
     }
@@ -522,6 +526,118 @@ fn dev_reload() {
         "a change in public/ restarted the server"
     );
     assert!(request(&server, "GET", "/style.css").contains("/* edited */"));
+}
+
+/// `GET path` on `port`, read until the server closes, with `\r\n` as `\n`;
+/// null while nothing answers (or the answer is cut off).
+fn try_get(port: u16, path: &str) -> Option<String> {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8(buf).ok()?.replace("\r\n", "\n"))
+}
+
+/// Polls `GET path` every 200 ms, for at most `limit`, until the response
+/// starts with `status_line`; null on a timeout.
+fn wait_status(port: u16, path: &str, status_line: &str, limit: Duration) -> Option<String> {
+    let end = Instant::now() + limit;
+    while Instant::now() < end {
+        if let Some(response) = try_get(port, path) {
+            if response.starts_with(status_line) {
+                return Some(response);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    None
+}
+
+#[test]
+fn dev_error() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-error");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    assert!(
+        wait_status(dev.port, "/about", "HTTP/1.1 200", limit).is_some(),
+        "no page before the break"
+    );
+
+    // A type error: `raw` takes text.
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "restarting (app/about/page.aye changed)", limit),
+        "no restart line"
+    );
+    let response =
+        wait_status(dev.port, "/", "HTTP/1.1 500", limit).expect("no error page after the break");
+    assert_eq!(
+        header_value(&response, "Content-Type"),
+        "text/html; charset=utf-8"
+    );
+    assert!(
+        response.contains("app/about/page.aye:"),
+        "no mapped path in {response}"
+    );
+    assert!(
+        response.contains("mismatched types"),
+        "no message in {response}"
+    );
+    assert!(!response.contains(".web/"), "a .web path in {response}");
+    // Every path gets the page.
+    let other = try_get(dev.port, "/about").unwrap();
+    assert!(other.starts_with("HTTP/1.1 500"), "{other}");
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let response = wait_status(dev.port, "/about", "HTTP/1.1 200", Duration::from_secs(10))
+        .expect("no page after the fix");
+    assert!(response.contains("<h1>About</h1>"), "{response}");
+}
+
+#[test]
+fn dev_broken() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-broken");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    let broken = source.replace("raw(\"<h1>About</h1>\")", "raw(5)");
+    std::fs::write(&page, &broken).unwrap();
+
+    // The first build fails: the CLI serves the error page from the start.
+    let port = free_port();
+    let dev = start_dev_until(
+        &app,
+        port,
+        &format!("serving the error page: 127.0.0.1:{port}"),
+    );
+    let limit = Duration::from_secs(120);
+    let response = try_get(dev.port, "/about").expect("no answer");
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert!(response.contains("app/about/page.aye:"), "{response}");
+    assert!(response.contains("mismatched types"), "{response}");
+
+    std::fs::write(&page, &source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let response = wait_status(dev.port, "/about", "HTTP/1.1 200", Duration::from_secs(10))
+        .expect("no page after the fix");
+    assert!(response.contains("<h1>About</h1>"), "{response}");
+
+    // Broken a second time while the server runs.
+    std::fs::write(&page, &broken).unwrap();
+    wait_status(dev.port, "/about", "HTTP/1.1 500", limit).expect("no error page the second time");
 }
 
 #[test]

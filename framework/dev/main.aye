@@ -15,8 +15,15 @@
 // removed or changed it prints `web dev: restarting (<path> changed)`, ends
 // the server (SIGTERM, then waits), builds again and starts a new server on
 // the same port (the one of the first `listening on` line when there was no
-// `--port`). A step that fails has printed its own output; the program
-// then has no server and goes on watching. A server that ends by itself is
+// `--port`). When a step fails, this program itself listens on that port
+// and answers every request with status 500 and the error page of
+// `diag.aye`: built from the JSON of `aye check --json` for the check step,
+// and from the step's standard error text for `web gen` and `aye build`
+// (the text is printed to this program's standard error too). It prints
+// `web dev: serving the error page: 127.0.0.1:<port>` and goes on watching;
+// the next change that builds stops this listener and starts the server on
+// the same port. With no `--port` and a first build that fails, the system
+// picks the port. A server that ends by itself is
 // reported and not started again before a change. SIGINT or SIGTERM to this
 // program ends the server and then the program (status 0); the program
 // otherwise runs until it is killed. The `aye` program is `$AYE`, else the
@@ -26,6 +33,7 @@
 import std.fs
 import std.heap.Arena
 import std.heap.General
+import std.http
 import std.mem.Allocator
 import std.os
 import std.path
@@ -60,6 +68,34 @@ struct Server {
     copier: thread.Thread
     job: []mut Copy
     line: []mut u8
+}
+
+/// What the error server of a broken build answers with.
+struct Page {
+    body: []u8
+}
+
+/// The error server: the listener (on the heap, as the thread has its
+/// address), the page it serves and the thread that runs it.
+struct Fallback {
+    cell: []mut http.Server
+    page: []mut Page
+    runner: thread.Thread
+    port: u16
+}
+
+/// What a build ended in: a running app server, or an error server, or
+/// neither when even that could not be started.
+struct Up {
+    server: ?Server
+    fallback: ?Fallback
+}
+
+/// The output of a command.
+struct Ran {
+    ok: bool
+    out: []u8
+    err: []u8
 }
 
 pub fn main() !void {
@@ -104,10 +140,11 @@ pub fn main() !void {
         unreachable
     }
     var running: ?Server = null
-    running = up(alloc, bin, app, web, server, port)
-    if running |s| {
-        port = keepPort(alloc, s, port)
-    }
+    var serving: ?Fallback = null
+    let first = up(alloc, bin, app, web, server, port, null)
+    running = first.server
+    serving = first.fallback
+    port = portOf(alloc, first, port)
     while stopped.load() == 0 {
         time.sleep(pollMs)
         if running |s| {
@@ -129,10 +166,10 @@ pub fn main() !void {
                 arenas[cur] = Arena.init(alloc)
                 before = now
                 cur = other
-                running = up(alloc, bin, app, web, server, port)
-                if running |s| {
-                    port = keepPort(alloc, s, port)
-                }
+                let next = up(alloc, bin, app, web, server, port, serving)
+                running = next.server
+                serving = next.fallback
+                port = portOf(alloc, next, port)
             } else {
                 arenas[other].deinit()
                 arenas[other] = Arena.init(alloc)
@@ -144,6 +181,9 @@ pub fn main() !void {
     }
     if running |s| {
         stop(alloc, s)
+    }
+    if serving |f| {
+        stopFallback(alloc, f)
     }
     os.exit(0)
 }
@@ -161,22 +201,82 @@ fn read(alloc: Allocator, app: []u8) ?Snapshot {
     }
 }
 
-/// Generates, checks and builds the app, then starts the server. Null when
-/// a step failed.
-fn up(alloc: Allocator, bin: []u8, app: []u8, web: []u8, server: []u8, port: []u8) ?Server {
-    let gen = [7][]u8{bin, "run", "framework/gen", "--", app, "--web", "framework/web"}
-    if !step(alloc, gen[..], "web gen") {
-        return null
+/// Generates, checks and builds the app. When that works, ends the error
+/// server `old` (if any) and starts the app server; when a step fails, ends
+/// `old` and starts an error server with the new page.
+fn up(alloc: Allocator, bin: []u8, app: []u8, web: []u8, server: []u8, port: []u8, old: ?Fallback) Up {
+    var arena = Arena.init(alloc)
+    defer arena.deinit()
+    let tmp = arena.allocator()
+    let failed = failure(tmp, bin, app, web, server)
+    if old |f| {
+        stopFallback(alloc, f)
     }
-    let check = [3][]u8{bin, "check", web}
-    if !step(alloc, check[..], "aye check") {
-        return null
+    if failed |report| {
+        return Up { server: null, fallback: serveError(alloc, port, report, app) }
+    }
+    return Up { server: launch(alloc, server, port), fallback: null }
+}
+
+/// Runs the three steps; null when all worked, else the text for the error
+/// page: the JSON of `aye check` or the standard error of the step.
+fn failure(tmp: Allocator, bin: []u8, app: []u8, web: []u8, server: []u8) ?[]u8 {
+    let gen = [7][]u8{bin, "run", "framework/gen", "--", app, "--web", "framework/web"}
+    var ran = capture(tmp, gen[..], "web gen", false)
+    if !ran.ok {
+        return ran.err
+    }
+    let check = [4][]u8{bin, "check", web, "--json"}
+    ran = capture(tmp, check[..], "aye check", true)
+    if !ran.ok {
+        if ran.out.len > 0 {
+            return ran.out
+        }
+        return ran.err
     }
     let build = [5][]u8{bin, "build", web, "-o", server}
-    if !step(alloc, build[..], "aye build") {
-        return null
+    ran = capture(tmp, build[..], "aye build", false)
+    if !ran.ok {
+        return ran.err
     }
-    return start(alloc, server, port)
+    return null
+}
+
+/// Starts the server. When the port is given and the server prints nothing
+/// (it could not listen yet), tries again after 200 ms, up to 10 times.
+fn launch(alloc: Allocator, server: []u8, port: []u8) Server {
+    var tries: usize = 0
+    while true {
+        let s = start(alloc, server, port)
+        if s.line.len > 0 || port.len == 0 || tries >= 10 {
+            return s
+        }
+        stop(alloc, s)
+        alloc.free(s.line)
+        tries += 1
+        time.sleep(200)
+    }
+    unreachable
+}
+
+/// The port for the next start: that of `u`'s server or error server when
+/// `port` is empty.
+fn portOf(alloc: Allocator, u: Up, port: []u8) []u8 {
+    if u.server |s| {
+        return keepPort(alloc, s, port)
+    }
+    if port.len == 0 {
+        if u.fallback |f| {
+            var digits = Builder.init(alloc)
+            digits.appendUint(f.port as u64) catch |err| {}
+            if digits.toOwned() |owned| {
+                return owned
+            } else |err| {
+                return port
+            }
+        }
+    }
+    return port
 }
 
 /// The port to start the next server on: `port`, or the one in the first
@@ -240,22 +340,126 @@ fn copy(job: *mut Copy) {
     ended.store(1)
 }
 
-/// Runs `argv` with this program's standard streams. When it fails, says so
-/// and gives false.
-fn step(alloc: Allocator, argv: [][]u8, what: []u8) bool {
-    var child = process.spawn(alloc, argv, Stdio.Inherit, Stdio.Inherit, Stdio.Inherit) catch |err| {
+/// Runs `argv` with its standard error piped (and its standard output too
+/// when `pipeOut`, else it is this program's). The standard error is also
+/// copied to this program's, so the terminal shows it. When the command
+/// fails, says so.
+fn capture(tmp: Allocator, argv: [][]u8, what: []u8, pipeOut: bool) Ran {
+    var outMode = Stdio.Inherit
+    if pipeOut {
+        outMode = Stdio.Pipe
+    }
+    var child = process.spawn(tmp, argv, Stdio.Inherit, outMode, Stdio.Pipe) catch |err| {
         die("cannot run", argv[0])
-        return false
+        unreachable
     }
-    let status = child.wait() catch |err| {
+    var out: []u8 = ""
+    if child.stdout |f| {
+        out = slurp(tmp, f)
+        f.close()
+    }
+    let err = slurp(tmp, child.stderr.?)
+    child.stderr.?.close()
+    fs.stderr().write(err) catch |e| {}
+    let status = child.wait() catch |e| {
         die("cannot wait for", what)
-        return false
+        unreachable
     }
-    if !status.success() {
-        note("failed", what)
-        return false
+    if status.success() {
+        return Ran { ok: true, out: out, err: err }
     }
-    return true
+    note("failed", what)
+    if out.len == 0 && err.len == 0 {
+        var msg = Builder.init(tmp)
+        msg.append(what) catch |e| {}
+        msg.append(" failed with no output") catch |e| {}
+        return Ran { ok: false, out: out, err: msg.bytes() }
+    }
+    return Ran { ok: false, out: out, err: err }
+}
+
+/// Everything `f` gives until it is closed; "" when it cannot be read.
+fn slurp(tmp: Allocator, f: fs.File) []u8 {
+    if f.readAll(tmp) |bytes| {
+        return bytes
+    } else |err| {
+        return ""
+    }
+}
+
+/// Starts the error server on `port` (the system picks one when it is
+/// empty) with the page for `report`. Null when that did not work.
+fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
+    var number: u16 = 0
+    if port.len > 0 {
+        let n = text.parseInt(port) catch |err| {
+            0
+        }
+        number = n as u16
+    }
+    let body = errorPage(alloc, report, app) catch |err| {
+        note("cannot build the error page", "")
+        return null
+    }
+    let page = alloc.alloc(Page { body: body }, 1) catch |err| {
+        die("out of memory", "")
+        unreachable
+    }
+    var tries: usize = 0
+    while true {
+        if http.listen(Page, "127.0.0.1", number, &mut page[0], answer) |srv| {
+            let cell = alloc.alloc(srv, 1) catch |err| {
+                die("out of memory", "")
+                unreachable
+            }
+            let t = thread.spawn(http.Server, runFallback, &mut cell[0]) catch |err| {
+                die("cannot start a thread", "")
+                unreachable
+            }
+            let bound = cell[0].port()
+            var addr = Builder.init(alloc)
+            defer addr.deinit()
+            addr.append("127.0.0.1:") catch |err| {}
+            addr.appendUint(bound as u64) catch |err| {}
+            note("serving the error page", addr.bytes())
+            return Fallback { cell: cell, page: page, runner: t, port: bound }
+        } else |err| {
+            if number == 0 || tries >= 10 {
+                note("cannot listen for the error page", port)
+                return null
+            }
+            tries += 1
+            time.sleep(200)
+        }
+    }
+    unreachable
+}
+
+/// Answers every request with the error page.
+fn answer(page: *mut Page, req: *http.Request, res: *mut http.Response, alloc: Allocator) {
+    let hs = alloc.alloc(http.Header { name: "Content-Type", value: "text/html; charset=utf-8" }, 1) catch |err| {
+        res.status = 500
+        return
+    }
+    res.status = 500
+    res.headers = hs
+    res.body = page.body
+}
+
+/// Runs the error server until `stop`.
+fn runFallback(srv: *mut http.Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    srv.run(gpa.allocator()) catch |err| {}
+}
+
+/// Ends the error server, waits for its thread and frees its page.
+fn stopFallback(alloc: Allocator, f: Fallback) {
+    f.cell[0].stop()
+    f.runner.join()
+    alloc.free(f.page[0].body)
+    alloc.free(f.page)
+    alloc.free(f.cell)
 }
 
 /// Starts the server with its standard output piped, prints its first line
