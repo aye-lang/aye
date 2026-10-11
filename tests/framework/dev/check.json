@@ -1,0 +1,1 @@
+{"file":".web","diagnostics":[{"severity":"error","code":"E0019","file":".web/r/r2_about/page.aye","line":9,"col":13,"end_line":9,"end_col":17,"message":"undefined function `nope`","fixes":[]},{"severity":"error","code":"E0023","file":".web/r/r6_blog_slug/page.aye","line":11,"col":21,"message":"mismatched types: expected `[]u8`, found integer literal","fixes":[]}]}

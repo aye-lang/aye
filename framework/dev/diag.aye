@@ -1,0 +1,421 @@
+// `web dev`: the error page for a broken build.
+//
+// `errorPage` takes the output of `aye check --json .web` and the app's
+// directory and returns an HTML page (no external assets, one inline style):
+// the number of errors as the title, then one block per diagnostic with its
+// code, message, `help` when it has one, its place as `app/<path>:<line>:<col>`
+// and the source line with a caret when the file can be read. All text is
+// escaped. Text that is not the JSON of `aye check` is shown as it is.
+//
+// The loader names the paths that `web gen` made, not the app's own:
+//
+//     .web/r/r6_blog_slug/page.aye   becomes   app/blog/[slug]/page.aye
+//     .web/lib/posts.aye             becomes   lib/posts.aye
+//     <app>/app/about/page.aye       becomes   app/about/page.aye
+//
+// `std.fs` cannot read a link, so a `.web/r/<name>` link is followed back by
+// name: `web gen` names the link of `app/<dir>` `r<N>_<dir>` with each run of
+// characters that are not letters or digits turned into one `_` (`root` for
+// `app/` itself), and the directories of `<app>/app` are searched for the one
+// with that name. A path elsewhere (`.web/main.aye`, `.web/routes/...`, a file
+// outside the app) keeps its path.
+
+import std.fs
+import std.heap.Arena
+import std.json
+import std.mem.AllocError
+import std.mem.Allocator
+import std.path
+import std.text
+import std.text.Builder
+import web.Error
+import web.Html
+
+/// The page for `report`, the output of `aye check --json`, of the app in
+/// `appDir`. Free the result with `alloc.free`.
+pub fn errorPage(alloc: Allocator, report: []u8, appDir: []u8) Error![]mut u8 {
+    var arena = Arena.init(alloc)
+    defer arena.deinit()
+    let tmp = arena.allocator()
+    var html = Html { buf: Builder.init(alloc) }
+    defer html.buf.deinit()
+
+    var list: []json.Value = []json.Value{}
+    var shaped = false
+    if json.parse(&mut arena, report) |v| {
+        var root = v
+        if root.get("diagnostics") |d| {
+            if d.asArray() |items| {
+                list = items
+                shaped = true
+            }
+        }
+    } else |err| {}
+
+    if !shaped {
+        try head(&mut html, "Build failed")
+        try html.raw("<p>The compiler output could not be read as JSON:</p><pre>")
+        try html.text(report)
+        try html.raw("</pre></body></html>\n")
+        return html.buf.toOwned()
+    }
+
+    var title = Builder.init(tmp)
+    try title.appendUint(list.len as u64)
+    if list.len == 1 {
+        try title.append(" error")
+    } else {
+        try title.append(" errors")
+    }
+    try head(&mut html, title.bytes())
+    for i in 0..list.len {
+        try block(tmp, &mut html, &list[i], appDir)
+    }
+    try html.raw("</body></html>\n")
+    return html.buf.toOwned()
+}
+
+/// The start of the page: the style and the title as the heading.
+fn head(html: *mut Html, title: []u8) !void {
+    try html.raw("<!doctype html><html><head><meta charset=\"utf-8\"><title>")
+    try html.text(title)
+    try html.raw("</title><style>")
+    try html.raw("body{font:16px/1.5 system-ui,sans-serif;margin:2rem auto;max-width:60rem;padding:0 1rem;background:#fff;color:#222}")
+    try html.raw("h1{font-size:1.5rem}")
+    try html.raw(".d{border-left:4px solid #c00;background:#fdf2f2;margin:1rem 0;padding:.5rem 1rem}")
+    try html.raw(".c{font-weight:bold;color:#c00}")
+    try html.raw(".l{font-family:monospace;color:#555}")
+    try html.raw("pre{font-size:.9rem;overflow-x:auto;margin:.5rem 0 0}")
+    try html.raw("@media(prefers-color-scheme:dark){body{background:#181818;color:#ddd}.d{background:#2a1a1a}.l{color:#aaa}}")
+    try html.raw("</style></head><body><h1>")
+    try html.text(title)
+    try html.raw("</h1>")
+}
+
+/// One diagnostic.
+fn block(tmp: Allocator, html: *mut Html, d: *json.Value, appDir: []u8) !void {
+    let severity = str(d, "severity")
+    let code = str(d, "code")
+    let message = str(d, "message")
+    let help = str(d, "help")
+    let file = str(d, "file")
+    let line = num(d, "line")
+    let col = num(d, "col")
+    let endLine = num(d, "end_line")
+    let endCol = num(d, "end_col")
+
+    try html.raw("<div class=\"d\"><div><span class=\"c\">")
+    if severity.len > 0 {
+        try html.text(severity)
+    } else {
+        try html.raw("error")
+    }
+    if code.len > 0 {
+        try html.raw("[")
+        try html.text(code)
+        try html.raw("]")
+    }
+    try html.raw("</span>: ")
+    try html.text(message)
+    try html.raw("</div>")
+    if help.len > 0 {
+        try html.raw("<div>help: ")
+        try html.text(help)
+        try html.raw("</div>")
+    }
+    if file.len == 0 {
+        try html.raw("</div>")
+        return
+    }
+
+    let shown = try appPath(tmp, file, appDir)
+    var loc = Builder.init(tmp)
+    try loc.append(shown)
+    if line > 0 {
+        try loc.appendByte(':')
+        try loc.appendUint(line)
+        try loc.appendByte(':')
+        try loc.appendUint(col)
+    }
+    try html.raw("<div class=\"l\">")
+    try html.text(loc.bytes())
+    try html.raw("</div>")
+
+    if line > 0 {
+        try source(tmp, html, shown, file, appDir, line, col, endLine, endCol)
+    }
+    try html.raw("</div>")
+}
+
+/// The source line with a caret under `col` (as long as the span when it is on
+/// this line), when the file can be read and has the line.
+fn source(tmp: Allocator, html: *mut Html, shown: []u8, file: []u8, appDir: []u8, line: u64, col: u64, endLine: u64, endCol: u64) !void {
+    let bytes = readSource(tmp, shown, file, appDir) orelse return
+    var rest = bytes
+    var n: u64 = 1
+    while n < line {
+        let nl = text.indexOf(rest, "\n") orelse return
+        rest = rest[nl + 1..]
+        n += 1
+    }
+    var len = rest.len
+    if text.indexOf(rest, "\n") |nl| {
+        len = nl
+    }
+    if len > 0 && rest[len - 1] == '\r' {
+        len -= 1
+    }
+    let src = rest[..len]
+
+    var gutter = Builder.init(tmp)
+    try gutter.appendUint(line)
+    let width = gutter.len()
+    try html.raw("<pre>")
+    try html.text(gutter.bytes())
+    try html.raw(" | ")
+    try html.text(src)
+    try html.raw("\n")
+    for i in 0..width {
+        try html.raw(" ")
+    }
+    try html.raw(" | ")
+    var at: u64 = 1
+    while at < col {
+        if at - 1 < src.len as u64 && src[(at - 1) as usize] == '\t' {
+            try html.raw("\t")
+        } else {
+            try html.raw(" ")
+        }
+        at += 1
+    }
+    var carets: u64 = 1
+    if endLine == line && endCol > col {
+        carets = endCol - col
+    }
+    while carets > 0 {
+        try html.raw("^")
+        carets -= 1
+    }
+    try html.raw("</pre>")
+}
+
+/// The bytes of the file of a diagnostic: the shown path in the app, else the
+/// path as the loader gave it, else that path in the app.
+fn readSource(tmp: Allocator, shown: []u8, file: []u8, appDir: []u8) ?[]u8 {
+    let inApp = path.join(tmp, appDir, shown) catch |e| {
+        return null
+    }
+    if fs.readFile(tmp, inApp) |bytes| {
+        return bytes
+    } else |err| {}
+    if fs.readFile(tmp, file) |bytes| {
+        return bytes
+    } else |err| {}
+    let viaFile = path.join(tmp, appDir, file) catch |e| {
+        return null
+    }
+    if fs.readFile(tmp, viaFile) |bytes| {
+        return bytes
+    } else |err| {}
+    return null
+}
+
+/// The path of a diagnostic as the app knows it (see the top of this file).
+fn appPath(tmp: Allocator, file: []u8, appDir: []u8) AllocError![]u8 {
+    var rel = file
+    var base = appDir
+    while base.len > 1 && base[base.len - 1] == '/' {
+        base = base[..base.len - 1]
+    }
+    if base.len > 0 && file.len > base.len && text.startsWith(file, base) && file[base.len] == '/' {
+        rel = file[base.len + 1..]
+    }
+    let at = text.indexOf(rel, ".web/") orelse return rel
+    if at > 0 && rel[at - 1] != '/' {
+        return rel
+    }
+    let inside = rel[at + 5..]
+    if text.startsWith(inside, "r/") {
+        let after = inside[2..]
+        let slash = text.indexOf(after, "/") orelse return rel
+        let dir = linkedDir(tmp, appDir, after[..slash]) orelse return rel
+        return path.join(tmp, "app", try path.join(tmp, dir, after[slash + 1..]))
+    }
+    let slash = text.indexOf(inside, "/") orelse return rel
+    let top = inside[..slash]
+    if text.eql(top, "routes") || text.eql(top, "web") {
+        return rel
+    }
+    return inside
+}
+
+/// The directory of `<appDir>/app` (relative to it, "" for `app/`) that the
+/// link `name` of `.web/r` leads to; null when there is none.
+fn linkedDir(tmp: Allocator, appDir: []u8, name: []u8) ?[]u8 {
+    // r<N>_<rest>
+    if name.len < 3 || name[0] != 'r' {
+        return null
+    }
+    var i: usize = 1
+    while i < name.len && name[i] >= '0' && name[i] <= '9' {
+        i += 1
+    }
+    if i == 1 || i >= name.len || name[i] != '_' {
+        return null
+    }
+    let root = path.join(tmp, appDir, "app") catch |e| {
+        return null
+    }
+    return search(tmp, root, "", name[i + 1..])
+}
+
+/// The directory under `root` + `rel` whose link name is `want`.
+fn search(tmp: Allocator, root: []u8, rel: []u8, want: []u8) ?[]u8 {
+    let mangled = mangle(tmp, rel) catch |e| {
+        return null
+    }
+    if text.eql(mangled, want) {
+        return rel
+    }
+    let here = path.join(tmp, root, rel) catch |e| {
+        return null
+    }
+    let found = fs.readDir(tmp, here) catch |e| {
+        return null
+    }
+    for e in found.items {
+        if e.kind != fs.Kind.Dir {
+            continue
+        }
+        let child = path.join(tmp, rel, e.name) catch |err| {
+            return null
+        }
+        if search(tmp, root, child, want) |hit| {
+            return hit
+        }
+    }
+    return null
+}
+
+/// What `web gen` makes of a directory in the name of its link, after
+/// `r<N>_`: letters and digits stay, each run of other characters becomes one
+/// `_`, and `app/` itself is `root`.
+fn mangle(tmp: Allocator, dir: []u8) AllocError![]u8 {
+    var b = Builder.init(tmp)
+    if dir.len == 0 {
+        try b.append("root")
+        return b.bytes()
+    }
+    var gap = false
+    var started = false
+    for c in dir {
+        let alnum = c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+        if alnum {
+            if gap {
+                try b.appendByte('_')
+                gap = false
+            }
+            try b.appendByte(c)
+            started = true
+        } else if started {
+            gap = true
+        }
+    }
+    return b.bytes()
+}
+
+/// The string member `key` of `d`; "" when missing or not a string.
+fn str(d: *json.Value, key: []u8) []u8 {
+    if d.get(key) |v| {
+        if v.asString() |s| {
+            return s
+        }
+    }
+    return ""
+}
+
+/// The non-negative whole number member `key` of `d`; 0 when missing.
+fn num(d: *json.Value, key: []u8) u64 {
+    if d.get(key) |v| {
+        if v.asNumber() |n| {
+            if n >= 0.0 {
+                return n as u64
+            }
+        }
+    }
+    return 0
+}
+
+fn has(page: []u8, needle: []u8) bool {
+    return text.indexOf(page, needle) != null
+}
+
+test "two diagnostics of a saved check output get app paths" {
+    let report = try fs.readFile(@testAllocator(), "tests/framework/dev/check.json")
+    defer @testAllocator().free(report)
+    let page = try errorPage(@testAllocator(), report, "framework/examples/pages")
+    defer @testAllocator().free(page)
+    @expect(has(page, "<title>2 errors</title>"))
+    @expect(has(page, "<h1>2 errors</h1>"))
+    @expect(has(page, "undefined function `nope`"))
+    @expect(has(page, "mismatched types: expected `[]u8`, found integer literal"))
+    @expect(has(page, "E0019"))
+    @expect(has(page, "app/about/page.aye:9:13"))
+    @expect(has(page, "app/blog/[slug]/page.aye:11:21"))
+    @expect(!has(page, ".web"))
+    // The source line of the first, escaped, with a caret under the column.
+    @expect(has(page, "<pre>9 | "))
+    @expect(has(page, "&lt;h1&gt;About&lt;/h1&gt;"))
+    @expect(!has(page, "<h1>About"))
+    @expect(has(page, "\n  |             ^^^^</pre>"))
+}
+
+test "text is escaped and help, root and other paths are shown" {
+    let report = "{\"file\":\".web\",\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E1\",\"file\":\".web/r/r0_root/page.aye\",\"line\":3,\"col\":2,\"message\":\"found <script> & \\\"x\\\"\",\"help\":\"use `<b>`\"},{\"severity\":\"warning\",\"code\":\"W1\",\"file\":\".web/lib/posts.aye\",\"line\":1,\"col\":1,\"message\":\"m\"},{\"severity\":\"error\",\"code\":\"E2\",\"file\":\"/elsewhere/x.aye\",\"line\":4,\"col\":1,\"message\":\"n\"}]}"
+    let page = try errorPage(@testAllocator(), report, "no/such/app")
+    defer @testAllocator().free(page)
+    @expect(has(page, "<h1>3 errors</h1>"))
+    @expect(has(page, "found &lt;script&gt; &amp; &quot;x&quot;"))
+    @expect(!has(page, "<script>"))
+    @expect(has(page, "help: use `&lt;b&gt;`"))
+    @expect(has(page, "app/page.aye:3:2"))
+    @expect(has(page, "lib/posts.aye:1:1"))
+    @expect(has(page, "warning[W1]"))
+    @expect(has(page, "/elsewhere/x.aye:4:1"))
+    @expect(!has(page, "<pre>"))
+}
+
+test "an error count of one is singular" {
+    let report = "{\"diagnostics\":[{\"message\":\"m\"}]}"
+    let page = try errorPage(@testAllocator(), report, ".")
+    defer @testAllocator().free(page)
+    @expect(has(page, "<h1>1 error</h1>"))
+}
+
+test "unparsable output is shown as it is, escaped" {
+    let page = try errorPage(@testAllocator(), "error: <not json> & more", ".")
+    defer @testAllocator().free(page)
+    @expect(has(page, "<h1>Build failed</h1>"))
+    @expect(has(page, "<pre>error: &lt;not json&gt; &amp; more</pre>"))
+}
+
+test "JSON that is not check output is shown as it is" {
+    let page = try errorPage(@testAllocator(), "{\"ok\":true}", ".")
+    defer @testAllocator().free(page)
+    @expect(has(page, "<h1>Build failed</h1>"))
+    @expect(has(page, "{&quot;ok&quot;:true}"))
+}
+
+test "link names map back to directories" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let tmp = arena.allocator()
+    let app = "framework/examples/pages"
+    @expectEqual("", linkedDir(tmp, app, "r0_root").?)
+    @expectEqual("blog/[slug]", linkedDir(tmp, app, "r6_blog_slug").?)
+    @expectEqual("(marketing)/pricing", linkedDir(tmp, app, "r9_marketing_pricing").?)
+    @expect(linkedDir(tmp, app, "r1_nothing") == null)
+    @expect(linkedDir(tmp, app, "blog") == null)
+    @expectEqual("app/blog/x.aye", try appPath(tmp, "framework/examples/pages/.web/r/r5_blog/x.aye", app))
+    @expectEqual("app/about/x.aye", try appPath(tmp, "framework/examples/pages/app/about/x.aye", app))
+}
