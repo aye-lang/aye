@@ -12,6 +12,13 @@
 // percent-decoded after the path is split. A path that no route has is looked up in
 // `<app>/public/`; `main.aye` passes the absolute path of that directory to
 // `web.run` (a link would depend on the working directory).
+// `<app>/islands/<name>/` with a `client.aye` is an island (FD6): `gen` builds
+// it with `aye build --target wasm32-freestanding` into
+// `.web/client/<name>.wasm` (`aye` as below) and `main.aye` passes the
+// absolute path of `.web/client/` to `web.runClient`, which serves the files
+// at `/_web/islands/<name>.wasm`. A failing build ends `gen` with the
+// compiler's text. On a machine without a wasm32 clang (`AYE_WASI_CLANG`, or
+// Homebrew's `llvm`) `gen` prints one warning and builds no island.
 // A `layout.aye` (`pub fn layout`) wraps every page below its directory, the
 // innermost layout first (`web.wrap`); API routes are never wrapped. A
 // `not-found.aye` in `app/` (`pub fn notFound`) is the page, with status 404
@@ -35,6 +42,8 @@ import std.list.List
 import std.mem.Allocator
 import std.os
 import std.path
+import std.process
+import std.process.Stdio
 import std.text
 import std.text.Builder
 
@@ -102,8 +111,9 @@ pub fn main() !void {
     }
     try linkOthers(alloc, app, out)
     try fs.symlink(try absolute(alloc, web), try path.join(alloc, out, "web"))
+    let islands = try buildIslands(alloc, app, out)
 
-    try put(alloc, try path.join(alloc, out, "main.aye"), try mainSource(alloc, try publicDir(alloc, app), hasNotFound(pages.items())))
+    try put(alloc, try path.join(alloc, out, "main.aye"), try mainSource(alloc, try publicDir(alloc, app), islands.dir, hasNotFound(pages.items())))
     try put(alloc, try path.join(alloc, try path.join(alloc, out, "routes"), "routes.aye"), try routesSource(alloc, pages.items(), names.items()))
 
     var line = Builder.init(alloc)
@@ -111,7 +121,13 @@ pub fn main() !void {
     try line.append(out)
     try line.append(", ")
     try line.appendUint(routeCount(pages.items()) as u64)
-    try line.append(" routes\n")
+    try line.append(" routes")
+    if islands.count > 0 {
+        try line.append(", ")
+        try line.appendUint(islands.count as u64)
+        try line.append(" islands")
+    }
+    try line.append("\n")
     try fs.stdout().write(line.bytes())
 }
 
@@ -180,23 +196,117 @@ fn publicDir(alloc: Allocator, app: []u8) ![]u8 {
     return abs
 }
 
+// What `buildIslands` made: the absolute path of `.web/client/` ("" when
+// nothing was built) and the number of islands in it.
+struct Islands {
+    dir: []u8
+    count: usize
+}
+
+// Builds `<app>/islands/<name>/client.aye` of every island into
+// `<out>/client/<name>.wasm`. Without a wasm32 toolchain it prints one
+// warning and builds none.
+fn buildIslands(alloc: Allocator, app: []u8, out: []u8) !Islands {
+    let none = Islands { dir: "", count: 0 }
+    let dir = try path.join(alloc, app, "islands")
+    if !fs.exists(dir) {
+        return none
+    }
+    let found = try fs.readDir(alloc, dir)
+    defer found.deinit()
+    let client = try path.join(alloc, out, "client")
+    var count: usize = 0
+    for e in found.items {
+        if e.kind != fs.Kind.Dir || text.startsWith(e.name, ".") {
+            continue
+        }
+        let island = try path.join(alloc, dir, e.name)
+        if !fs.exists(try path.join(alloc, island, "client.aye")) {
+            continue
+        }
+        if count == 0 {
+            try fs.mkdir(client)
+        }
+        var file = Builder.init(alloc)
+        try file.append(e.name)
+        try file.append(".wasm")
+        if !buildIsland(alloc, island, try path.join(alloc, client, file.bytes())) {
+            fs.stderr().write("web gen: warning: no wasm32 toolchain (set AYE_WASI_CLANG, or `brew install llvm`); the islands are not built\n") catch |err| {}
+            try clean(alloc, client)
+            return none
+        }
+        count += 1
+    }
+    if count == 0 {
+        return none
+    }
+    let abs = try absolute(alloc, client)
+    if text.indexOf(abs, "\"") != null || text.indexOf(abs, "\\") != null {
+        die("the path of .web/client/ has a quote or a backslash", abs, "")
+    }
+    return Islands { dir: abs, count: count }
+}
+
+// Runs `aye build --target wasm32-freestanding <island> -o <wasm>` (`aye` is
+// `$AYE`, else the one on `PATH`). False when the build failed because this
+// machine has no wasm32 clang (clang's text for a missing backend, or aye not
+// finding clang); any other failure ends `gen` with the text of aye.
+fn buildIsland(alloc: Allocator, island: []u8, wasm: []u8) bool {
+    var bin: []u8 = "aye"
+    if os.getenv("AYE") |p| {
+        bin = p
+    }
+    let argv = [7][]u8{bin, "build", "--target", "wasm32-freestanding", island, "-o", wasm}
+    var child = process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Pipe) catch |err| {
+        die("cannot run aye (set AYE to its path)", bin, "")
+        return false
+    }
+    let msg = child.stderr.?.readAll(alloc) catch |err| {
+        die("cannot read the output of aye build", island, "")
+        return false
+    }
+    child.stderr.?.close()
+    let status = child.wait() catch |err| {
+        die("cannot wait for aye build", island, "")
+        return false
+    }
+    if status.success() {
+        return true
+    }
+    if text.indexOf(msg, "No available targets are compatible") != null || text.indexOf(msg, "failed to run clang") != null {
+        return false
+    }
+    die("building the island failed", island, msg)
+    return false
+}
+
 fn put(alloc: Allocator, file: []u8, content: []u8) !void {
     let f = try fs.create(file)
     defer f.close()
     try f.write(content)
 }
 
-fn mainSource(alloc: Allocator, public: []u8, notFound: bool) ![]u8 {
+fn mainSource(alloc: Allocator, public: []u8, client: []u8, notFound: bool) ![]u8 {
     var b = Builder.init(alloc)
     try b.append("// Generated by `web gen`; do not edit.\n\nimport std.heap.General\nimport routes\nimport web\n\npub fn main() !void {\n    var gpa = General.init()\n    defer gpa.deinit()\n    let alloc = gpa.allocator()\n    try web.")
-    if notFound {
+    if client.len > 0 {
+        try b.append("runClient")
+    } else if notFound {
         try b.append("runApp")
     } else {
         try b.append("run")
     }
     try b.append("(alloc, web.portArg(alloc, 8080), routes.table[..], \"")
     try b.append(public)
-    if notFound {
+    if client.len > 0 {
+        try b.append("\", \"")
+        try b.append(client)
+        if notFound {
+            try b.append("\", routes.notFound")
+        } else {
+            try b.append("\", null")
+        }
+    } else if notFound {
         try b.append("\", routes.notFound")
     } else {
         try b.append("\"")

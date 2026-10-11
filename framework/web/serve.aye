@@ -18,11 +18,13 @@ import std.thread
 pub error ServeError = ListenError || WriteError || AllocError || thread.SpawnError
 
 /// What every connection thread reads: the route table, the directory of
-/// static files, the page for a path that nothing answers, and whether the
+/// static files, the directory of the islands' `.wasm` files, the page for a
+/// path that nothing answers, and whether the
 /// server runs with `--dev` (see `dev.aye`).
 struct App {
     routes: []Route
     public: []u8
+    client: []u8
     notFound: ?Handler
     dev: bool
 }
@@ -61,19 +63,28 @@ pub fn portArg(alloc: Allocator, fallback: u16) u16 {
 /// stream that sends `event: build` with the build id (the start time in
 /// milliseconds) every 200 ms; without `--dev` those two paths are not special.
 pub fn run(alloc: Allocator, port: u16, routes: []Route, public: []u8) ServeError!void {
-    try serve(alloc, port, routes, public, null)
+    try serve(alloc, port, routes, public, "", null)
 }
 
 /// `run` for an app with a `not-found.aye`: a request that no route and no
 /// file answers (any method) gets `notFound` called with the status set to
 /// 404. If `notFound` returns an error, the plain page of that error is sent.
 pub fn runApp(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFound: Handler) ServeError!void {
-    try serve(alloc, port, routes, public, notFound)
+    try serve(alloc, port, routes, public, "", notFound)
 }
 
-fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, notFound: ?Handler) ServeError!void {
+/// `run` and `runApp` for an app with islands (`web gen` writes the call):
+/// `GET` and `HEAD` of `/_web/islands/<name>.wasm` serve the file of that
+/// name under `client` (see `serveFile`; a name that is not there falls
+/// through to the 404 of the app), and `/_web/islands.js` serves
+/// `islandsScript()`. The script is served by every app, `client` or not.
+pub fn runClient(alloc: Allocator, port: u16, routes: []Route, public: []u8, client: []u8, notFound: ?Handler) ServeError!void {
+    try serve(alloc, port, routes, public, client, notFound)
+}
+
+fn serve(alloc: Allocator, port: u16, routes: []Route, public: []u8, client: []u8, notFound: ?Handler) ServeError!void {
     let dev = devArg(alloc)
-    var app = App { routes: routes, public: public, notFound: notFound, dev: dev }
+    var app = App { routes: routes, public: public, client: client, notFound: notFound, dev: dev }
     var server = try http.listen(App, "127.0.0.1", port, &mut app, handle)
     if dev {
         try devBeats(alloc, &mut server, try devBuildId(alloc))
@@ -108,6 +119,7 @@ fn handle(app: *mut App, hreq: *http.Request, hres: *mut http.Response, alloc: A
         res.page.raw(devScript()) catch |e| {
             fail(&mut res, e)
         }
+    } else if island(app, &req, &mut res) {
     } else if find(app.routes, req.method, req.path) |r| {
         req.route = r.pattern
         r.handler(&req, &mut res) catch |e| {
@@ -161,6 +173,31 @@ fn served(app: *mut App, req: *Request, res: *mut Response) bool {
         return false
     }
     let found = serveFile(req.arena, app.public, req.path, req, res) catch |e| {
+        fail(res, e)
+        return true
+    }
+    return found
+}
+
+// Is `req` a `GET` or `HEAD` of `/_web/islands.js`, or of a file of
+// `app.client` under `/_web/islands/`? Then `res` is its answer. A path that
+// leaves `client` gets 400.
+fn island(app: *mut App, req: *Request, res: *mut Response) bool {
+    if req.method != Method.Get && req.method != Method.Head {
+        return false
+    }
+    if text.eql(req.path, "/_web/islands.js") {
+        res.contentType = "text/javascript; charset=utf-8"
+        res.page.raw(islandsScript()) catch |e| {
+            fail(res, e)
+        }
+        return true
+    }
+    let prefix = "/_web/islands"
+    if !text.startsWith(req.path, "/_web/islands/") {
+        return false
+    }
+    let found = serveFile(req.arena, app.client, req.path[prefix.len..req.path.len], req, res) catch |e| {
         fail(res, e)
         return true
     }

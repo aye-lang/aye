@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Content-Type: application/wasm
+Cache-Control: public, max-age=0
+ETag: <etag>
+Last-Modified: <date>
+Connection: close
+Content-Length: <length>
+
