@@ -1,0 +1,44 @@
+// An API route of the pages app: `GET /api/items/<id>` is JSON. There is no
+// `post`, so a POST gets 405 with `Allow: GET, HEAD`.
+
+import std.json
+import std.text
+import web.Error
+import web.Request
+import web.Response
+
+pub fn get(req: *Request, res: *mut Response) Error!void {
+    let id = req.param("id")
+    if nameOf(id) |name| {
+        var members = [2]json.Member{
+            json.Member { key: "id", value: json.Value.Number { value: numberOf(id) } },
+            json.Member { key: "name", value: json.Value.String { value: name } },
+        }
+        var v = json.Value.Object { members: members[..] }
+        try res.json(&v)
+        return
+    }
+    var members = [1]json.Member{
+        json.Member { key: "error", value: json.Value.String { value: "NotFound" } },
+    }
+    var v = json.Value.Object { members: members[..] }
+    res.status = 404
+    try res.json(&v)
+}
+
+fn nameOf(id: []u8) ?[]u8 {
+    if text.eql(id, "1") {
+        return "Anchor"
+    }
+    if text.eql(id, "2") {
+        return "Buoy"
+    }
+    return null
+}
+
+fn numberOf(id: []u8) f64 {
+    let n = text.parseInt(id) catch |e| {
+        return 0.0
+    }
+    return n as f64
+}

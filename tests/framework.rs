@@ -8,7 +8,8 @@
 //! - `framework/examples/pages` is an app of `app/` directories: `web gen`
 //!   (`framework/gen`, run with `aye run`) writes its `.web/`, which is
 //!   checked, built and started the same way. `tests/framework/pages/X.http`
-//!   are the responses to the requests in `PAGES_CASES`.
+//!   are the responses to the requests in `PAGES_CASES` (pages, and an API
+//!   `route.aye` with JSON and a 405).
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -35,6 +36,8 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/", "root.http"),
     ("GET", "/about", "about.http"),
     ("GET", "/blog/hello", "blog_hello.http"),
+    ("GET", "/api/items/1", "api_item.http"),
+    ("POST", "/api/items/1", "api_item_post.http"),
     ("GET", "/nope", "missing.http"),
 ];
 

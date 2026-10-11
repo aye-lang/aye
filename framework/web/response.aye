@@ -1,6 +1,7 @@
 // web.Response: what a handler fills in; `web.run` writes it out.
 
 import std.http
+import std.json
 import std.list.List
 import std.mem.Allocator
 import std.text.Builder
@@ -36,6 +37,22 @@ pub struct Response {
     /// Sets the body to `s` as `text/plain`.
     pub fn text(self: *mut Self, s: []u8) Error!void {
         self.contentType = "text/plain; charset=utf-8"
+        self.page.buf.clear()
+        try self.page.raw(s)
+    }
+
+    /// Sets the body to `v` as compact JSON (`std.json.write`) and the type
+    /// to `application/json`.
+    pub fn json(self: *mut Self, v: *json.Value) Error!void {
+        self.contentType = "application/json"
+        self.page.buf.clear()
+        try json.write(&mut self.page.buf, v)
+    }
+
+    /// Sets the body to `s`, which is JSON already, and the type to
+    /// `application/json`.
+    pub fn jsonText(self: *mut Self, s: []u8) Error!void {
+        self.contentType = "application/json"
         self.page.buf.clear()
         try self.page.raw(s)
     }
