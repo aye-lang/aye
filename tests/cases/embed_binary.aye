@@ -1,0 +1,37 @@
+// `@embedFile` of binary bytes: `embed_binary.bin` holds the trigraph
+// spellings `??(`, `??)` and `??/`, NUL bytes and runs of 0xff. The C the
+// compiler writes keeps each byte, and clang prints no `-Wtrigraphs`
+// warning for it (`cli/aye build embed_binary` in `tests/golden.rs`).
+
+let DATA = @embedFile("embed_binary.bin")
+
+pub fn main() {
+    var sum: u32 = 0
+    var mix: u32 = 2166136261
+    var nul = 0
+    var ff = 0
+    var q = 0
+    for b in DATA {
+        sum +%= b as u32
+        mix = (mix ^ (b as u32)) *% 16777619
+        if b == 0 {
+            nul += 1
+        }
+        if b == 255 {
+            ff += 1
+        }
+        if b == 63 {
+            q += 1
+        }
+    }
+    @println(DATA.len)
+    @println(sum)
+    @println(mix)
+    @println(nul)
+    @println(ff)
+    @println(q)
+    // The last twelve bytes: `??(??)??/`, NUL, 0xff, 0xff.
+    @println(DATA[DATA.len - 12] == 63)
+    @println(DATA[DATA.len - 3])
+    @println(DATA[DATA.len - 1])
+}
