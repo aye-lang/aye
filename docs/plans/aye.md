@@ -106,20 +106,6 @@ sources `tests/spec.rs` reads; they merge one after the other.
 
 ## Cards: O4 dependencies (current; design in decisions.md "Dependencies (O4)")
 
-#### O4.2: local path dependencies
-- lane: aye
-- goal: an app whose `aye.toml` names `util = { path = "../util" }` builds and runs with `aye build` / `aye run` (no path means `.`). `import util` and `import util.strings` resolve into the dependency; inside `util`, `import strings` resolves to `util/strings`. Canonical names are `util::...`, shown as `util.x`. Dependency tests are not part of the app's tests. Add E0119, E0120, E0121 (path not a directory) and E0123 to the code table. `aye test DIR` uses the nearest manifest between each root and DIR. Delete the "Not implemented yet" sentence for path deps in spec §12; add a `deps` name to `SPEC_SPLITS` so `aye spec deps` prints the subsection; `docs/design.md` (模組、套件與建置) gets a one-line pointer to decisions.md "Dependencies (O4)".
-- serves: O7
-- files: `src/manifest.rs` (new: TOML-subset reader for `aye.toml`, reusable for `aye.lock`), `src/module.rs` (a package per module; `Loader::module` resolves the first name against dep keys; E0120 on a directory collision), `src/driver.rs` (`Root::load` reads the manifest; `run_tests` picks a manifest per root), `src/main.rs` (path defaults to `.`; `name` as the default output), `src/codes.rs`, `tests/golden.rs` (a `tests/deps/` section), `docs/spec.md` §12, `README.md` "Modules and std"
-- golden layout: `tests/deps/local/app/{aye.toml,main.aye}`, `tests/deps/local/app.out`; `tests/deps/local/util/util.aye`, `util/strings/strings.aye` (with a `test` block that must not run under `aye test tests/deps/local/app`); `tests/deps/errors/<case>/app/{aye.toml,main.aye}` + `app.err`: `bad_syntax` (E0119), `std_key` (E0120), `dir_collision` (E0120), `missing_path` (E0121), `transitive` (E0123)
-- verify: `cargo test --release --test golden` exit 0; `cargo test --release --lib` exit 0; `cd tests/deps/local/app && ../../../../target/release/aye run` prints `app.out`
-- depends on: O4.1
-- parallel with: anything not touching `src/module.rs` or `src/driver.rs`
-- where: local
-- model: sonnet
-- time box: 45 min
-- notes: `aye fix` must skip dependency files; register `aye.toml` as a source file so diagnostics point at its lines.
-
 #### O4.3: URL dependencies, aye.lock, offline cache
 - lane: aye
 - goal: `tinyjson = { url = "file:///.../tinyjson-1.2.tar.gz" }` (and `https://`) is downloaded with `curl -fsSL --proto =https,file --proto-redir =https` into `<cache>/tmp/`, hashed with SHA-256 in Rust, unpacked with `tar -xzf` (one top folder stripped), renamed into `<cache>/sha256/<hex>/`. `aye.lock` is written when the entry is missing or its url changed (sorted, temp file + rename, stdout `aye.lock: tinyjson sha256 <hex>`). Locked mismatch is E0122 (lock and cache untouched); locked and cached rebuilds never run `curl`; a failed download is E0121; a non-https/file scheme or non-`.tar.gz`/`.tgz` suffix is E0119. Cache root: `$AYE_CACHE`, else `$XDG_CACHE_HOME/aye`, else `~/.cache/aye`. Add E0122 to the code table. Delete the remaining "Not implemented yet" sentence in spec §12.
@@ -153,10 +139,8 @@ brackets.
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
 - P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O2.5a std casts on wasm32: audit the remaining `as usize` casts of 64-bit values in std (O2.5 found 23, all small values today) and `aye cimport` output (`size_t`→`usize`, `long`→`c_long`) under `--target wasm32-wasip1`. Verify: a `cimport` golden built for wasm.
-- O2.5d `cases/net_names.aye` needs an IPv6 `::1` loopback; the cloud VM boots with `ipv6.disable=1` (PR #2). Gate the `::1` part on IPv6 being available (skip with a note, like the WASI skips), or give the case an `X.needs` marker the harness honours. Verify: golden passes on a host without IPv6.
 - O2.5e a std golden that exercises the x86_64 Linux `struct stat` mode offset directly (PR #2 follow-up). Verify: `std_fs_dir` kinds on x86_64 Linux.
 - P-flaky `tests/browser.rs` `window_relayout_after_image_load` failed once in three Linux full runs (observer callback logged before image `onload`), diagnose step (PR #1).
-- O2.7b freestanding leftovers: `extern_struct` needs `inet_ntoa` and an `X.freestanding.out` for no-argument cases (32-bit `@sizeOf`); `malloc` family as wasm exports (`export_name`) if JS hosts need them (O2.7a report). Verify: sweep 90 → 91.
 - O2.8a one-step Linux executable from macOS: `--sysroot` pass-through plus `-fuse-ld=lld` (O2.8 report; the `-c` path already satisfies O8). Verify: `aye build --target x86_64-linux hello.aye` links on macOS with a Linux sysroot set.
 - O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.

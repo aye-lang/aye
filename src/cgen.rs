@@ -153,11 +153,12 @@ void aye_fs_free(void *p) {
     *(void **)p = aye_fs_lists[c];
     aye_fs_lists[c] = p;
 }
-/* the same allocator under its libc names, for `extern fn malloc` and C */
-void *aye_fs_malloc_c(size_t) __asm__("malloc");
-void aye_fs_free_c(void *) __asm__("free");
-void *aye_fs_calloc_c(size_t, size_t) __asm__("calloc");
-void *aye_fs_realloc_c(void *, size_t) __asm__("realloc");
+/* the same allocator under its libc names, for `extern fn malloc` and C;
+   also wasm exports, so a JS host can allocate */
+AYE_EXPORT("malloc") void *aye_fs_malloc_c(size_t) __asm__("malloc");
+AYE_EXPORT("free") void aye_fs_free_c(void *) __asm__("free");
+AYE_EXPORT("calloc") void *aye_fs_calloc_c(size_t, size_t) __asm__("calloc");
+AYE_EXPORT("realloc") void *aye_fs_realloc_c(void *, size_t) __asm__("realloc");
 void *aye_fs_malloc_c(size_t n) { return aye_fs_malloc(n); }
 void aye_fs_free_c(void *p) { aye_fs_free(p); }
 void *aye_fs_calloc_c(size_t n, size_t m) {
@@ -387,6 +388,25 @@ typedef struct {
 } aye_fs_div_t;
 aye_fs_div_t aye_fs_div(int, int) __asm__("div");
 aye_fs_div_t aye_fs_div(int a, int b) { return (aye_fs_div_t){a / b, a % b}; }
+/* `inet_ntoa`: dotted quad of an address in network byte order, into a
+   static buffer */
+typedef struct {
+    uint32_t addr;
+} aye_fs_in_addr;
+char *aye_fs_inet_ntoa(aye_fs_in_addr) __asm__("inet_ntoa");
+char *aye_fs_inet_ntoa(aye_fs_in_addr a) {
+    static char buf[16];
+    char *p = buf;
+    for (int i = 0; i < 4; i++) {
+        unsigned v = (a.addr >> (8 * i)) & 255;
+        if (v >= 100) *p++ = '0' + v / 100;
+        if (v >= 10) *p++ = '0' + v / 10 % 10;
+        *p++ = '0' + v % 10;
+        if (i < 3) *p++ = '.';
+    }
+    *p = 0;
+    return buf;
+}
 char *aye_fs_strchr(const char *, int) __asm__("strchr");
 char *aye_fs_strchr(const char *s, int c) {
     for (;; s++) {
