@@ -1,5 +1,5 @@
 block_value.aye:18:9: error[E0023]: mismatched types: expected `u32`, found `bool`
 block_value.aye:22:9: error[E0061]: unhandled error: `f` returns `E!u32` (handle the error with `try` or `catch`)
-block_value.aye:24:17: error[E0067]: this `catch` block must end with a `u32` value or leave with `return`, `break` or `continue`
+block_value.aye:24:17: error[E0067]: this `catch` block must end with a `u32` value or leave with `return`, `break`, `continue` or `unreachable`
 block_value.aye:29:9: error[E0023]: mismatched types: expected `u32`, found `[]u8`
 block_value.aye:31:17: error[E0067]: this `orelse` block must end with a `u32` value or leave with `return`, `break`, `continue` or `unreachable`

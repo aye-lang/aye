@@ -1,4 +1,4 @@
-catch_errors.aye:8:17: error[E0067]: this `catch` block must end with a `u32` value or leave with `return`, `break` or `continue`
+catch_errors.aye:8:17: error[E0067]: this `catch` block must end with a `u32` value or leave with `return`, `break`, `continue` or `unreachable`
 catch_errors.aye:11:23: error[E0023]: mismatched types: expected `u32`, found `bool`
 catch_errors.aye:12:27: error[E0023]: mismatched types: expected `u32`, found `E`
 catch_errors.aye:13:13: error[E0063]: `catch` needs an error union value (`E!T`), found `i64`
