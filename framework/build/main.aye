@@ -1,11 +1,13 @@
 // `web build`: one command from an app to one executable.
 //
-//     aye run framework/build -- <app> [-o <exe>]
+//     aye run framework/build -- <app> [-o <exe>] [--mode fast]
 //
 // It runs `web gen --prod` on `<app>` (`aye run framework/gen -- <app> --web
 // framework/web --prod`, so run it from the root of the checkout), then `aye
 // check <app>/.web`, then `aye build <app>/.web --no-link libcurl -o <exe>`.
-// `<exe>` is `<app>/<name>` by default: `name` of `<app>/aye.toml` when it
+// `--mode fast` is passed on to `aye build` (an optimized build, as the
+// benchmarks in `docs/aye-bench.md` use); without it the build is the default
+// one. `<exe>` is `<app>/<name>` by default: `name` of `<app>/aye.toml` when it
 // has one, else the name of the app's directory. The executable holds the
 // pages and the files of `public/` (and the islands' `.wasm` files), so it
 // runs without the app tree and without the Aye toolchain. It is built
@@ -41,20 +43,27 @@ pub fn main() !void {
     let args = try os.args(tmp)
     var app: []u8 = ""
     var exe: []u8 = ""
+    var fast = false
     var i: usize = 1
     while i < args.len {
-        if text.eql(args[i], "-o") && i + 1 < args.len {
+        if text.eql(args[i], "--mode") && i + 1 < args.len {
+            if !text.eql(args[i + 1], "fast") {
+                die("only --mode fast is supported", args[i + 1])
+            }
+            fast = true
+            i += 2
+        } else if text.eql(args[i], "-o") && i + 1 < args.len {
             exe = args[i + 1]
             i += 2
         } else if app.len == 0 {
             app = args[i]
             i += 1
         } else {
-            die("usage: build <app> [-o <exe>]", args[i])
+            die("usage: build <app> [-o <exe>] [--mode fast]", args[i])
         }
     }
     if app.len == 0 {
-        die("usage: build <app> [-o <exe>]", "")
+        die("usage: build <app> [-o <exe>] [--mode fast]", "")
     }
     if !fs.exists(app) {
         die("cannot read", app)
@@ -73,8 +82,13 @@ pub fn main() !void {
     run(tmp, gen[..], "web gen")
     let check = [3][]u8{bin, "check", web}
     run(tmp, check[..], "aye check")
-    let build = [7][]u8{bin, "build", web, "--no-link", "libcurl", "-o", exe}
-    run(tmp, build[..], "aye build")
+    if fast {
+        let build = [9][]u8{bin, "build", "--mode", "fast", web, "--no-link", "libcurl", "-o", exe}
+        run(tmp, build[..], "aye build")
+    } else {
+        let build = [7][]u8{bin, "build", web, "--no-link", "libcurl", "-o", exe}
+        run(tmp, build[..], "aye build")
+    }
 
     let st = fs.stat(exe) catch |err| {
         die("cannot read", exe)

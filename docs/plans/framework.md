@@ -450,6 +450,7 @@ the card that makes it:
 - model: sonnet
 - time box: 90 min
 - notes: Same flags as O7.1 (`ab -k -c 64 -n 200000`, three runs, median). The hello example needs the production build path of F5.3 (`web gen --prod` on an app with no `public/` must work; F5.1 covers an empty table). FD8 asks only for the number, not that it beats Node; if the framework is below Node's 10.7k, the report says so and proposes a diagnose step.
+- done: 2026-10-11, Ubuntu 24.04 x86_64 (Firecracker VM, 4 cores, Xeon 2.10 GHz, load 1.1 to 1.8). `scripts/bench/run.sh` prints req/s for aye, node, go, framework and pages_about. Medians at `ab -k -c 64 -n 200000` (3 runs): framework hello `/` 127707 req/s (runs 121547 / 128781 / 127707; `-c 1` 25848), pages `/about` 121143 (121143 / 117114 / 129186; `-c 1` 25534), against `std.http` hello 128045, Go 126280 and Node 22 20003; no failed requests. The framework is 6.4x Node and level with bare `std.http`, so no diagnose step is needed. The hello example has no `app/` tree, so it is built with `aye build --mode fast`, not `framework/build`; `framework/build` gained `--mode fast` (passed to `aye build`) for the pages example.
 
 ## F4/F5 Aye-lane needs
 
