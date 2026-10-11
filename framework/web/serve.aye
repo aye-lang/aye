@@ -133,7 +133,7 @@ fn served(app: *mut App, req: *Request, res: *mut Response) bool {
     if req.method != Method.Get && req.method != Method.Head {
         return false
     }
-    let found = serveFile(req.arena, app.public, req.path, res) catch |e| {
+    let found = serveFile(req.arena, app.public, req.path, req, res) catch |e| {
         fail(res, e)
         return true
     }
