@@ -875,6 +875,80 @@ fn cli_target_x86_64(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `aye build --target <arch>-linux -c` makes an ELF 64-bit relocatable
+/// object of `e_machine` `machine` without linking, so without a Linux
+/// sysroot.
+fn cli_target_linux_obj(work: &Path, arch: &str, machine: u16) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let target = format!("{arch}-linux");
+    let obj = work.join(format!("hello_{arch}.o"));
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            &target,
+            "-c",
+            "tests/cases/hello.aye",
+            "-o",
+            obj.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!("`aye build --target {target} -c`: {code:?}\n{err}"));
+    }
+    // The ELF header: magic, class 2 (64-bit), little endian, type 1
+    // (relocatable) at offset 16 and the machine at offset 18.
+    let bytes = std::fs::read(&obj).map_err(|e| e.to_string())?;
+    let want_machine = machine.to_le_bytes();
+    if bytes[..6] != [0x7f, b'E', b'L', b'F', 2, 1]
+        || bytes[16..18] != [1, 0]
+        || bytes[18..20] != want_machine
+    {
+        return Err(format!(
+            "not an ELF 64-bit {arch} object: {:02x?}",
+            &bytes[..20]
+        ));
+    }
+    Ok(())
+}
+
+/// Linking for a Linux target on macOS fails (clang has no Linux sysroot
+/// there), and the message names the target and `-c`. Skipped off macOS,
+/// and where a Linux sysroot is installed and the link works.
+fn cli_target_linux_link_error(work: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        println!("skipped cli/aye build --target x86_64-linux: not macOS");
+        return Ok(());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let exe = work.join("hello_linux_link");
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            "x86_64-linux",
+            "tests/cases/hello.aye",
+            "-o",
+            exe.to_str().unwrap(),
+        ],
+    )?;
+    if code == Some(0) {
+        println!("skipped cli/aye build --target x86_64-linux: a Linux sysroot is installed");
+        return Ok(());
+    }
+    if code != Some(1)
+        || !err.contains("aye: clang failed for target x86_64-linux (")
+        || !err.contains("`aye build -c`")
+    {
+        return Err(format!(
+            "`aye build --target x86_64-linux` failed without the message: {code:?}\n{err}"
+        ));
+    }
+    Ok(())
+}
+
 /// `aye build --target wasm32-wasip1` links `hello.aye` into a WebAssembly
 /// module (bytes `\0asm`). Skipped without the WASI toolchain.
 fn cli_target_wasm(work: &Path) -> Result<(), String> {
@@ -1628,6 +1702,21 @@ fn main() {
             &mut jobs,
             "cli/aye build --target x86_64-macos".to_string(),
             move || cli_target_x86_64(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target x86_64-linux -c".to_string(),
+            move || cli_target_linux_obj(w, "x86_64", 0x3e),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target aarch64-linux -c".to_string(),
+            move || cli_target_linux_obj(w, "aarch64", 0xb7),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target x86_64-linux: the link error".to_string(),
+            move || cli_target_linux_link_error(w),
         );
         add(
             &mut jobs,
