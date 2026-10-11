@@ -1,0 +1,6 @@
+// An unknown std module with two letters swapped is still suggested.
+
+import std.jsno
+
+pub fn main() {
+}
