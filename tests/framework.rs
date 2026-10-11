@@ -28,6 +28,11 @@
 //!   `app/about/page.aye` of its copy, the CLI prints `restarting`, starts
 //!   the server again on the same port and relays the new `listening on`
 //!   line; a change in `public/` restarts nothing.
+//! - `tests/framework/dev_reload.mjs` (Node 22; the test is skipped when
+//!   `node` is missing or older) plays the browser against `web dev`: it
+//!   runs the page's `/_web/dev.js` in a fake `window` with an SSE client.
+//!   When the test breaks `app/about/page.aye`, the script reloads once (to
+//!   the error page); when the test fixes it, it reloads a second time.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -282,9 +287,15 @@ fn start_dev_until(app: &Path, port: u16, want: &str) -> Dev {
 /// Waits at most `limit` for a line of the CLI that contains `want`; the
 /// lines before it are dropped.
 fn wait_line(dev: &Dev, want: &str, limit: Duration) -> bool {
+    wait_recv(&dev.lines, want, limit)
+}
+
+/// Waits at most `limit` for a line from `lines` that contains `want`; the
+/// lines before it are dropped.
+fn wait_recv(lines: &Receiver<String>, want: &str, limit: Duration) -> bool {
     let end = Instant::now() + limit;
     while let Some(left) = end.checked_duration_since(Instant::now()) {
-        match dev.lines.recv_timeout(left) {
+        match lines.recv_timeout(left) {
             Ok(line) if line.contains(want) => return true,
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => return false,
@@ -736,6 +747,153 @@ fn dev_broken() {
     // Broken a second time while the server runs.
     std::fs::write(&page, &broken).unwrap();
     wait_status(dev.port, "/about", "HTTP/1.1 500", limit).expect("no error page the second time");
+}
+
+/// The build id of the first `build` frame of `GET /_web/events` on `port`.
+fn events_id(port: u16) -> String {
+    first_build_id(&App {
+        child: Command::new("true").spawn().unwrap(),
+        port,
+    })
+}
+
+#[test]
+fn dev_reload_cycle() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-cycle");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let tag = "<script src=\"/_web/dev.js\"></script>";
+    // The app server's id.
+    let a = events_id(dev.port);
+    assert!(a.parse::<u64>().is_ok(), "{a:?}");
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "serving the error page", limit),
+        "no error page line"
+    );
+    let response = try_get(dev.port, "/").expect("no answer");
+    assert!(response.starts_with("HTTP/1.1 500"), "{response}");
+    assert_eq!(response.matches(tag).count(), 1, "{response}");
+    let js = try_get(dev.port, "/_web/dev.js").expect("no script");
+    assert!(js.starts_with("HTTP/1.1 200 OK\n"), "{js}");
+    assert!(
+        header_value(&js, "Content-Type").starts_with("text/javascript"),
+        "{js}"
+    );
+    assert!(js.contains("location.reload()"), "{js}");
+    // The CLI's id for this broken build.
+    let b = events_id(dev.port);
+    assert!(b.parse::<u64>().is_ok(), "{b:?}");
+    assert_ne!(b, a, "the error server has its own id");
+    assert_eq!(
+        events_id(dev.port),
+        b,
+        "the same id while the build is broken"
+    );
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    let c = events_id(dev.port);
+    assert_ne!(c, b, "the app server has another id after the fix");
+}
+
+/// The Node 22 script that plays the browser, killed when dropped; `lines`
+/// are what it prints.
+struct Browser {
+    child: Child,
+    lines: Receiver<String>,
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Is `node` there, and version 22 or newer?
+fn node_22() -> bool {
+    Command::new("node")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|out| {
+            let version = String::from_utf8_lossy(&out.stdout).into_owned();
+            version
+                .trim()
+                .strip_prefix('v')?
+                .split('.')
+                .next()?
+                .parse::<u32>()
+                .ok()
+        })
+        .is_some_and(|major| major >= 22)
+}
+
+#[test]
+fn dev_reload_node() {
+    if !node_22() {
+        println!("skipped: node not found");
+        return;
+    }
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-node");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let mut child = Command::new("node")
+        .arg(root().join("tests/framework/dev_reload.mjs"))
+        .arg(format!("http://127.0.0.1:{}/", dev.port))
+        .args(["2", "120"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let mut browser = Browser { child, lines };
+    assert!(
+        wait_recv(&browser.lines, "connected", limit),
+        "the script did not connect to the app server"
+    );
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("raw(\"<h1>About</h1>\")", "raw(5)")).unwrap();
+    assert!(
+        wait_line(&dev, "serving the error page", limit),
+        "no error page line"
+    );
+    assert!(
+        wait_recv(&browser.lines, "reloads=1", limit),
+        "no reload to the error page"
+    );
+    assert!(
+        wait_recv(&browser.lines, "connected", limit),
+        "the script did not connect to the error server"
+    );
+
+    std::fs::write(&page, source).unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the fix");
+    assert!(
+        wait_recv(&browser.lines, "reloads=2", limit),
+        "no reload to the fixed page"
+    );
+    let status = browser.child.wait().unwrap();
+    assert!(status.success(), "the script ended with {status}");
 }
 
 #[test]
