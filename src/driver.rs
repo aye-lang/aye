@@ -927,12 +927,13 @@ fn run_one(
     let stderr = String::from_utf8_lossy(&err_reader.join().unwrap()).into_owned();
     let signal = status.signal();
     // Only the CPU limit sends `SIGXCPU`, and Linux delivers it with the
-    // accounted CPU time still a little under the limit.
+    // accounted CPU time still a little under the limit. A `SIGKILL` arriving
+    // at up to a tick (tens of ms) under the limit counts as well.
     let timed_out = time_limit > 0
         && (hung
             || cpu_ms > time_limit * 1000
             || signal == Some(SIGXCPU)
-            || (cpu_ms >= time_limit * 1000 && signal == Some(SIGKILL)));
+            || (cpu_ms + 100 >= time_limit * 1000 && signal == Some(SIGKILL)));
     let passed = status.success() && !timed_out;
     let mut failures = parse_failures(files, &stderr);
     if timed_out {
