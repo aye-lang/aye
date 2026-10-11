@@ -67,6 +67,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O2.7 | 2026-10-10 | wasm32-freestanding runtime: libm via `__builtin_*` (sqrt, floor, ceil, trunc, fabs, copysign, round) and `env.Math` imports (sin...fmod, pow), `env.strtod`, `env.aye_clock`, `env.aye_fmt_double` (ecvt), busy-wait `nanosleep`, single-thread pthread mutex/cond stubs; loader and decisions updated; `X.freestanding` on 8 more cases plus `json_roundtrip`, `sync_single`; freestanding golden 3 → 11, sweep 73 → 78 of 116; Linux golden shows a pre-existing O5.2 failure (O5.2c) | 4652d03 |
 | O5.2c | 2026-10-11 | `aye test --time-limit` on Linux: a `SIGXCPU` death counts as the time limit even when the accounted CPU is a little under it (Linux delivers it early); `tests/time_limit.aye` passes on Linux | 48a4043 |
 | O1.16 | 2026-10-11 | `aye fix` removes `;` statement terminators in one pass (E0002 fix in `src/lexer.rs`, lexing continues after a `;`; `a; b` becomes a newline plus the indentation; strings untouched); golden `tests/fix/semicolons`; lexer unit test | 0a784c1 |
+| O1.15a | 2026-10-11 | `aye doc std.<x>` for an unknown module prints the std module list and the closest name, shared with E0081 via `module::std_module_hint`; golden `cli/aye doc: an unknown std module` | 01660b6 |
 | O3.1b | 2026-10-11 | `aye_std_ecvt` uses `snprintf("%.*e")` on Linux too (glibc `ecvt` rounds the 17th digit, `DBL_MAX` did not round-trip through `std.json`) | 48a4043 |
 
 ## Browser lane

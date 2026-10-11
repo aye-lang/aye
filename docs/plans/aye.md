@@ -130,7 +130,7 @@ brackets.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
 - O1.17b first-exec stall, round 2 (cause known, `decisions.md` "First-exec stall"): try `-Wl,-no_adhoc_codesign` and `-mmacosx-version-min`; count the executables golden links; if nothing hides the stall, run a case's debug/safe/fast binaries in parallel in `tests/golden.rs`. Verify: golden wall time under 250 s on a quiet machine.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
-- O1.15a `aye doc std.<x>` for an unknown module prints the same module list and suggestion as E0081 (`src/doc.rs`; O1.15 report). Verify: a CLI golden.
+- O1.15b the std-name matcher needs the first two letters to match, so `std.txt` and `std.jsno` get no suggestion (O1.15a report); loosen it (edit distance ≤ 2) for both E0081 and `aye doc`. Verify: the `std_unknown_near` golden plus a `std.txt` case.
 - O1.16a `aye fix` for `;` inside `(` or `[` (e.g. a C-style `for (a; b; c)`) still applies the newline fix, which is wrong there; the lexer does not track bracket depth (O1.16 report). Verify: a `tests/fix` case leaves such a `;` alone or suggests nothing.
 - O3.6 `std.http` server round 2: query and form decoding, cookies, streamed responses, server-sent events, graceful stop (framework F2/F3, paused).
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
