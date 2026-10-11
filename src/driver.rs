@@ -283,6 +283,9 @@ pub struct Root {
     /// The `aye.toml` of the program (`docs/decisions.md`, "Dependencies
     /// (O4)"), if there is one.
     pub manifest: Option<ManifestFile>,
+    /// Where URL dependencies are kept; `None` is `$AYE_CACHE` and the
+    /// other defaults (`fetch::cache_root`).
+    pub cache: Option<PathBuf>,
 }
 
 impl Root {
@@ -339,6 +342,7 @@ impl Root {
             doc_tests: false,
             target: host_target(),
             manifest: None,
+            cache: None,
         })
     }
 
@@ -359,6 +363,7 @@ impl Root {
             doc_tests: false,
             target: host_target(),
             manifest: None,
+            cache: None,
         }
     }
 }
@@ -390,6 +395,7 @@ pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
         root.doc_tests,
         root.target,
         root.manifest,
+        root.cache,
     );
     let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
     let diags = |errs: Vec<Error>| {

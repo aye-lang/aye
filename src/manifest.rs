@@ -114,6 +114,8 @@ struct Cursor<'a> {
     s: &'a str,
     pos: usize,
     line: u32,
+    /// What the file accepts, for the messages.
+    shape: &'static str,
 }
 
 impl Cursor<'_> {
@@ -122,7 +124,7 @@ impl Cursor<'_> {
     }
 
     fn err(&self, what: &str) -> Error {
-        Error::new(E0119, self.span(), format!("{what}; {SHAPE}"))
+        Error::new(E0119, self.span(), format!("{what}; {}", self.shape))
     }
 
     fn rest(&self) -> &str {
@@ -259,6 +261,7 @@ pub fn parse(text: &str) -> Result<Manifest, Vec<Error>> {
             s: raw,
             pos: 0,
             line,
+            shape: SHAPE,
         };
         let r = (|| -> Result<(), Error> {
             if c.eat('[') {
@@ -345,9 +348,218 @@ pub fn parse(text: &str) -> Result<Manifest, Vec<Error>> {
     }
 }
 
+/// The file name of a lock.
+pub const LOCK_FILE: &str = "aye.lock";
+
+const LOCK_SHAPE: &str = "expected `[deps]`, then lines such as `lib = { url = \"https://example.com/lib.tar.gz\", sha256 = \"<64 lowercase hex digits>\" }`";
+
+/// The pinned archive of one URL dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockEntry {
+    pub key: String,
+    pub url: String,
+    pub sha256: String,
+}
+
+/// The `aye.lock` in `dir`, if there is one.
+pub fn read_lock(dir: &Path) -> Result<Option<SourceFile>, String> {
+    let path = dir.join(LOCK_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let name = path.to_string_lossy().into_owned();
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {name}: {e}"))?;
+    Ok(Some(SourceFile {
+        name,
+        text,
+        std: false,
+        dep: true,
+    }))
+}
+
+/// `{ url = "...", sha256 = "..." }`.
+fn lock_value(c: &mut Cursor, key: String) -> Result<LockEntry, Error> {
+    if !c.eat('{') {
+        return Err(c.err("an entry is an inline table"));
+    }
+    let mut url: Option<String> = None;
+    let mut sha256: Option<String> = None;
+    loop {
+        if c.eat('}') {
+            break;
+        }
+        c.skip_ws();
+        let at = c.span();
+        let field = c.key().unwrap_or_default();
+        if !c.eat('=') {
+            return Err(c.err("expected `url` or `sha256`, then `=`"));
+        }
+        let value = c.string()?;
+        match field.as_str() {
+            "url" if url.is_none() => url = Some(value),
+            "sha256" if sha256.is_none() => {
+                let hex = value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                if !hex {
+                    return Err(Error::new(
+                        E0119,
+                        at,
+                        format!("`sha256` is 64 lowercase hex digits; {LOCK_SHAPE}"),
+                    ));
+                }
+                sha256 = Some(value);
+            }
+            _ => {
+                return Err(Error::new(
+                    E0119,
+                    at,
+                    format!("`{field}` is unknown or given twice; {LOCK_SHAPE}"),
+                ));
+            }
+        }
+        if !c.eat(',') {
+            if !c.eat('}') {
+                return Err(c.err("expected `,` or `}`"));
+            }
+            break;
+        }
+    }
+    match (url, sha256) {
+        (Some(url), Some(sha256)) => Ok(LockEntry { key, url, sha256 }),
+        _ => Err(c.err("an entry has both `url` and `sha256`")),
+    }
+}
+
+/// Read an `aye.lock`: the entries with the line of each. The errors have
+/// `file: 0`.
+pub fn parse_lock(text: &str) -> Result<Vec<(LockEntry, Span)>, Vec<Error>> {
+    let mut errors = Vec::new();
+    let mut entries: Vec<(LockEntry, Span)> = Vec::new();
+    let mut in_deps = false;
+    for (i, raw) in text.lines().enumerate() {
+        let t = raw.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let mut c = Cursor {
+            s: raw,
+            pos: 0,
+            line: i as u32 + 1,
+            shape: LOCK_SHAPE,
+        };
+        let r = (|| -> Result<(), Error> {
+            if c.eat('[') {
+                c.skip_ws();
+                let at = c.span();
+                if c.key().as_deref() != Some("deps") || !c.eat(']') || in_deps {
+                    let msg = format!("the only table is `[deps]`, once; {LOCK_SHAPE}");
+                    return Err(Error::new(E0119, at, msg));
+                }
+                in_deps = true;
+                return c.end();
+            }
+            c.skip_ws();
+            let at = c.span();
+            let Some(key) = c.key() else {
+                return Err(c.err("expected a key"));
+            };
+            if !in_deps {
+                return Err(Error::new(
+                    E0119,
+                    at,
+                    format!("entries go under `[deps]`; {LOCK_SHAPE}"),
+                ));
+            }
+            if !c.eat('=') {
+                return Err(c.err("expected `=` after the key"));
+            }
+            if entries.iter().any(|(e, _)| e.key == key) {
+                return Err(Error::new(E0119, at, format!("`{key}` is given twice")));
+            }
+            let entry = lock_value(&mut c, key)?;
+            c.end()?;
+            entries.push((entry, at));
+            Ok(())
+        })();
+        if let Err(e) = r {
+            errors.push(e);
+        }
+    }
+    if errors.is_empty() {
+        Ok(entries)
+    } else {
+        Err(errors)
+    }
+}
+
+/// The text of an `aye.lock`, sorted by key.
+pub fn render_lock(entries: &[LockEntry]) -> String {
+    let mut sorted: Vec<&LockEntry> = entries.iter().collect();
+    sorted.sort_by(|a, b| a.key.cmp(&b.key));
+    let mut out = String::from("# Written by aye build. Commit it; do not edit it.\n[deps]\n");
+    for e in sorted {
+        out.push_str(&format!(
+            "{} = {{ url = \"{}\", sha256 = \"{}\" }}\n",
+            e.key, e.url, e.sha256
+        ));
+    }
+    out
+}
+
+/// Write `aye.lock` in `dir`: a temporary file in the same directory, then
+/// a rename.
+pub fn write_lock(dir: &Path, entries: &[LockEntry]) -> Result<(), String> {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("{LOCK_FILE}.tmp-{}-{n}", std::process::id()));
+    let to = dir.join(LOCK_FILE);
+    std::fs::write(&tmp, render_lock(entries))
+        .and_then(|()| std::fs::rename(&tmp, &to))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("cannot write {}: {e}", to.display())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lock_round_trips_sorted() {
+        let h = "ab".repeat(32);
+        let e = |k: &str| LockEntry {
+            key: k.into(),
+            url: format!("https://x.org/{k}.tgz"),
+            sha256: h.clone(),
+        };
+        let text = render_lock(&[e("zed"), e("abc")]);
+        assert!(text.find("abc = ").unwrap() < text.find("zed = ").unwrap());
+        let got: Vec<LockEntry> = parse_lock(&text)
+            .unwrap()
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert_eq!(got, vec![e("abc"), e("zed")]);
+    }
+
+    #[test]
+    fn rejects_a_bad_lock() {
+        let lock = |l: &str| {
+            parse_lock(&format!("[deps]\n{l}\n")).unwrap_err()[0]
+                .span
+                .line
+        };
+        assert_eq!(lock("a = { url = \"https://x/a.tgz\" }"), 2);
+        assert_eq!(
+            lock("a = { url = \"https://x/a.tgz\", sha256 = \"AB\" }"),
+            2
+        );
+        assert_eq!(lock("a = { path = \"x\" }"), 2);
+        assert!(parse_lock("a = { url = \"u\", sha256 = \"x\" }\n").is_err());
+    }
 
     fn err(text: &str) -> (u32, u32, String) {
         let e = &parse(text).unwrap_err()[0];

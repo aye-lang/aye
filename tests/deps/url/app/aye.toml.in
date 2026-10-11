@@ -1,0 +1,5 @@
+# The app: `tinyjson` is a tarball. @TARBALL@ is replaced by the test.
+name = "app"
+
+[deps]
+tinyjson = { url = "file://@TARBALL@" }

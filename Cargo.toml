@@ -14,3 +14,6 @@ harness = false
 [[test]]
 name = "conformance"
 harness = false
+
+[[test]]
+name = "deps"
