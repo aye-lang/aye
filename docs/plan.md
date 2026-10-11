@@ -44,8 +44,9 @@ Then, in order:
    <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
    `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. O5.2c and O3.1b done (2026-10-11). O1.15a, O1.16, O5.1a and O2.5b (PR #1, Linux suite green in 290 s)
    done; O1.17b closed (no software fix, see decisions). O2.7a, O1.16a, O2.5c (cloud PR #2) and O2.8 done; **O8 fully holds**
-   (the Linux triples compile on macOS with `-c`). O1.15b and O4.1 (dependency design) done. In flight: O2.5d. Next:
-   O4.2 (path deps), O4.3 (URL deps, lock, cache) for O7; O2.7b, P-flaky.
+   (the Linux triples compile on macOS with `-c`). O1.15b and O4.1 (dependency design) done. O2.5d and O4.2 (path deps) done. O2.7b done (freestanding golden 91). In flight: O4.3 (URL deps,
+   lock, cache: the O7 check follows); a cloud routine re-runs the
+   Linux suite on the no-IPv6 VM. Next: P-flaky, then O5/O6 phases.
    Cloud lane: the Agent tool's `remote` option ran locally (no VM);
    the working route is a one-time **routine** (`RemoteTrigger`, repo
    `aye-lang/aye`, x86_64 Linux VM, delivers a PR). First run: O2.5c
@@ -59,7 +60,7 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O2.5d, O4.2, then O4.3 | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O4.3; cloud: Linux re-run | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
