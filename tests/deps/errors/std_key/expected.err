@@ -1,0 +1,1 @@
+./aye.toml:4:1: error[E0120]: the dependency key `std` is the embedded standard library; rename the key

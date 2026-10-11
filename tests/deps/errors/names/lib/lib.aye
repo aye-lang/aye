@@ -1,0 +1,7 @@
+pub struct Box {
+    n: i64
+}
+
+pub fn make() Box {
+    return Box { n: 1 }
+}

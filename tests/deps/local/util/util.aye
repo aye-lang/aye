@@ -1,0 +1,19 @@
+// The top module of the dependency. Inside it `import strings` is
+// util/strings, never a directory of the app.
+import strings
+
+pub struct Counter {
+    n: i64
+}
+
+pub fn twice(x: i64) i64 {
+    return strings.double(x)
+}
+
+pub fn next(c: Counter) Counter {
+    return Counter { n: c.n + 1 }
+}
+
+test "util own test" {
+    @expectEqual(4, twice(2))
+}

@@ -1434,8 +1434,8 @@ pub fn main() {
 
 ### Dependencies
 
-Not implemented yet: path dependencies arrive with O4.2, URL dependencies
-and `aye.lock` with O4.3. Until then this subsection is the design.
+URL dependencies and `aye.lock` are not implemented yet (O4.3); `url` is
+an error (E0121) until then.
 
 A program with dependencies has an `aye.toml` in its root module's
 directory. It is a small subset of TOML: `#` comments, `name = "..."`

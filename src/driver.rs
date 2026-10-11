@@ -1,6 +1,7 @@
 //! Compiler driver: runs the pipeline and invokes clang.
 
 use crate::diag::{Diag, Error, Fix, Span, json_str, offset};
+use crate::manifest::ManifestFile;
 use crate::module::{self, SourceFile};
 use crate::{ast, cgen, oir, sema};
 use std::collections::HashSet;
@@ -279,6 +280,9 @@ pub struct Root {
     pub doc_tests: bool,
     /// What the program is built for.
     pub target: &'static Target,
+    /// The `aye.toml` of the program (`docs/decisions.md`, "Dependencies
+    /// (O4)"), if there is one.
+    pub manifest: Option<ManifestFile>,
 }
 
 impl Root {
@@ -286,6 +290,22 @@ impl Root {
     /// a single file, which is a module of its own (the other files in its
     /// directory are not part of it). Imports are found in the directory.
     pub fn load(path: &str) -> Result<Root, String> {
+        Root::load_in(path, None)
+    }
+
+    /// Like `load`, with the `aye.toml` of the nearest directory from the
+    /// root module's up to `top` (`aye test DIR`); without `top`, only the
+    /// root module's own.
+    pub fn load_in(path: &str, top: Option<&Path>) -> Result<Root, String> {
+        let mut root = Root::load_files(path)?;
+        root.manifest = match top {
+            Some(top) => ManifestFile::nearest(&root.base, top)?,
+            None => ManifestFile::read(&root.base)?,
+        };
+        Ok(root)
+    }
+
+    fn load_files(path: &str) -> Result<Root, String> {
         let p = Path::new(path);
         if !p.is_dir() {
             let text =
@@ -310,6 +330,7 @@ impl Root {
                 name,
                 text,
                 std: false,
+                dep: false,
             });
         }
         Ok(Root {
@@ -317,6 +338,7 @@ impl Root {
             base: p.to_path_buf(),
             doc_tests: false,
             target: host_target(),
+            manifest: None,
         })
     }
 
@@ -331,10 +353,12 @@ impl Root {
                 name: name.to_string(),
                 text: src.to_string(),
                 std: false,
+                dep: false,
             }],
             base,
             doc_tests: false,
             target: host_target(),
+            manifest: None,
         }
     }
 }
@@ -360,7 +384,13 @@ pub fn check(file_name: &str, src: &str) -> Result<sema::Program, Vec<Diag>> {
 /// file and position. A stage runs only if the previous one had no errors,
 /// so a syntax error never causes follow-up type errors.
 pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
-    let (files, ast) = module::load(root.files, &root.base, root.doc_tests, root.target);
+    let (files, ast) = module::load(
+        root.files,
+        &root.base,
+        root.doc_tests,
+        root.target,
+        root.manifest,
+    );
     let names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
     let diags = |errs: Vec<Error>| {
         let mut d: Vec<Diag> = errs.into_iter().map(|e| e.with_file(&names)).collect();
@@ -545,7 +575,7 @@ pub fn compile_tests_to_c(
     let ir = oir::lower(&typed, &links);
     let files = file_names(&checked.files);
     let mut dirs: Vec<PathBuf> = Vec::new();
-    for f in checked.files.iter().filter(|f| !f.std) {
+    for f in checked.files.iter().filter(|f| !f.std && !f.dep) {
         let dir = Path::new(&f.name)
             .parent()
             .filter(|d| !d.as_os_str().is_empty())
@@ -690,7 +720,8 @@ pub fn run_tests(
         if top.is_dir() && reached.contains(&canon) {
             continue;
         }
-        let mut root = Root::load(&dir.to_string_lossy()).map_err(TestError::Run)?;
+        let mut root = Root::load_in(&dir.to_string_lossy(), top.is_dir().then_some(top))
+            .map_err(TestError::Run)?;
         root.target = target;
         let base = root.base.clone();
         let prefix: Vec<String> = base

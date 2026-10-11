@@ -1,0 +1,4 @@
+test "app: twice" ... ok (N ms)
+test "util: util own test" ... ok (N ms)
+
+2 passed; 0 failed; 2 modules; N ms

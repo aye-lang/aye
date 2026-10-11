@@ -2534,6 +2534,163 @@ pub fn main() {
 }
 "#,
 }
+E0119 = 119 {
+    "aye.toml or aye.lock does not parse",
+    "`aye.toml` (in the root module's directory) is a small subset of TOML: `#` comment lines, `name = \"app\"`, then `[deps]` with one line per dependency, `key = { path = \"../dir\" }` or `key = { url = \"https://example.com/x.tar.gz\" }`. Strings have no escapes. Another table, a dotted key, an array, a number, an unknown field, a dependency with both or neither of `path` and `url`, or a URL that is not an `https://` or `file://` URL of a `.tar.gz` or `.tgz` archive is an error. The message names the line.",
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+util = { git = "https://example.com/util" }
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+}
+E0120 = 120 {
+    "dependency key cannot be used",
+    "The key of a dependency in `aye.toml` is the first name of its imports (`import util`), so it must be an identifier that is not a keyword and not `std`, and it must not be the name of a directory under the root module's directory (then `import util` would mean two things; the error is at the `import`). Rename the key.",
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+std = { path = "vendor/lib" }
+// file: vendor/lib/lib.aye
+pub fn one() i64 {
+    return 1
+}
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+lib = { path = "vendor/lib" }
+// file: vendor/lib/lib.aye
+pub fn one() i64 {
+    return 1
+}
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+}
+E0121 = 121 {
+    "dependency not available",
+    "A dependency of `aye.toml` cannot be had: its `path` is not a directory (a relative `path` starts at the directory of `aye.toml`), a download or unpack fails, or a locked dependency is neither cached nor downloadable. Fix the path, or check the network and the cache directory the message names.",
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+lib = { path = "vendor/lib" }
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+lib = { path = "vendor/lib" }
+// file: vendor/lib/lib.aye
+pub fn one() i64 {
+    return 1
+}
+// file: main.aye
+import lib
+
+pub fn main() {
+    @println(lib.one())
+}
+"#,
+}
+E0122 = 122 {
+    "downloaded archive does not match aye.lock",
+    "`aye.lock` pins the SHA-256 of the archive of each URL dependency. The archive that was downloaded hashes to something else: the host changed the file, or the URL points elsewhere now. If the change is intended, delete that dependency's line in `aye.lock` and build again; the new hash is written.",
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+lib = { url = "file:///tmp/lib.tar.gz" }
+// file: aye.lock
+[deps]
+lib = { url = "file:///tmp/lib.tar.gz", sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+lib = { url = "file:///tmp/lib.tar.gz" }
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+}
+E0123 = 123 {
+    "dependency with dependencies of its own",
+    "A dependency whose own `aye.toml` has a non-empty `[deps]` is not supported yet. Copy what it needs into the dependency (vendor it), or use a version of it without dependencies.",
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+a = { path = "vendor/a" }
+// file: vendor/a/aye.toml
+name = "a"
+
+[deps]
+b = { path = "../b" }
+// file: vendor/a/a.aye
+pub fn one() i64 {
+    return 1
+}
+// file: vendor/b/b.aye
+pub fn two() i64 {
+    return 1
+}
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+    r#"// file: aye.toml
+name = "app"
+
+[deps]
+a = { path = "vendor/a" }
+// file: vendor/a/aye.toml
+name = "a"
+
+[deps]
+// file: vendor/a/a.aye
+pub fn one() i64 {
+    return 1
+}
+// file: main.aye
+pub fn main() {
+    @println("hello")
+}
+"#,
+}
 }
 
 #[cfg(test)]
@@ -2599,6 +2756,10 @@ mod tests {
                 };
                 assert!(driver::find_target(&target(info.wrong)).is_err());
                 assert!(driver::find_target(&target(info.fix)).is_ok());
+                continue;
+            }
+            // E0122 needs a download: O4.3 reports it and checks its examples.
+            if info.code == E0122 {
                 continue;
             }
             // E0118's examples are checked for a target without `std.net`.
