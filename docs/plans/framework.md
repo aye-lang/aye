@@ -257,8 +257,8 @@ worktrees) and run only the named case.
 - lane: framework
 - goal: `framework/web/islands.js` (embedded in `web` with `@embedFile`, no build step) finds every `[data-island]` element, loads `/_web/islands/<name>.wasm`, supplies the three `dom_*` imports over a handle table, writes the props into wasm memory through the exported `malloc`, calls `mount(root, ptr, len)`, and forwards listener events to `event(id)`.
 - serves: FD6
-- files: `framework/web/islands.js` (new), `framework/web/islands.aye` (new: `pub fn islandsScript() []u8`), `tests/framework.rs` (`island_glue`), `tests/framework/island_dom.mjs` (new: a fake `document` with `querySelector`, `textContent`, `addEventListener`, `click()`, and a `fetch` that returns a given `.wasm` file)
-- verify: `cargo test --release --test framework island_glue` → exit 0; the test builds F4.1's wasm into a temp directory, runs the script under `node` (skipped with a message when Node is older than 22): after the glue runs, the span reads `Count: 3`, two clicks give `Count: 5`, and an element whose `.wasm` fetch fails logs one `console.error` and leaves the others working; `node --check framework/web/islands.js` → exit 0
+- files: `framework/web/islands.js` (new), `framework/web/islands.aye` (new: `pub fn islandsScript() []u8`), `tests/framework.rs` (`islands_glue`), `tests/framework/island_dom.mjs` (new: a fake `document` with `querySelector`, `textContent`, `addEventListener`, `click()`, and a `fetch` that returns a given `.wasm` file)
+- verify: `cargo test --release --test framework islands_glue` → exit 0; the test builds F4.1's wasm into a temp directory, runs the script under `node` (skipped with a message when Node is older than 22): after the glue runs, the span reads `Count: 3`, two clicks give `Count: 5`, and an element whose `.wasm` fetch fails logs one `console.error` and leaves the others working; ``islandsScript()` in `framework/web/islands.aye` (inline, like `dev.js`)` → exit 0
 - depends on: F4.1
 - parallel with: F4.3 (different files except `tests/framework.rs`)
 - where: local
@@ -271,7 +271,7 @@ worktrees) and run only the named case.
 - goal: `web.island(h, name, props, render)` writes `<div data-island="NAME" data-props="PROPS">` (both escaped), the island's server-rendered HTML and `</div>`, and marks the response so the server adds `<script type="module" src="/_web/islands.js"></script>` once before `</body>` (at the end when there is none).
 - serves: FD6, FD2
 - files: `framework/web/islands.aye`, `framework/web/response.aye` (the flag), `framework/web/serve.aye` (the injection and `GET /_web/islands.js`, `Content-Type: text/javascript; charset=utf-8`), `framework/web/dev.aye` (share `devInject`'s search for `</body>`), `framework/examples/pages/app/counter/page.aye` (new), `tests/framework.rs`, `tests/framework/pages/counter*.http` (new)
-- verify: `cargo test --release --test framework pages` → exit 0 and `cargo test --release --test framework web_units` → exit 0; new cases: `GET /counter` has the island `div` with `data-props="{&quot;start&quot;:3}"`, `<button` and `Count: 3` inside it, the script tag once before `</body>`; `GET /about` has no script tag; `GET /_web/islands.js` is `200 text/javascript; charset=utf-8` and equals the file; two islands on a page give one script tag (`test` block)
+- verify: `cargo test --release --test framework pages` → exit 0 and `cargo test --release --test framework web_units` → exit 0; new cases: `GET /counter` has the island `div` with `data-props="{&quot;start&quot;:3}"`, `<button` and `Count: 3` inside it, the script tag once before `</body>`; `GET /about` has no script tag; `GET /_web/islands.js` is `200 text/javascript; charset=utf-8` and equals `islandsScript()` (the glue is an inline string in `framework/web/islands.aye`, no `.js` file); two islands on a page give one script tag (`test` block)
 - depends on: F4.1
 - parallel with: F4.2
 - where: local
