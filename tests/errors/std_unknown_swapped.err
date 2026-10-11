@@ -1,0 +1,2 @@
+std_unknown_swapped.aye:3:12: error[E0081]: unknown std module `std.jsno`; std has: coro, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time
+did you mean `std.json`?

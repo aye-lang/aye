@@ -1,0 +1,6 @@
+// An unknown std module with a letter left out is still suggested.
+
+import std.txt
+
+pub fn main() {
+}
