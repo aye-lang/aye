@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 331
+
+<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><article><h1>Hello, world</h1><p>The first post of the posts app. Its text is <em>markup</em>, written by the site's authors.</p></article><h2>0 comments</h2><ul class="comments"></ul></body></html>

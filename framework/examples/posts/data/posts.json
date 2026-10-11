@@ -1,0 +1,17 @@
+[
+  {
+    "slug": "hello",
+    "title": "Hello, world",
+    "body_html": "<p>The first post of the posts app. Its text is <em>markup</em>, written by the site's authors.</p>"
+  },
+  {
+    "slug": "less-is-more",
+    "title": "Less < More",
+    "body_html": "<p>A title with a <code>&lt;</code> in it, which the page must escape.</p>"
+  },
+  {
+    "slug": "on-files",
+    "title": "Posts live in a file",
+    "body_html": "<p>The server reads this file on the first request that needs it.</p><p>Comments are kept in memory only.</p>"
+  }
+]
