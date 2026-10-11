@@ -34,4 +34,5 @@ Connection: close
 Content-Length: 9
 
 GET /d #6<end>
-handled 6
+keep-alive answered 20
+handled 26

@@ -658,8 +658,9 @@ fn defaultWorkers() u32 {
 /// (the `std.thread.spawn(T, f, arg)` shape; there are no closures). A
 /// handler is `fn(ctx: *mut T, req: *Request, res: *mut Response, alloc:
 /// Allocator)`: it fills `res` (status 200 and no body to begin with);
-/// `alloc` is an arena that lives until the response is written, so a
-/// handler allocates and never frees. Handlers run on many threads at once:
+/// `alloc` is an arena that lives until the response is written (the
+/// connection's arena, reset after each request), so a handler allocates and
+/// never frees, and keeps no pointer into it past the call. Handlers run on many threads at once:
 /// what they share through `ctx` needs a `std.sync.Mutex` or an `Atomic`.
 /// A `HEAD` request is answered like a `GET` (the handler sees the method and
 /// may fill the same body): the server writes the status line, the headers
@@ -765,12 +766,11 @@ pub struct Server {
         o.inbuf.append(chunk[0..n]) catch |e| {
             return false
         }
+        let a = o.arena.allocator()
         while self.stopped.load() == 0 {
-            var arena = Arena.init(alloc)
-            defer arena.deinit()
-            let a = arena.allocator()
             let parsed = parse(a, o.inbuf.bytes()[o.off..], self.limits) catch |e| {
                 if e == ParseError.Incomplete {
+                    o.arena.reset()
                     if o.off > 0 {
                         var rest = Builder.init(alloc)
                         rest.append(o.inbuf.bytes()[o.off..]) catch |e2| {
@@ -800,6 +800,7 @@ pub struct Server {
             }
             send(a, o.conn, res, how, text.eql(req.method, "HEAD"))
             req.deinit()
+            o.arena.reset()
             if !keep {
                 return false
             }
@@ -813,9 +814,12 @@ pub struct Server {
 }
 
 // A connection that a worker holds: the bytes from `off` on are read and not
-// yet parsed; `last` is when bytes last came (`time.monotonicMs`).
+// yet parsed; `last` is when bytes last came (`time.monotonicMs`). `arena`
+// serves one request at a time (parse, handler, send) and is reset after
+// each; `inbuf` is on the worker's allocator, so it survives the reset.
 struct Open {
     conn: Conn
+    arena: Arena
     inbuf: Builder
     off: usize
     last: u64
@@ -823,6 +827,7 @@ struct Open {
 
 fn closeOpen(alloc: Allocator, o: *mut Open) {
     o.conn.close()
+    o.arena.deinit()
     o.inbuf.deinit()
     alloc.destroy(o)
 }
@@ -880,7 +885,7 @@ fn workerMain(s: *mut Server) {
                     c.close()
                     break
                 }
-                let o = alloc.create(Open { conn: c, inbuf: Builder.init(alloc), off: 0, last: now }) catch |e| {
+                let o = alloc.create(Open { conn: c, arena: Arena.init(alloc), inbuf: Builder.init(alloc), off: 0, last: now }) catch |e| {
                     c.close()
                     continue
                 }
