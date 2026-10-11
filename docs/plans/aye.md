@@ -148,7 +148,6 @@ brackets.
 - O1.11b `scripts/eval.py --tasks a,b` rewrites the whole results table in `docs/aye-eval.md` with only the tasks it ran (O7.2 report); merge per task instead. Verify: a `--tasks rest_json` run keeps the other rows.
 - O1.11c the eval harness `SYSTEM_PROMPT` lists `aye spec`, `aye check`, `aye explain` but not `aye doc --signatures <module>` (O7.2 report; O13 names it). Add it. Verify: a run's transcript shows the agent found `aye doc` from the system prompt.
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).
-- `Arena.reset` keeping its first block (framework need 5; F1.1 did not need it, later phases may).
 - Signals for graceful stop (framework F3, need 10).
 
 ## Reference
