@@ -642,3 +642,13 @@ O4.1 design for O7: an app with a local-path and a URL dependency builds with `a
 | same, user s | 7.5-7.6 | 8.7-9.1 |
 
 Split build in debug mode, measured once: front end 0.5 s, then writing the files and running the 8 `clang -c` 1.4 s (each `clang` 1.1-1.4 s), the link 0.1 s and `dsymutil` 0.23 s. `aye test browser` keeps 2.4 s of running tests and has no `-o` path: its `dsymutil` output (a `.dSYM` beside the temp executable) is wasted work. The same was true of the one-file clang before.
+
+**What landed (O5.2h, card 3):** the tree shake already existed: since M9.6, `oir::lower` (`reachable` in `src/oir.rs`) keeps only the functions and vtables reachable from the roots `main`, the tests, exported functions (`pub extern fn`) and the function values in globals, by walking each function's calls, function values (`FnRef`), `dyn` conversions and downcasts (a vtable keeps every method of that struct for that interface) and `Allocator` conversions (`alloc` and `free`). cgen emits only what is kept. In the C of `aye build browser`, each of the 4,966 functions is used. The remaining waste was in test executables: `main` was a root there too, but cgen gives a test executable its own C `main`, which runs one test. Now, with tests, `main` is a root only when something refers to it. Extern functions are only prototypes, and globals stay roots. `tests/tests/tree_shake.aye` has a `main` that calls a C function that no library defines; the golden job `tests/tree_shake: the test C` checks that its test C has neither that function nor `main`. clang drops an unused `static` function at `-O0` too, so before the change the link failed only in a split build. Measured on macOS, load 5-30, 3 runs each:
+
+| `aye test browser` (131 passed) | Before | After |
+| --- | --- | --- |
+| generated C, bytes | 27,655,216 | 23,530,535 (-15%) |
+| functions in the C | 5,035 | 4,294 |
+| user + sys, s | 14.2 / 14.4 / 14.0 | 12.5 / 13.2 / 12.9 (-9%) |
+
+`aye build browser` is unchanged: 26,457,152 bytes of C, 9.6-9.9 s user + sys before and after.
