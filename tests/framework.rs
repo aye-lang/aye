@@ -3,8 +3,9 @@
 //! - `framework/examples/hello` is built and started with `--port 0`; it
 //!   prints `listening on 127.0.0.1:<port>`.
 //! - `tests/framework/hello/X.http` is the response the server must send to
-//!   a `GET` of the path in `HELLO_CASES` (with `Connection: close`), with
+//!   the method and path in `HELLO_CASES` (with `Connection: close`), with
 //!   line endings read as `\n`.
+//! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -15,8 +16,14 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// A path and the file of `tests/framework/hello/` with its response.
-const HELLO_CASES: &[(&str, &str)] = &[("/", "root.http"), ("/nope", "missing.http")];
+/// A method, a path and the file of `tests/framework/hello/` with its
+/// response.
+const HELLO_CASES: &[(&str, &str, &str)] = &[
+    ("GET", "/", "root.http"),
+    ("HEAD", "/", "head.http"),
+    ("POST", "/", "not_allowed.http"),
+    ("GET", "/nope", "missing.http"),
+];
 
 /// The built app, killed when dropped.
 struct App {
@@ -70,15 +77,15 @@ fn start(exe: &Path) -> App {
     App { child, port }
 }
 
-/// The response to `GET path`, read until the server closes, with `\r\n`
+/// The response to `method path`, read until the server closes, with `\r\n`
 /// as `\n`.
-fn get(app: &App, path: &str) -> String {
+fn request(app: &App, method: &str, path: &str) -> String {
     let mut s = TcpStream::connect(("127.0.0.1", app.port)).unwrap();
     s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .unwrap();
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut buf = Vec::new();
@@ -89,9 +96,25 @@ fn get(app: &App, path: &str) -> String {
 #[test]
 fn hello() {
     let app = start(&build("hello"));
-    for (path, file) in HELLO_CASES {
+    for (method, path, file) in HELLO_CASES {
         let want =
             std::fs::read_to_string(root().join("tests/framework/hello").join(file)).unwrap();
-        assert_eq!(get(&app, path), want, "GET {path}");
+        assert_eq!(request(&app, method, path), want, "{method} {path}");
     }
+}
+
+#[test]
+fn web_units() {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .arg("test")
+        .arg(root().join("framework").join("examples").join("hello"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("; 0 failed;"),
+        "aye test failed:\n{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
