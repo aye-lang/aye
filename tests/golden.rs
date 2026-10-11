@@ -19,7 +19,8 @@
 //!   A case with `X.freestanding` (a marker whose first line is the
 //!   arguments for the loader, if any) also runs built for
 //!   wasm32-freestanding under `tests/wasm/loader.mjs`, in every mode: with
-//!   no arguments `main` runs and the goldens are `X.out` and `X.panic` (a
+//!   no arguments `main` runs and the goldens are `X.wasm32-freestanding.out`
+//!   if it exists, else `X.out`, and `X.panic` (a
 //!   panic exits with status 134); with arguments the loader calls that
 //!   export, and stdout is `X.freestanding.out`. The line `golden
 //!   (wasm32-freestanding): N passed` counts them.
@@ -1032,7 +1033,10 @@ fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Resul
     } else {
         "freestanding.out"
     };
-    let expected_out = read(&path.with_extension(golden)).ok_or("missing golden")?;
+    let expected_out = read(&path.with_extension(format!("{}.out", target.name)))
+        .filter(|_| args.is_empty())
+        .or_else(|| read(&path.with_extension(golden)))
+        .ok_or("missing golden")?;
     let expected_panic = read(&path.with_extension("panic")).filter(|_| args.is_empty());
     let expected_error = read(&path.with_extension("stderr")).filter(|_| args.is_empty());
     let modes: &[Mode] = if expected_panic.is_some() {
