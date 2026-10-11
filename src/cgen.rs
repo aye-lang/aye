@@ -1,4 +1,5 @@
-//! C backend: turns OIR into a single C translation unit for clang.
+//! C backend: turns OIR into a C translation unit for clang, which can also
+//! be compiled as a header and several units (`Parts::split`).
 //!
 //! The generated C includes only freestanding headers (stdint/stddef/stdbool)
 //! so user `extern fn` declarations never clash with libc headers. The
@@ -569,9 +570,9 @@ AYE_RT uint64_t aye_hash_f64(double d) {
 /* Each thread has its own error return trace, and so does each coroutine
    (`aye_trace_buf` is the running coroutine's; null for the thread's). */
 typedef struct aye_trace_ent { int line, col; } aye_trace_ent;
-static _Thread_local __attribute__((unused)) aye_trace_ent aye_trace[AYE_TRACE_MAX];
-static _Thread_local __attribute__((unused)) aye_trace_ent *aye_trace_buf;
-static _Thread_local __attribute__((unused)) uint32_t aye_trace_len;
+AYE_DATA _Thread_local __attribute__((unused)) aye_trace_ent aye_trace[AYE_TRACE_MAX];
+AYE_DATA _Thread_local __attribute__((unused)) aye_trace_ent *aye_trace_buf;
+AYE_DATA _Thread_local __attribute__((unused)) uint32_t aye_trace_len;
 AYE_RT void aye_trace_push(int line, int col) {
     if (aye_trace_len < AYE_TRACE_MAX) {
         aye_trace_ent *t = aye_trace_buf ? aye_trace_buf : aye_trace;
@@ -718,7 +719,7 @@ AYE_RT void aye_general_free(void *self, void *p, size_t size, int line, int col
         aye_general_release(old);
     }
 }
-static __attribute__((unused)) const aye_alloc_vt aye_general_vt = {aye_general_alloc, aye_general_free};
+AYE_DATA __attribute__((unused)) const aye_alloc_vt aye_general_vt AYE_INIT({aye_general_alloc, aye_general_free});
 AYE_RT aye_General aye_general_init(void) { return (aye_General){.track = AYE_TRACE}; }
 AYE_RT aye_Allocator aye_general_allocator(aye_General *g) { return (aye_Allocator){g, &aye_general_vt}; }
 /* Report each allocation that was not freed, in allocation order, then
@@ -768,7 +769,7 @@ AYE_RT void *aye_arena_alloc(void *self, size_t size, size_t align, int line, in
     return c + 1;
 }
 AYE_RT void aye_arena_free(void *self, void *p, size_t size, int line, int col) {}
-static __attribute__((unused)) const aye_alloc_vt aye_arena_vt = {aye_arena_alloc, aye_arena_free};
+AYE_DATA __attribute__((unused)) const aye_alloc_vt aye_arena_vt AYE_INIT({aye_arena_alloc, aye_arena_free});
 AYE_RT aye_Arena aye_arena_init(aye_Allocator backing) { return (aye_Arena){backing, 0, 0}; }
 AYE_RT aye_Allocator aye_arena_allocator(aye_Arena *a) { return (aye_Allocator){a, &aye_arena_vt}; }
 AYE_RT void aye_arena_deinit(aye_Arena *a, int line, int col) {
@@ -782,7 +783,7 @@ AYE_RT void aye_arena_deinit(aye_Arena *a, int line, int col) {
 
 /* Tests: the leak-checked allocator, assertions, and the end of a test. A
    failed assertion ends the test process with status 1. */
-static __attribute__((unused)) aye_General aye_test_gpa = {.track = true};
+AYE_DATA __attribute__((unused)) aye_General aye_test_gpa AYE_INIT({.track = true});
 AYE_RT aye_Allocator aye_test_allocator(void) { return aye_general_allocator(&aye_test_gpa); }
 #define AYE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
     do {                                                                                                         \
@@ -840,8 +841,8 @@ AYE_RT void aye_log_e(uint16_t e) { aye_rt_dprintf(2, "%s", aye_error_names[e]);
    monotonic clock in nanoseconds. Flag and clock values, errno numbers, and
    where `struct stat` keeps the modification time, differ between macOS,
    Linux and wasi-libc (wasm32-wasip1). */
-static int aye_argc;
-static char **aye_argv;
+AYE_DATA int aye_argc;
+AYE_DATA char **aye_argv;
 AYE_RT int32_t aye_std_argc(void) { return aye_argc; }
 AYE_RT uint8_t *aye_std_argv(int32_t i) { return (uint8_t *)aye_argv[i]; }
 #ifdef __wasm32__
@@ -1234,8 +1235,8 @@ extern int aye_rt_sigaltstack(const aye_stack_t *, aye_stack_t *) __asm__(AYE_SY
 extern int aye_rt_sigaction(int, const aye_sigaction_t *, aye_sigaction_t *) __asm__(AYE_SYM("sigaction"));
 extern int aye_rt_getrlimit(int, uint64_t *) __asm__(AYE_SYM("getrlimit"));
 extern long aye_rt_write(int, const void *, size_t) __asm__(AYE_SYM("write"));
-static _Thread_local __attribute__((unused)) uintptr_t aye_stack_top, aye_stack_size;
-static _Thread_local __attribute__((unused)) void *aye_altstack;
+AYE_DATA _Thread_local __attribute__((unused)) uintptr_t aye_stack_top, aye_stack_size;
+AYE_DATA _Thread_local __attribute__((unused)) void *aye_altstack;
 /* std.coro: a coroutine (see `aye_coro_init` below). While one runs,
    `aye_stack_top` and `aye_stack_size` are its stack's, so a fault in the
    guard region below its stack is reported as a stack overflow too. */
@@ -1258,8 +1259,8 @@ typedef struct aye_coro {
     int state;
     aye_trace_ent trace[AYE_TRACE ? AYE_TRACE_MAX : 1];
 } aye_coro;
-static _Thread_local __attribute__((unused)) aye_coro *aye_coro_current;
-static _Thread_local __attribute__((unused)) char aye_coro_thread; /* its address names the thread */
+AYE_DATA _Thread_local __attribute__((unused)) aye_coro *aye_coro_current;
+AYE_DATA _Thread_local __attribute__((unused)) char aye_coro_thread; /* its address names the thread */
 /* Each thread keeps up to AYE_CORO_CACHE freed stacks for the next
    coroutines of the same size, with only their top AYE_CORO_HOT bytes
    still taken (the rest is given back with madvise): making a coroutine
@@ -1270,8 +1271,8 @@ extern void *aye_rt_mmap(void *, size_t, int, int, int, int64_t) __asm__(AYE_SYM
 extern int aye_rt_munmap(void *, size_t) __asm__(AYE_SYM("munmap"));
 extern int aye_rt_mprotect(void *, size_t, int) __asm__(AYE_SYM("mprotect"));
 extern int aye_rt_madvise(void *, size_t, int) __asm__(AYE_SYM("madvise"));
-static _Thread_local __attribute__((unused)) struct { uint8_t *map; size_t size; } aye_coro_cache[AYE_CORO_CACHE];
-static _Thread_local __attribute__((unused)) uint32_t aye_coro_cached;
+AYE_DATA _Thread_local __attribute__((unused)) struct { uint8_t *map; size_t size; } aye_coro_cache[AYE_CORO_CACHE];
+AYE_DATA _Thread_local __attribute__((unused)) uint32_t aye_coro_cached;
 /* Unmap the stacks the thread keeps (it is ending). */
 AYE_RT void aye_coro_drain(void) {
     while (aye_coro_cached) {
@@ -1648,14 +1649,88 @@ AYE_RT void aye_coro_free(uint64_t *block) {
 }
 "#;
 
+/// How functions and data are declared. The C is one translation unit, or
+/// (`Parts::split`) a header and several units that each define
+/// `AYE_UNIT` to their index before they include it: then the functions
+/// of the program are not `static`, so that units can call each other,
+/// and the data that the runtime and the program share (globals, tables,
+/// vtables, the runtime's state) is defined in unit 0 and `extern` in the
+/// others. The runtime's functions stay `static`, a copy in each unit.
+const LINKAGE: &str = r#"#ifndef AYE_UNIT
+#define AYE_FN static
+#define AYE_DATA static
+#define AYE_INIT(...) = __VA_ARGS__
+#elif AYE_UNIT == 0
+#define AYE_FN __attribute__((visibility("hidden")))
+#define AYE_DATA __attribute__((visibility("hidden")))
+#define AYE_INIT(...) = __VA_ARGS__
+#else
+#define AYE_FN __attribute__((visibility("hidden")))
+#define AYE_DATA extern __attribute__((visibility("hidden")))
+#define AYE_INIT(...)
+#endif
+"#;
+
+/// Below this many functions the C is compiled as one translation unit:
+/// splitting it gains nothing.
+const SPLIT_MIN_FUNCS: usize = 200;
+
+/// Where the function definitions are in the generated C, so that it can
+/// be compiled as several translation units (`split`).
+#[derive(Default)]
+pub struct Parts {
+    /// The start of each function definition, and the `#line` that gives
+    /// its first line the source position it has in the one-unit C.
+    funcs: Vec<(usize, String)>,
+    /// The same for what follows the last function (`main`).
+    tail: (usize, String),
+}
+
+impl Parts {
+    /// The C `c` (from `emit`) as a header, which a unit includes as
+    /// `header`, and at most `k` units that each define a contiguous run
+    /// of the functions, balanced by size (unit 0 also has `main`). `None`
+    /// when the program has too few functions to gain from it.
+    pub fn split(&self, c: &str, header: &str, k: usize) -> Option<(String, Vec<String>)> {
+        if k < 2 || self.funcs.len() < SPLIT_MIN_FUNCS {
+            return None;
+        }
+        let first = self.funcs[0].0;
+        let total = self.tail.0 - first;
+        let mut units: Vec<String> = Vec::new();
+        for (i, (start, line)) in self.funcs.iter().enumerate() {
+            let end = self.funcs.get(i + 1).map_or(self.tail.0, |f| f.0);
+            // A new unit once this one has its share of the bodies.
+            if units.is_empty() || ((start - first) * k >= total * units.len() && units.len() < k) {
+                units.push(format!(
+                    "#define AYE_UNIT {}\n#include \"{header}\"\n{line}",
+                    units.len()
+                ));
+            }
+            units.last_mut().unwrap().push_str(&c[*start..end]);
+        }
+        units[0].push_str(&self.tail.1);
+        units[0].push_str(&c[self.tail.0..]);
+        Some((c[..first].to_string(), units))
+    }
+}
+
 /// Emit the C translation unit for `p`. `files` are the Aye source names
 /// (indexed by `Span::file`) used in `#line` directives and panic messages;
 /// `checks` enables runtime checks and `trace` the error return trace (debug
 /// mode). With `tests`, `main` runs one test instead of `aye_f_main`.
-pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: bool) -> String {
+pub fn emit(
+    p: &Program,
+    files: &[String],
+    checks: bool,
+    trace: bool,
+    tests: bool,
+) -> (String, Parts) {
     let files = files.iter().map(|f| c_str(f.as_bytes())).collect();
     let mut g = Gen {
         out: String::new(),
+        parts: Parts::default(),
+        last_line: None,
         files,
         trace,
         checks,
@@ -1666,7 +1741,7 @@ pub fn emit(p: &Program, files: &[String], checks: bool, trace: bool, tests: boo
         layout: p.layout,
     };
     g.program(p, checks, tests);
-    g.out
+    (g.out, g.parts)
 }
 
 /// A struct or function name as a C identifier. An instance of a generic
@@ -1726,6 +1801,10 @@ fn thunk_name(i: &str, s: &str, m: &str) -> String {
 
 struct Gen {
     out: String,
+    parts: Parts,
+    /// The last `#line`: its line, its file, and where the line after it
+    /// starts in `out`.
+    last_line: Option<(u32, usize, usize)>,
     /// The source file names as C string literals.
     files: Vec<String>,
     trace: bool,
@@ -1952,6 +2031,20 @@ fn line_col(span: Span) -> String {
 }
 
 impl Gen {
+    /// Where a part of the C starts (`Parts`), and the `#line` that keeps
+    /// its source positions when it follows other C.
+    fn part(&self) -> (usize, String) {
+        let pos = self.out.len();
+        let line = match self.last_line {
+            Some((n, file, at)) => {
+                let n = n as usize + self.out[at..].matches('\n').count();
+                format!("#line {n} {}\n", self.files[file])
+            }
+            None => String::new(),
+        };
+        (pos, line)
+    }
+
     fn line(&mut self, indent: usize, s: &str) {
         for _ in 0..indent {
             self.out.push_str("    ");
@@ -1975,9 +2068,10 @@ impl Gen {
             .push_str("/* Generated by the Aye stage0 compiler. Do not edit. */\n");
         let _ = writeln!(self.out, "#define AYE_CHECKS {}", checks as u8);
         let _ = writeln!(self.out, "#define AYE_TRACE {}", self.trace as u8);
+        self.out.push_str(LINKAGE);
         let _ = writeln!(
             self.out,
-            "static const char *const aye_files[] = {{{}}};",
+            "AYE_DATA const char *const aye_files[] AYE_INIT({{{}}});",
             self.files.join(", ")
         );
         let names: Vec<String> = std::iter::once("\"\"".to_string())
@@ -1985,7 +2079,7 @@ impl Gen {
             .collect();
         let _ = writeln!(
             self.out,
-            "static const char *const aye_error_names[] = {{{}}};",
+            "AYE_DATA const char *const aye_error_names[] AYE_INIT({{{}}});",
             names.join(", ")
         );
         self.out.push_str(PRELUDE);
@@ -2041,7 +2135,7 @@ impl Gen {
             let init = const_init(p, &g.value, &g.ty);
             let _ = writeln!(
                 self.out,
-                "static __attribute__((unused)) {} {} = {init};",
+                "AYE_DATA __attribute__((unused)) {} {} AYE_INIT({init});",
                 c_type(&g.ty),
                 global_name(&g.name)
             );
@@ -2062,20 +2156,23 @@ impl Gen {
             let (st, n) = (c_type(&Type::Struct(s.clone())), c_name(s));
             let _ = writeln!(
                 self.out,
-                "static void *aye_at_alloc_{n}(void *self, size_t size, size_t align, int line, int col) {{ return {a}(({st} *)self, size, align); }}"
+                "static __attribute__((unused)) void *aye_at_alloc_{n}(void *self, size_t size, size_t align, int line, int col) {{ return {a}(({st} *)self, size, align); }}"
             );
             let _ = writeln!(
                 self.out,
-                "static void aye_at_free_{n}(void *self, void *p, size_t size, int line, int col) {{ {fr}(({st} *)self, (uint8_t *)p, size); }}"
+                "static __attribute__((unused)) void aye_at_free_{n}(void *self, void *p, size_t size, int line, int col) {{ {fr}(({st} *)self, (uint8_t *)p, size); }}"
             );
             let _ = writeln!(
                 self.out,
-                "static const aye_alloc_vt aye_at_vt_{n} = {{aye_at_alloc_{n}, aye_at_free_{n}}};"
+                "AYE_DATA const aye_alloc_vt aye_at_vt_{n} AYE_INIT({{aye_at_alloc_{n}, aye_at_free_{n}}});"
             );
         }
         for f in &p.funcs {
+            let part = self.part();
+            self.parts.funcs.push(part);
             self.func(f);
         }
+        self.parts.tail = self.part();
         if tests {
             self.out.push_str("\nint main(int argc, char **argv) {\n    int n = 0;\n    aye_argc = argc;\n    aye_argv = argv;\n    aye_stack_guard_main();\n    if (argc != 2) return 2;\n");
             self.out.push_str("    for (const char *s = argv[1]; *s; s++) n = n * 10 + (*s - '0');\n    switch (n) {\n");
@@ -2130,7 +2227,7 @@ impl Gen {
             let th = thunk_name(i, s, &m.name);
             let _ = writeln!(
                 self.out,
-                "static {} {th}(void *self{params}) {{ {ret}{}({recv}{args}); }}",
+                "static __attribute__((unused)) {} {th}(void *self{params}) {{ {ret}{}({recv}{args}); }}",
                 c_type(&m.ret),
                 fn_name(&f.name)
             );
@@ -2138,7 +2235,7 @@ impl Gen {
         }
         let _ = writeln!(
             self.out,
-            "static const struct aye_VT_{} {} = {{{}}};",
+            "AYE_DATA const struct aye_VT_{} {} AYE_INIT({{{}}});",
             c_name(i),
             vtable_name(i, s),
             thunks.join(", ")
@@ -2354,7 +2451,7 @@ impl Gen {
             let name = extern_symbol(&f.name);
             return format!("AYE_EXPORT(\"{name}\") {} {name}({params})", c_type(&f.ret));
         }
-        format!("static {} {}({params})", c_type(&f.ret), fn_name(&f.name))
+        format!("AYE_FN {} {}({params})", c_type(&f.ret), fn_name(&f.name))
     }
 
     fn func(&mut self, f: &Func) {
@@ -2382,6 +2479,7 @@ impl Gen {
             "#line {} {}",
             s.span.line, self.files[s.span.file as usize]
         );
+        self.last_line = Some((s.span.line, s.span.file as usize, self.out.len()));
         match &s.kind {
             StmtKind::Assign(place, rv) => {
                 let mut checks = Vec::new();
