@@ -1,18 +1,27 @@
 // web.serveFile: static files from an app's `public/` directory (FD4).
 
 import std.fs
+import std.heap.Arena
+import std.mem.AllocError
 import std.mem.Allocator
 import std.path
 import std.text
+import std.text.Builder
+import std.time
 
 /// Answers `url` (a request path such as `/img/logo.svg`) with the file
 /// of that name under `dir`: 200, a `Content-Type` from the extension,
-/// `Cache-Control: public, max-age=0` and the file as the body. Returns
-/// false when there is no such regular file (the caller answers 404); a
+/// `Cache-Control: public, max-age=0`, a `Last-Modified` date and a strong
+/// `ETag` (hex size and modification time) and the file as the body. When
+/// `req` has an `If-None-Match` that lists the ETag (a `W/` prefix and a
+/// comma-separated list are accepted, `*` matches), or has no
+/// `If-None-Match` and an `If-Modified-Since` that is not older than the
+/// file (compared to the second), the answer is 304 with the same three
+/// headers and no body. Returns false when there is no such regular file (the caller answers 404); a
 /// link does not count as a file, so no link leads out of `dir`. A `.` or
 /// `..` segment or a `\` is `BadRequest`; an empty segment (`//`, a
 /// trailing `/`) names no file. An empty `dir` serves nothing.
-pub fn serveFile(alloc: Allocator, dir: []u8, url: []u8, res: *mut Response) Error!bool {
+pub fn serveFile(alloc: Allocator, dir: []u8, url: []u8, req: *Request, res: *mut Response) Error!bool {
     if dir.len == 0 || url.len < 2 {
         return false
     }
@@ -38,14 +47,91 @@ pub fn serveFile(alloc: Allocator, dir: []u8, url: []u8, res: *mut Response) Err
     if st.kind != fs.Kind.File {
         return false
     }
-    let body = fs.readFile(alloc, file) catch |e| {
-        return false
+    let secs = st.mtime / 1000000000
+    let tag = etagOf(alloc, st.size, st.mtime) catch |e| {
+        return Error.OutOfMemory
+    }
+    let date = time.fromUnixMs(secs * 1000).formatHttp(alloc) catch |e| {
+        return Error.OutOfMemory
     }
     res.contentType = mimeOf(url)
     try res.header("Cache-Control", "public, max-age=0")
+    try res.header("ETag", tag)
+    try res.header("Last-Modified", date)
     res.page.buf.clear()
+    if notModified(req, tag, secs) {
+        res.status = 304
+        return true
+    }
+    let body = fs.readFile(alloc, file) catch |e| {
+        return false
+    }
     try res.page.raw(body)
     return true
+}
+
+// The strong ETag of a file: `"<size>-<mtime>"`, both in hex.
+fn etagOf(alloc: Allocator, size: u64, mtime: i64) AllocError![]mut u8 {
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try b.appendByte('"')
+    try appendHex(&mut b, size)
+    try b.appendByte('-')
+    try appendHex(&mut b, mtime as u64)
+    try b.appendByte('"')
+    return b.toOwned()
+}
+
+// Appends `v` in lower-case hex, without leading zeros.
+fn appendHex(b: *mut Builder, v: u64) AllocError!void {
+    var n: u64 = 1
+    while n < 16 && (v >> (n * 4)) != 0 {
+        n += 1
+    }
+    while n > 0 {
+        n -= 1
+        let d = ((v >> (n * 4)) & 15) as u8
+        if d < 10 {
+            try b.appendByte('0' + d)
+        } else {
+            try b.appendByte('a' + (d - 10))
+        }
+    }
+}
+
+// Is the request conditional, and does the file (ETag `tag`, modified at
+// `secs` seconds since 1970) satisfy it? `If-None-Match` wins over
+// `If-Modified-Since`; an unparsable date is no match.
+fn notModified(req: *Request, tag: []u8, secs: i64) bool {
+    if req.header("If-None-Match") |inm| {
+        return etagListed(inm, tag)
+    }
+    if req.header("If-Modified-Since") |ims| {
+        let d = time.parseHttp(text.trim(ims)) catch |e| {
+            return false
+        }
+        return d.toUnixMs() / 1000 >= secs
+    }
+    return false
+}
+
+// Does the `If-None-Match` value `list` (`*`, or entity tags separated by
+// commas, each with an optional `W/`) hold `tag`?
+fn etagListed(list: []u8, tag: []u8) bool {
+    var parts = text.split(list, ",")
+    while parts.next() |part| {
+        var t = text.trim(part)
+        if text.eql(t, "*") {
+            return true
+        }
+        if text.startsWith(t, "W/") {
+            t = t[2..t.len]
+        }
+        if text.eql(t, tag) {
+            return true
+        }
+    }
+    return false
 }
 
 // The `Content-Type` for the extension of `name`.
@@ -104,4 +190,23 @@ test "content types by extension" {
     @expect(text.eql(mimeOf("/img/logo.SVG"), "image/svg+xml"))
     @expect(text.eql(mimeOf("/a.b/readme"), "application/octet-stream"))
     @expect(text.eql(mimeOf("/x.unknown"), "application/octet-stream"))
+}
+
+test "etag formatting" {
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let tag = try etagOf(arena.allocator(), 38, 0x1a2b3c4d5e6f)
+    @expect(text.eql(tag, "\"26-1a2b3c4d5e6f\""))
+    let zero = try etagOf(arena.allocator(), 0, 0)
+    @expect(text.eql(zero, "\"0-0\""))
+}
+
+test "etag lists" {
+    let tag = "\"26-1a\""
+    @expect(etagListed("\"26-1a\"", tag))
+    @expect(etagListed("W/\"26-1a\"", tag))
+    @expect(etagListed("\"x\", W/\"26-1a\" , \"y\"", tag))
+    @expect(etagListed("*", tag))
+    @expect(!etagListed("\"26-1b\"", tag))
+    @expect(!etagListed("", tag))
 }

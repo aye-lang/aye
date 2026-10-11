@@ -1,0 +1,11 @@
+HTTP/1.1 200 OK
+Content-Type: text/css; charset=utf-8
+Cache-Control: public, max-age=0
+ETag: <etag>
+Last-Modified: <date>
+Connection: close
+Content-Length: 38
+
+body {
+    font-family: sans-serif;
+}
