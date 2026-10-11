@@ -1,0 +1,2 @@
+catch_slice_mut.aye:16:9: error[E0023]: mismatched types: expected `[]mut u8`, found `[]u8` (a `[]u8` cannot become a `[]mut u8`: if the value is only read, declare it `[]u8`, as in `let s: []u8 = ...`)
+catch_slice_mut.aye:18:35: error[E0023]: mismatched types: expected `[]mut u8`, found `[]u8` (a `[]u8` cannot become a `[]mut u8`: if the value is only read, declare it `[]u8`, as in `let s: []u8 = ...`)

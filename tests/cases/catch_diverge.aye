@@ -1,0 +1,76 @@
+// A `catch` block that does not give a value must leave: `return`,
+// `break`, `continue` or `unreachable` on every path, also through `if`,
+// `match` and nested blocks.
+
+error E { Bad, Gone }
+
+fn get(n: i64) E!i64 {
+    if n < 0 {
+        return E.Bad
+    }
+    if n > 9 {
+        return E.Gone
+    }
+    return n * 10
+}
+
+fn viaUnreachable(n: i64) i64 {
+    let v = get(n) catch |e| {
+        @println("never")
+        unreachable
+    }
+    return v
+}
+
+fn viaReturn(n: i64) i64 {
+    let v = get(n) catch |e| {
+        if e == E.Bad {
+            return -1
+        } else {
+            return -2
+        }
+    }
+    return v + 1
+}
+
+fn viaMatch(n: i64) i64 {
+    let v = get(n) catch |e| {
+        match e {
+            .Bad => {
+                return -3
+            }
+            .Gone => unreachable
+        }
+    }
+    return v
+}
+
+fn viaBlock(n: i64) i64 {
+    let v = get(n) catch {
+        {
+            return -4
+        }
+    }
+    return v
+}
+
+pub fn main() {
+    @println(viaUnreachable(2))
+    @println(viaReturn(-5))
+    @println(viaReturn(20))
+    @println(viaReturn(3))
+    @println(viaMatch(-1))
+    @println(viaMatch(4))
+    @println(viaBlock(11))
+    var sum: i64 = 0
+    for n in [5]i64{1, -1, 2, 30, 3} {
+        let v = get(n) catch |e| {
+            if e == E.Gone {
+                break
+            }
+            continue
+        }
+        sum = sum + v
+    }
+    @println(sum)
+}

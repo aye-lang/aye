@@ -1070,7 +1070,11 @@ pub fn main() !void {
   the error. `f() catch |e| { ... }` runs the block on error; when the
   payload is not `void` the block must end with the replacement value (an
   expression as its last line: `catch |e| { report(e); old }`) or leave
-  with `return`, `break` or `continue`. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
+  with `return`, `break`, `continue` or `unreachable` on every path. A `return` there returns from the enclosing function. `catch` binds looser than `+` and tighter than `==`.
+  A `catch` used as a statement drops the value, so its block need not
+  give one: `f() catch |e| { log(e) }`. Where a `[]T` is expected, a
+  `catch` on a `[]mut T` payload is a `[]T`, so the fallback may be one:
+  `let s: []u8 = f() catch "none"`.
   `f() catch { ... }` (no `|e|`) is the same when the error is not needed.
 - An error passed on into a larger set (by `try` or `return`) keeps its
   name, so `catch |e|` compares it with an error of any set that has it:

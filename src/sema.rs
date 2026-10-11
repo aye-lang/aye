@@ -1137,9 +1137,12 @@ fn silent() -> Error {
 fn mismatch(span: Span, expected: &Type, found: &Type) -> Error {
     let hint = match (expected, found) {
         (Type::Bool, Type::Simd(..)) => {
-            " (a comparison of `simd` values is a mask: use `@all(m)` or `@any(m)`)"
+            " (a comparison of `simd` values is a mask: use `@all(m)` or `@any(m)`)".to_string()
         }
-        _ => "",
+        (Type::Slice(w, true), Type::Slice(g, false)) if w == g => format!(
+            " (a `{found}` cannot become a `{expected}`: if the value is only read, declare it `{found}`, as in `let s: {found} = ...`)"
+        ),
+        _ => String::new(),
     };
     Error::new(
         E0023,
@@ -1436,6 +1439,24 @@ fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
         }),
         _ => false,
     })
+}
+
+/// Does block `b` end with an expression that can be a statement (a call,
+/// `try`, `catch` or `match`)? A `catch` used as a statement runs it as one.
+fn ends_in_stmt(b: &ast::Block) -> bool {
+    matches!(
+        b.stmts.last(),
+        Some(ast::Stmt { kind: StmtKind::Expr(e), .. }) if matches!(
+            strip_parens(e).kind,
+            ExprKind::Call { .. }
+                | ExprKind::CallExpr { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::Builtin { .. }
+                | ExprKind::Try(_)
+                | ExprKind::Catch { .. }
+                | ExprKind::Match { .. }
+        )
+    )
 }
 
 /// Does a `catch` or `orelse` block end with its value?
@@ -4221,9 +4242,12 @@ impl<'a> Checker<'a> {
             | ExprKind::MethodCall { .. }
             | ExprKind::Builtin { .. }
             | ExprKind::Try(_)
-            | ExprKind::Unreachable
-            | ExprKind::Catch { .. } => {
+            | ExprKind::Unreachable => {
                 let t = self.expr(e, None)?;
+                self.handled(t)
+            }
+            ExprKind::Catch { .. } => {
+                let t = self.catch_expr(e, None, true)?;
                 self.handled(t)
             }
             _ => err(
@@ -5789,60 +5813,7 @@ impl<'a> Checker<'a> {
                 self.propagate(errors, span)?;
                 (TExprKind::Try(Box::new(t)), payload)
             }
-            ExprKind::Catch {
-                expr,
-                capture,
-                body,
-            } => {
-                let t = self.expr(expr, None)?;
-                let (set, payload) = Self::union_parts(&t, "catch")?;
-                self.scopes.push(HashMap::new());
-                let capture = capture.as_ref().map(|(n, sp)| {
-                    self.declare_or_report(n, Type::ErrorSet(set.clone()), false, *sp)
-                });
-                let failures = self.failures;
-                let body = match &**body {
-                    ArmBody::Block(b) => {
-                        let stmts = if payload == Type::Void {
-                            self.block(b)
-                        } else {
-                            self.value_block(b, &payload)
-                        };
-                        if payload != Type::Void
-                            && self.failures == failures
-                            && !block_returns(&stmts, true)
-                            && !gives_value(&stmts)
-                        {
-                            Err(Error::new(
-                                E0067,
-                                span,
-                                format!(
-                                    "this `catch` block must end with a `{payload}` value or leave with `return`, `break` or `continue`"
-                                ),
-                            ))
-                        } else {
-                            Ok(TArmBody::Block(stmts))
-                        }
-                    }
-                    ArmBody::Expr(x) if payload == Type::Void => {
-                        self.expr_stmt(x).map(TArmBody::Expr)
-                    }
-                    ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
-                };
-                self.scopes.pop();
-                let capture = match capture {
-                    Some(v) => Some(v.ok_or_else(silent)?),
-                    None => None,
-                };
-                (
-                    TExprKind::Catch {
-                        expr: Box::new(t),
-                        capture,
-                        body: Box::new(body?),
-                    },
-                    payload,
-                )
-            }
+            ExprKind::Catch { .. } => return self.catch_expr(e, expected, false),
             ExprKind::Unreachable => (
                 TExprKind::Unreachable,
                 expected.cloned().unwrap_or(Type::Void),
@@ -7767,6 +7738,82 @@ impl<'a> Checker<'a> {
     /// `match` on an enum, an error value or an integer. As a statement
     /// (`is_stmt`) the arms produce no value; otherwise all arms must have
     /// the same type.
+    /// `x catch |e| body`. Its type is the payload of `x`, or the type
+    /// expected here when that is the payload with `mut` dropped (a `[]T`
+    /// for a `[]mut T` payload, so the fallback may be a `[]T`). As a
+    /// statement (`is_stmt`) its value is dropped, so a block need not give
+    /// one.
+    fn catch_expr(
+        &mut self,
+        e: &ast::Expr,
+        expected: Option<&Type>,
+        is_stmt: bool,
+    ) -> Result<TExpr> {
+        let ExprKind::Catch {
+            expr,
+            capture,
+            body,
+        } = &e.kind
+        else {
+            unreachable!()
+        };
+        let span = e.span;
+        let t = self.expr(expr, None)?;
+        let (set, payload) = Self::union_parts(&t, "catch")?;
+        let payload = match expected {
+            Some(want) if drops_mut(&payload, want) => want.clone(),
+            _ => payload,
+        };
+        self.scopes.push(HashMap::new());
+        let capture = capture
+            .as_ref()
+            .map(|(n, sp)| self.declare_or_report(n, Type::ErrorSet(set.clone()), false, *sp));
+        let failures = self.failures;
+        let body = match &**body {
+            ArmBody::Block(b) => {
+                // As a statement the block need not give a value; a call or
+                // `match` at its end is a statement too.
+                let stmts = if payload == Type::Void || is_stmt && ends_in_stmt(b) {
+                    self.block(b)
+                } else {
+                    self.value_block(b, &payload)
+                };
+                if payload != Type::Void
+                    && !is_stmt
+                    && self.failures == failures
+                    && !block_returns(&stmts, true)
+                    && !gives_value(&stmts)
+                {
+                    Err(Error::new(
+                        E0067,
+                        span,
+                        format!(
+                            "this `catch` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
+                        ),
+                    ))
+                } else {
+                    Ok(TArmBody::Block(stmts))
+                }
+            }
+            ArmBody::Expr(x) if payload == Type::Void => self.expr_stmt(x).map(TArmBody::Expr),
+            ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
+        };
+        self.scopes.pop();
+        let capture = match capture {
+            Some(v) => Some(v.ok_or_else(silent)?),
+            None => None,
+        };
+        Ok(TExpr {
+            kind: TExprKind::Catch {
+                expr: Box::new(t),
+                capture,
+                body: Box::new(body?),
+            },
+            ty: payload,
+            span,
+        })
+    }
+
     fn match_expr(
         &mut self,
         e: &ast::Expr,

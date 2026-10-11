@@ -1,0 +1,33 @@
+// A `catch` on a `[]mut u8` payload has type `[]u8` where a `[]u8` is
+// expected (a declared `let`, a `[]u8` return), so its fallback may be a
+// read-only `[]u8` such as a string literal.
+
+error E { Empty }
+
+fn copy(buf: []mut u8, s: []u8) E![]mut u8 {
+    if s.len == 0 {
+        return E.Empty
+    }
+    for i, c in s {
+        buf[i] = c
+    }
+    return buf[0..s.len]
+}
+
+fn label(buf: []mut u8, s: []u8) []u8 {
+    return copy(buf, s) catch "none"
+}
+
+pub fn main() {
+    var store = [8]u8{0, ..}
+    let a: []u8 = copy(store[..], "hi") catch |e| {
+        "empty"
+    }
+    @println(a)
+    let b: []u8 = copy(store[..], "") catch |e| {
+        "empty"
+    }
+    @println(b)
+    @println(label(store[..], ""))
+    @println(label(store[..], "ok"))
+}
