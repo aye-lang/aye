@@ -16,6 +16,19 @@ Line Tools; later builds read the declarations from `~/.cache/aye`):
 ```
 cargo build --release
 target/release/aye build browser -o anyknown
+```
+
+Outside the Aye repository (a copy or the split anyknown repository),
+use any `aye` on the PATH; `browser/aye.toml` names the executable:
+
+```
+aye build browser                               # writes ./anyknown
+AYE=/path/to/aye browser/build.sh               # fast mode, target/anyknown
+```
+
+Run it:
+
+```
 ./anyknown https://example.com/                 # a window
 ./anyknown dump --md https://example.com/       # the page as Markdown
 ./anyknown dump --a11y https://example.com/     # the accessibility tree
