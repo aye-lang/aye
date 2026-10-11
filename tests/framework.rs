@@ -20,7 +20,13 @@
 //!   transcripts hold `<etag>` and `<date>` there; `PAGES_ETAG_CASES` send
 //!   the `ETag` of a first `GET` back as `If-None-Match`. `web gen`
 //!   reads the exports of the files with `aye doc --signatures`, so it runs
-//!   with `AYE` set to the `aye` under test.
+//!   with `AYE` set to the `aye` under test. It also builds the counter
+//!   island into `.web/client/counter.wasm` (only where the wasm32 toolchain
+//!   is; else it prints a warning and the island cases are skipped): the
+//!   server answers `/_web/islands.js` (`PAGES_CASES`), and
+//!   `/_web/islands/<name>.wasm` with `application/wasm`, a 404 for a
+//!   missing name and a 400 for `..` (`PAGES_ISLAND_CASES`,
+//!   `PAGES_BINARY_CASES`; the body of the `.wasm` must start with `\0asm`).
 //! - `framework/dev` (`web dev`) is run with `aye run` on a copy of the pages
 //!   example, in its own process group: it generates, checks and builds the
 //!   app, starts the server and relays its `listening on` line. Killing the
@@ -92,7 +98,26 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/img/logo.svg", "logo_svg.http"),
     ("GET", "/missing.css", "missing_css.http"),
     ("GET", "/../secret", "traversal.http"),
+    ("GET", "/_web/islands.js", "islands_js.http"),
 ];
+
+/// A method, a path and the file of `tests/framework/pages/` with its
+/// response, for the requests that need the islands built (`web gen` builds
+/// them only where the wasm32 toolchain is).
+const PAGES_ISLAND_CASES: &[(&str, &str, &str)] = &[
+    ("GET", "/_web/islands/nope.wasm", "islands_nope_wasm.http"),
+    ("GET", "/_web/islands/../x", "islands_traversal.http"),
+];
+
+/// A method, a path, the bytes the body must start with and the file of
+/// `tests/framework/pages/` with the head of the response (`split_binary`):
+/// the islands' `.wasm` files, which are not text.
+const PAGES_BINARY_CASES: &[(&str, &str, &[u8], &str)] = &[(
+    "GET",
+    "/_web/islands/counter.wasm",
+    b"\0asm",
+    "islands_counter_wasm.http",
+)];
 
 /// A method, a path, extra header lines (each ending in `\r\n`), a body and
 /// the file of `tests/framework/pages/` with the response: requests that
@@ -382,6 +407,14 @@ fn request(app: &App, method: &str, path: &str) -> String {
 /// Like `request`, with `extra` header lines (each ending in `\r\n`) and a
 /// body.
 fn request_with(app: &App, method: &str, path: &str, extra: &str, body: &str) -> String {
+    String::from_utf8(request_raw(app, method, path, extra, body))
+        .unwrap()
+        .replace("\r\n", "\n")
+}
+
+/// Like `request_with`, with the response as it came (a binary body is not
+/// text).
+fn request_raw(app: &App, method: &str, path: &str, extra: &str, body: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(("127.0.0.1", app.port)).unwrap();
     s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .unwrap();
@@ -397,7 +430,7 @@ fn request_with(app: &App, method: &str, path: &str, extra: &str, body: &str) ->
     .unwrap();
     let mut buf = Vec::new();
     s.read_to_end(&mut buf).unwrap();
-    String::from_utf8(buf).unwrap().replace("\r\n", "\n")
+    buf
 }
 
 /// `response` with the values of its `ETag` and `Last-Modified` lines
@@ -415,6 +448,33 @@ fn scrub(response: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The head of a binary `response` (up to and including the blank line,
+/// `\r\n` as `\n`, scrubbed, `Content-Length` as `<length>`) and its body;
+/// the length is checked against the body.
+fn split_binary(response: &[u8]) -> (String, &[u8]) {
+    let at = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("no end of headers")
+        + 4;
+    let head = String::from_utf8(response[..at].to_vec())
+        .unwrap()
+        .replace("\r\n", "\n");
+    let (body, length) = (&response[at..], header_value(&head, "Content-Length"));
+    assert_eq!(length, body.len().to_string(), "Content-Length");
+    let head = scrub(&head)
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.starts_with("Content-Length: ") {
+                "Content-Length: <length>\n"
+            } else {
+                line
+            }
+        })
+        .collect();
+    (head, body)
 }
 
 /// The value of the header called `name` in `response`.
@@ -473,6 +533,31 @@ fn pages() {
         let want =
             std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
         assert_eq!(scrub(&request(&app, method, path)), want, "{method} {path}");
+    }
+    let islands = driver::find_target("wasm32-freestanding")
+        .unwrap()
+        .toolchain_available();
+    assert_eq!(
+        web.join("client/counter.wasm").is_file(),
+        islands,
+        "web gen builds the island exactly when the wasm32 toolchain is there"
+    );
+    if islands {
+        for (method, path, file) in PAGES_ISLAND_CASES {
+            let want =
+                std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
+            assert_eq!(scrub(&request(&app, method, path)), want, "{method} {path}");
+        }
+        for (method, path, prefix, file) in PAGES_BINARY_CASES {
+            let want =
+                std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
+            let response = request_raw(&app, method, path, "", "");
+            let (head, body) = split_binary(&response);
+            assert_eq!(head, want, "{method} {path}");
+            assert!(body.starts_with(prefix), "{method} {path}: {body:?}");
+        }
+    } else {
+        println!("skipped: no wasm32 clang; the islands were not built");
     }
     for (method, path, file) in PAGES_ETAG_CASES {
         let want =

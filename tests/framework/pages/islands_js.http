@@ -1,0 +1,98 @@
+HTTP/1.1 200 OK
+Content-Type: text/javascript; charset=utf-8
+Connection: close
+Content-Length: 3065
+
+(function () {
+  var decoder = new TextDecoder();
+  var encoder = new TextEncoder();
+  var number = /^[+-]?(?:inf(?:inity)?|nan|(?:[0-9]+[.]?[0-9]*|[.][0-9]+)(?:e[+-]?[0-9]+)?)/i;
+
+  function start(root) {
+    var name = root.getAttribute('data-island');
+    var memory = null;
+    var wasm = null;
+    var elements = [null, root];
+
+    function bytes(ptr, len) {
+      return new Uint8Array(memory.buffer, ptr, len);
+    }
+    function string(ptr, len) {
+      return decoder.decode(bytes(ptr, len));
+    }
+    function element(id) {
+      return elements[id] || null;
+    }
+
+    var env = {
+      aye_write: function (fd, ptr, len) {
+        (fd === 2 ? console.error : console.log)(string(ptr, len));
+      },
+      aye_abort: function () {
+        throw new Error('island ' + name + ' aborted');
+      },
+      strtod: function (ptr, end) {
+        var all = new Uint8Array(memory.buffer);
+        var stop = ptr;
+        while (all[stop] !== 0) stop += 1;
+        var text = decoder.decode(all.subarray(ptr, stop));
+        var lead = text.length - text.trimStart().length;
+        var m = number.exec(text.slice(lead));
+        if (end) new DataView(memory.buffer).setUint32(end, ptr + (m ? lead + m[0].length : 0), true);
+        if (!m) return 0;
+        var t = m[0].toLowerCase().replace(/^[+]/, '');
+        if (/nan$/.test(t)) return NaN;
+        if (/inf(inity)?$/.test(t)) return t[0] === '-' ? -Infinity : Infinity;
+        return Number(t);
+      },
+      dom_query: function (rootId, sel, len) {
+        var from = element(rootId);
+        var found = from ? from.querySelector(string(sel, len)) : null;
+        if (!found) return 0;
+        elements.push(found);
+        return elements.length - 1;
+      },
+      dom_set_text: function (id, s, len) {
+        var el = element(id);
+        if (el) el.textContent = string(s, len);
+      },
+      dom_on: function (id, type, len, handler) {
+        var el = element(id);
+        if (el) el.addEventListener(string(type, len), function () {
+          wasm.event(handler);
+        });
+      }
+    };
+
+    return fetch('/_web/islands/' + encodeURIComponent(name) + '.wasm')
+      .then(function (res) {
+        if (!res.ok) throw new Error('status ' + res.status);
+        return res.arrayBuffer();
+      })
+      .then(function (buffer) {
+        return WebAssembly.instantiate(buffer, { env: env });
+      })
+      .then(function (result) {
+        wasm = result.instance.exports;
+        memory = wasm.memory;
+        var props = encoder.encode(root.getAttribute('data-props') || '{}');
+        var ptr = wasm.malloc(props.length);
+        bytes(ptr, props.length).set(props);
+        wasm.mount(1, ptr, props.length);
+      })
+      .catch(function (e) {
+        console.error('island ' + name + ': ' + e);
+      });
+  }
+
+  function run() {
+    var roots = document.querySelectorAll('[data-island]');
+    for (var i = 0; i < roots.length; i++) start(roots[i]);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run);
+  } else {
+    run();
+  }
+})();

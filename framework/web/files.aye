@@ -182,6 +182,9 @@ fn mimeOf(name: []u8) []u8 {
     if text.eqlIgnoreCase(ext, "woff2") {
         return "font/woff2"
     }
+    if text.eqlIgnoreCase(ext, "wasm") {
+        return "application/wasm"
+    }
     return "application/octet-stream"
 }
 
@@ -189,6 +192,7 @@ test "content types by extension" {
     @expect(text.eql(mimeOf("/style.css"), "text/css; charset=utf-8"))
     @expect(text.eql(mimeOf("/img/logo.SVG"), "image/svg+xml"))
     @expect(text.eql(mimeOf("/a.b/readme"), "application/octet-stream"))
+    @expect(text.eql(mimeOf("/counter.wasm"), "application/wasm"))
     @expect(text.eql(mimeOf("/x.unknown"), "application/octet-stream"))
 }
 
