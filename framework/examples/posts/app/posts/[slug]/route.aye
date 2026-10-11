@@ -1,0 +1,25 @@
+// The comment form of a post: `POST /posts/<slug>` with a form body and the
+// fields `name` and `body` adds the comment, remembers the name in the `name`
+// cookie and answers 303 to `/posts/<slug>#comments`. A missing or empty field
+// is `Error.BadRequest`, a long one `Error.PayloadTooLarge`, a slug that names
+// no post `Error.NotFound` (JSON, as for every `route.aye`).
+
+import lib.posts
+import std.text.Builder
+import web.Error
+import web.Request
+import web.Response
+
+pub fn post(req: *Request, res: *mut Response) Error!void {
+    let name = (try req.form("name")) orelse return Error.BadRequest
+    let body = (try req.form("body")) orelse return Error.BadRequest
+    try posts.checkComment(name, body)
+    let slug = req.param("slug")
+    try posts.addComment(slug, name, body)
+    var url = Builder.init(req.arena)
+    try url.append("/posts/")
+    try url.append(slug)
+    try url.append("#comments")
+    try res.redirect(url.bytes(), 303)
+    try res.setCookie("name", name)
+}

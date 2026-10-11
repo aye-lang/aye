@@ -1,6 +1,6 @@
 HTTP/1.1 200 OK
 Content-Type: text/html; charset=utf-8
 Connection: close
-Content-Length: 308
+Content-Length: 537
 
-<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><article><h1>Less &lt; More</h1><p>A title with a <code>&lt;</code> in it, which the page must escape.</p></article><h2>0 comments</h2><ul class="comments"></ul></body></html>
+<!doctype html><html><head><title>Posts</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Posts</a></nav><article><h1>Less &lt; More</h1><p>A title with a <code>&lt;</code> in it, which the page must escape.</p></article><h2 id="comments">0 comments</h2><ul class="comments"></ul><form method="post" action="/posts/less-is-more"><label>Name <input name="name" maxlength="80" value=""></label> <label>Comment <textarea name="body" maxlength="2000"></textarea></label> <button>Post</button></form></body></html>

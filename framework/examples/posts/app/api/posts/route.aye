@@ -1,0 +1,25 @@
+// The posts as JSON: `GET /api/posts` answers `[{"slug": ..., "title": ...}]`,
+// one object per post, in the order of the file.
+
+import lib.posts
+import std.json
+import web.Error
+import web.Request
+import web.Response
+
+pub fn get(req: *Request, res: *mut Response) Error!void {
+    let found = try posts.all()
+    let items = req.arena.alloc(json.Value.Null, found.len) catch |e| {
+        return Error.OutOfMemory
+    }
+    for i in 0..found.len {
+        let members = req.arena.alloc(json.Member { key: "", value: json.Value.Null }, 2) catch |e| {
+            return Error.OutOfMemory
+        }
+        members[0] = json.Member { key: "slug", value: json.Value.String { value: found[i].slug } }
+        members[1] = json.Member { key: "title", value: json.Value.String { value: found[i].title } }
+        items[i] = json.Value.Object { members: members }
+    }
+    var v = json.Value.Array { items: items }
+    try res.json(&v)
+}

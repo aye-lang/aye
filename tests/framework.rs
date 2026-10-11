@@ -1458,9 +1458,10 @@ const POSTS_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/nope", "missing.http"),
 ];
 
-#[test]
-fn posts_pages() {
-    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-posts-app");
+/// Builds the posts app in its own directory `name` under the test
+/// directory and starts it on the file `data/posts.json`.
+fn posts_server(name: &str) -> App {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = std::fs::remove_dir_all(&app);
     copy_dir(&root().join("framework/examples/posts"), &app);
     run_gen(&app, &[]);
@@ -1479,12 +1480,119 @@ fn posts_pages() {
     );
     let exe = build_dir("posts", &web);
     let data = app.join("data/posts.json");
-    let server = start_with(&exe, &["--posts", data.to_str().unwrap()]);
+    start_with(&exe, &["--posts", data.to_str().unwrap()])
+}
+
+#[test]
+fn posts_pages() {
+    let server = posts_server("framework-posts-app");
     for (method, path, file) in POSTS_CASES {
         let want =
             std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap();
         assert_eq!(
             scrub(&request(&server, method, path)),
+            want,
+            "{method} {path}"
+        );
+    }
+}
+
+const FORM: &str = "Content-Type: application/x-www-form-urlencoded\r\n";
+const JSON: &str = "Content-Type: application/json\r\n";
+
+/// Comments on the posts app: the form, the post page with the cookie and the
+/// JSON API run in order against one server, so each case sees the comments
+/// of the earlier ones. Each is a method, a path, extra header lines, a body
+/// and the file of `tests/framework/posts/` with the response.
+#[test]
+fn posts_comments() {
+    let server = posts_server("framework-posts-comments-app");
+    let long_body = format!("name=Ann&body={}", "a".repeat(2001));
+    let cases: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            "name=Ann+B&body=%3Cb%3Ehi%3C%2Fb%3E%21",
+            "comment_post.http",
+        ),
+        (
+            "GET",
+            "/posts/hello",
+            "Cookie: name=Ann%20B\r\n",
+            "",
+            "comment_page.http",
+        ),
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            "name=Ann&body=",
+            "comment_empty.http",
+        ),
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            "name=Ann",
+            "comment_missing.http",
+        ),
+        (
+            "POST",
+            "/posts/hello",
+            FORM,
+            &long_body,
+            "comment_long.http",
+        ),
+        (
+            "POST",
+            "/posts/nope",
+            FORM,
+            "name=Ann&body=hi",
+            "comment_nope.http",
+        ),
+        ("GET", "/api/posts", "", "", "api_posts.http"),
+        (
+            "POST",
+            "/api/posts/hello/comments",
+            JSON,
+            "{\"name\":\"Bo\",\"body\":\"yo\"}",
+            "api_comment_post.http",
+        ),
+        (
+            "GET",
+            "/api/posts/hello/comments",
+            "",
+            "",
+            "api_comments.http",
+        ),
+        (
+            "POST",
+            "/api/posts/nope/comments",
+            JSON,
+            "{\"name\":\"Bo\",\"body\":\"yo\"}",
+            "api_comment_nope.http",
+        ),
+        (
+            "POST",
+            "/api/posts/hello/comments",
+            JSON,
+            "{\"name\":",
+            "api_comment_bad.http",
+        ),
+        (
+            "POST",
+            "/api/posts/hello/comments",
+            JSON,
+            "{\"name\":\"Bo\"}",
+            "api_comment_field.http",
+        ),
+    ];
+    for (method, path, extra, body, file) in cases {
+        let want =
+            std::fs::read_to_string(root().join("tests/framework/posts").join(file)).unwrap();
+        assert_eq!(
+            scrub(&request_with(&server, method, path, extra, body)),
             want,
             "{method} {path}"
         );

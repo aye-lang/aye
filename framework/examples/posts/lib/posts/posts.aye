@@ -159,6 +159,21 @@ pub fn addComment(slug: []u8, name: []u8, body: []u8) Error!void {
     }
 }
 
+/// The longest comment name and the longest comment body, in bytes.
+pub let MaxName: usize = 80
+pub let MaxBody: usize = 2000
+
+/// Checks the fields of a new comment: an empty name or body is
+/// `Error.BadRequest`, a long one `Error.PayloadTooLarge`.
+pub fn checkComment(name: []u8, body: []u8) Error!void {
+    if name.len == 0 || body.len == 0 {
+        return Error.BadRequest
+    }
+    if name.len > MaxName || body.len > MaxBody {
+        return Error.PayloadTooLarge
+    }
+}
+
 /// The comments on the post `slug`, oldest first, in a list made in `alloc`.
 pub fn comments(alloc: Allocator, slug: []u8) Error![]Comment {
     let m = mutex()
