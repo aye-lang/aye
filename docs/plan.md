@@ -71,9 +71,9 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O5.2e (parallel cc), then O3.9 | local; the user's cloud when available |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
-| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O5.2e (parallel cc), then O3.9 | local; cloud routines for Linux |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold); O6–O9 hold, so it may resume | pick the first M4 card when a slot is free | local (archives in `target/sites/`, screenshots) |
+| Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F1.1b/c, then F1.2, F1.3, then F2 cards | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
 (X2, 3042d53), formatting (P2.4, 1075c9b) and the local move (X5) are
