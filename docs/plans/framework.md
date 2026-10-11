@@ -52,7 +52,7 @@ first part of FD1/FD2 (literal routes, a page, the 404).
 |---|---|---|---|
 | F0 | Design | `docs/framework.md` answers the open choices | done (user questions open) |
 | F1 | Hello-world route served by an Aye HTTP server | `cargo test --release --test framework` | done (F1.1, 2026-10-10) |
-| F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c, F1.2, F1.3, F2.1, F2.2 done; O3.6a (query/form/cookie) in flight; next F1.2a, F1.3a, ETag/304 |
+| F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c, F1.2, F1.3, F2.1, F2.2 done; O3.6a (query/form/cookie) done; next F1.2a, F1.3a, F2.2a, ETag/304 |
 | F3 | Dev server (FD5) | edit → new response, scripted | paused |
 | F4 | Client code (FD6) | an island under Node 22 and in Chrome | paused |
 | F5 | Production build, numbers, the example app (FD7–FD9) | FD7–FD9 checks | paused |
