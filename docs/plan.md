@@ -71,8 +71,8 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O5.2h (tree-shake) in flight; then O3.9a, O1.20, O6.1a | local; cloud routines for Linux |
-| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | P8 split: P8.1 done (builds out of tree) | P8.2 done (`aye-lang/anyknown`, CI pending the `AYE_TOKEN` run); P8.3 (delete the moved files here, `scripts/downstream.sh`) next | local (archives in `target/sites/`, screenshots) |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O6.1a (lsp) in flight; then O3.9a, O1.20, O6.2a, O6.3a | local; cloud routines for Linux |
+| Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | P8 split: P8.1 done (builds out of tree) | P8.2 done, anyknown CI green on both OSes; P8.3 in flight (delete the moved files here, `scripts/downstream.sh`) | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F2 done except FD7 `@embedFile`; next F3 cards (write them: forms, sessions/cookies, dev reload per `docs/framework.md`) | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
