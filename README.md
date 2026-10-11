@@ -461,7 +461,10 @@ See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
 as `aye check <file>` does, with the text of the editor's buffer, and
 sends the errors as diagnostics on open, change and save: the error code
 (`E0018`) is the diagnostic code, and a fix-it's `help:` line is the last
-line of the message. It also formats the whole document (`aye fmt`).
+line of the message. It also formats the whole document (`aye fmt`), and
+on hover and go to definition it shows the declaration of the name under
+the cursor with its `///` comment and finds where it is declared, in the
+file, in its imported modules and in std.
 
 To use it, give any editor with an LSP client the command `aye lsp`
 (no arguments) for the language `aye` and the file extension `.aye`.

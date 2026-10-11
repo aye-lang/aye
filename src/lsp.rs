@@ -11,6 +11,9 @@
 //!   `didClose` clears them.
 //! - `textDocument/formatting`: one edit that replaces the whole text with
 //!   `fmt::format`, or no edit if the text is formatted or does not lex.
+//! - `textDocument/hover` and `textDocument/definition` (`nav`): the
+//!   declaration that the name at the position stands for, with its `///`
+//!   comment, and where it is declared; `null` if there is none.
 //!
 //! There is no JSON library in the project, so this file has a small JSON
 //! reader for the messages a client sends; output is built with
@@ -22,6 +25,8 @@ use crate::fmt;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
+
+mod nav;
 
 /// A JSON value.
 #[derive(Clone, Debug, PartialEq)]
@@ -487,7 +492,7 @@ impl<W: Write> Server<W> {
                 )?;
             }
             ("initialize", Some(id)) => {
-                let result = r#"{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":true}},"documentFormattingProvider":true},"serverInfo":{"name":"aye","version":"0.1.0"}}"#;
+                let result = r#"{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":true}},"documentFormattingProvider":true,"hoverProvider":true,"definitionProvider":true},"serverInfo":{"name":"aye","version":"0.1.0"}}"#;
                 send(&mut self.out, &response(id, result))?;
             }
             ("shutdown", Some(id)) => {
@@ -498,6 +503,33 @@ impl<W: Write> Server<W> {
                 let result = match uri.as_ref().and_then(|u| self.docs.get(u)) {
                     Some(doc) => formatting(&doc.text),
                     None => "null".to_string(),
+                };
+                send(&mut self.out, &response(id, &result))?;
+            }
+            ("textDocument/hover" | "textDocument/definition", Some(id)) => {
+                let pos = params.and_then(|p| p.get("position"));
+                let at = |k: &str| {
+                    let n = pos.and_then(|p| p.get(k)).and_then(Json::as_i64)?;
+                    u32::try_from(n).ok()
+                };
+                let result = match (
+                    uri.as_ref().and_then(|u| self.docs.get(u).map(|d| (u, d))),
+                    at("line"),
+                    at("character"),
+                ) {
+                    (Some((u, doc)), Some(line), Some(character)) => {
+                        let find = if method == "textDocument/hover" {
+                            nav::hover
+                        } else {
+                            nav::definition
+                        };
+                        let path = uri_path(u);
+                        panic::catch_unwind(AssertUnwindSafe(|| {
+                            find(u, &path, &doc.text, line, character)
+                        }))
+                        .unwrap_or_else(|_| "null".to_string())
+                    }
+                    _ => "null".to_string(),
                 };
                 send(&mut self.out, &response(id, &result))?;
             }
