@@ -17,6 +17,9 @@ pre { margin: .8rem 0; padding: .7rem 1rem; overflow-x: auto; background: var(--
 code { font-family: ui-monospace, monospace; }
 nav ul { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: .6rem 0 0; padding: 0; list-style: none; }
 nav [aria-current] { color: var(--fg); font-weight: 600; text-decoration: none; }
+dt { margin: .8rem 0 .2rem; }
+dd { margin: 0 0 0 1.5rem; }
+dd p { margin: .2rem 0; }
 header { padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
 </style>
 </head>
@@ -36,12 +39,17 @@ header { padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
 <p>Only the pub API is documented.</p>
 <h2 id="Point">Point</h2>
 <pre><code>pub struct Point {
-    /// The x coordinate.
     x: i64
     y: i64
 }</code></pre>
 <p>A point on the plane.</p>
 <p>Compare with `a &lt; b` &amp; `a &gt; b` by `x` first.</p>
+<dl>
+<dt><code>x: i64</code></dt>
+<dd>
+<p>The x coordinate.</p>
+</dd>
+</dl>
 <h2 id="perimeter">perimeter</h2>
 <pre><code>pub fn perimeter(w: i64, h: i64) i64</code></pre>
 <p>The sum of the sides of a &quot;box&quot; with width `w` and height `h`.</p>
