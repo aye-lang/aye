@@ -16,7 +16,7 @@ import std.time
 /// How often the server sends the build id to the open event streams, in
 /// milliseconds. A handler cannot write the first event of its own stream,
 /// so a page that has just connected gets the id on the next beat.
-let beatMs: u64 = 200
+pub let beatMs: u64 = 200
 
 /// The tag `devInject` puts in a page.
 let scriptTag = "<script src=\"/_web/dev.js\"></script>"

@@ -22,9 +22,13 @@
 // (the text is printed to this program's standard error too). It prints
 // `web dev: serving the error page: 127.0.0.1:<port>` and goes on watching;
 // the next change that builds stops this listener and starts the server on
-// the same port. With no `--port` and a first build that fails, the system
-// picks the port. A server that ends by itself is
-// reported and not started again before a change. SIGINT or SIGTERM to this
+// the same port. The error page has the script tag of `--dev`, and the
+// listener also serves `/_web/dev.js` and `/_web/events` as the app server
+// does, with its own build id (the time of the failed build in milliseconds),
+// so an open page reloads to the error page, and again when the server takes
+// the port (the listener's stop closes the event streams). With no `--port`
+// and a first build that fails, the system picks the port. A server that
+// ends by itself is reported and not started again before a change. SIGINT or SIGTERM to this
 // program ends the server and then the program (status 0); the program
 // otherwise runs until it is killed. The `aye` program is `$AYE`, else the
 // one on `PATH`. A SIGKILL to this program does not stop the server: signal
@@ -44,6 +48,10 @@ import std.text
 import std.text.Builder
 import std.thread
 import std.time
+import web.Response
+import web.beatMs
+import web.devInject
+import web.devScript
 
 extern fn signal(sig: i32, handler: fn(i32)) usize
 
@@ -75,12 +83,23 @@ struct Page {
     body: []u8
 }
 
+/// What the thread that sends the beats of the error server needs: the
+/// listener, this build's id and whether to end.
+struct Beat {
+    server: *mut http.Server
+    id: []u8
+    done: Atomic(u32)
+}
+
 /// The error server: the listener (on the heap, as the thread has its
-/// address), the page it serves and the thread that runs it.
+/// address), the page it serves, the thread that runs it and the thread
+/// that sends the build id to its event streams.
 struct Fallback {
     cell: []mut http.Server
     page: []mut Page
     runner: thread.Thread
+    beat: []mut Beat
+    beater: thread.Thread
     port: u16
 }
 
@@ -397,7 +416,11 @@ fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
         }
         number = n as u16
     }
-    let body = errorPage(alloc, report, app) catch |err| {
+    let body = devPage(alloc, report, app) catch |err| {
+        note("cannot build the error page", "")
+        return null
+    }
+    let id = buildId(alloc) catch |err| {
         note("cannot build the error page", "")
         return null
     }
@@ -416,13 +439,21 @@ fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
                 die("cannot start a thread", "")
                 unreachable
             }
+            let beat = alloc.alloc(Beat { server: &mut cell[0], id: id, done: Atomic(u32) { value: 0 } }, 1) catch |err| {
+                die("out of memory", "")
+                unreachable
+            }
+            let b = thread.spawn(Beat, beats, &mut beat[0]) catch |err| {
+                die("cannot start a thread", "")
+                unreachable
+            }
             let bound = cell[0].port()
             var addr = Builder.init(alloc)
             defer addr.deinit()
             addr.append("127.0.0.1:") catch |err| {}
             addr.appendUint(bound as u64) catch |err| {}
             note("serving the error page", addr.bytes())
-            return Fallback { cell: cell, page: page, runner: t, port: bound }
+            return Fallback { cell: cell, page: page, runner: t, beat: beat, beater: b, port: bound }
         } else |err| {
             if number == 0 || tries >= 10 {
                 note("cannot listen for the error page", port)
@@ -435,8 +466,60 @@ fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
     unreachable
 }
 
-/// Answers every request with the error page.
+/// The error page for `report` with the script tag of `--dev`. Free the
+/// result with `alloc.free`.
+fn devPage(alloc: Allocator, report: []u8, app: []u8) ![]mut u8 {
+    let raw = try errorPage(alloc, report, app)
+    defer alloc.free(raw)
+    var res = Response.init(alloc)
+    res.contentType = "text/html; charset=utf-8"
+    defer res.page.buf.deinit()
+    try res.page.raw(raw)
+    try devInject(&mut res)
+    return res.page.buf.toOwned()
+}
+
+/// The id of this broken build: the time of the call in milliseconds, as
+/// text. Free it with `alloc.free`.
+fn buildId(alloc: Allocator) ![]mut u8 {
+    var b = Builder.init(alloc)
+    defer b.deinit()
+    try b.appendInt(time.now())
+    return b.toOwned()
+}
+
+/// Sends `event: build` with the id to every open event stream each
+/// `beatMs`, until `done`.
+fn beats(job: *mut Beat) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    while job.done.load() == 0 {
+        time.sleep(beatMs)
+        let sent = job.server.broadcast(gpa.allocator(), "build", job.id) catch |err| {
+            continue
+        }
+    }
+}
+
+/// Answers `/_web/events` with an event stream and `/_web/dev.js` with the
+/// script, as the app server does with `--dev`, and every other request with
+/// the error page.
 fn answer(page: *mut Page, req: *http.Request, res: *mut http.Response, alloc: Allocator) {
+    if text.eql(req.method, "GET") && text.eql(req.target, "/_web/events") {
+        res.status = 200
+        res.stream()
+        return
+    }
+    if (text.eql(req.method, "GET") || text.eql(req.method, "HEAD")) && text.eql(req.target, "/_web/dev.js") {
+        let js = alloc.alloc(http.Header { name: "Content-Type", value: "text/javascript; charset=utf-8" }, 1) catch |err| {
+            res.status = 500
+            return
+        }
+        res.status = 200
+        res.headers = js
+        res.body = devScript()
+        return
+    }
     let hs = alloc.alloc(http.Header { name: "Content-Type", value: "text/html; charset=utf-8" }, 1) catch |err| {
         res.status = 500
         return
@@ -455,8 +538,12 @@ fn runFallback(srv: *mut http.Server) {
 
 /// Ends the error server, waits for its thread and frees its page.
 fn stopFallback(alloc: Allocator, f: Fallback) {
+    f.beat[0].done.store(1)
+    f.beater.join()
     f.cell[0].stop()
     f.runner.join()
+    alloc.free(f.beat[0].id)
+    alloc.free(f.beat)
     alloc.free(f.page[0].body)
     alloc.free(f.page)
     alloc.free(f.cell)
