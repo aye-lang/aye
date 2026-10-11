@@ -402,7 +402,7 @@ the card that makes it:
 - goal: the post page has a `likes` island (a button and a count that starts at the post's `likes` from the JSON and goes up on click, in the browser only) built by gen, and the same transcripts hold with it.
 - serves: FD9, FD6
 - files: `framework/examples/posts/islands/likes/{view/view.aye,client.aye}` (new, a copy of the counter's shape), `framework/examples/posts/app/posts/[slug]/page.aye`, `framework/examples/posts/data/posts.json` (`likes`), `tests/framework.rs`, `tests/framework/posts/*.http`, `tests/framework/island_e2e.mjs` (a `--text` option for the expected label)
-- verify: `cargo test --release --test framework posts_pages` → exit 0 (the detail transcript holds the island `div`) and `cargo test --release --test framework posts_island` → exit 0 (F4.5's script against the posts server: `Likes: 4` after the click from 3)
+- verify: `cargo test --release --test framework posts_pages` → exit 0 (the detail transcript holds the island `div`) and `cargo test --release --test framework posts_likes` → exit 0 (F4.5's script against the posts server: `♥ 2` after the click from 3)
 - depends on: F5.5, F4.5
 - parallel with: –
 - where: local
