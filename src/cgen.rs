@@ -1354,6 +1354,41 @@ AYE_RT void aye_stack_guard_main(void) {
     aye_stack_guard(size);
 #endif
 }
+/* wasm32 has no guard page and no signals: running out of stack is a
+   memory trap. Instead each function's prologue (`AYE_STACK_CHECK`, debug
+   and safe mode) compares its frame address with the stack, which the link
+   puts first (`--stack-first`): it spans addresses 0 to `__global_base`. A
+   frame within 64 KiB of address 0, or one that wrapped below it, reports
+   the same panic as a native overflow. The stack pointer is reset first,
+   as the frame that overflowed may have wrapped it. */
+#ifdef __wasm32__
+extern char __global_base;
+#define AYE_STACK_MARGIN ((uintptr_t)64 << 10)
+AYE_RT __attribute__((noinline, noreturn, cold)) void aye_stack_overflow_report(void) {
+    static const char msg[] =
+        "panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)\n";
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "%s", msg);
+    aye_rt_abort();
+}
+AYE_RT __attribute__((noinline, noreturn, cold)) void aye_stack_overflow(void) {
+    __asm__ volatile("local.get %0\n\tglobal.set __stack_pointer" ::"r"(&__global_base));
+    aye_stack_overflow_report();
+}
+AYE_RT __attribute__((always_inline)) uintptr_t aye_stack_pointer(void) {
+    uintptr_t sp;
+    __asm__ volatile("global.get __stack_pointer\n\tlocal.set %0" : "=r"(sp));
+    return sp;
+}
+#define AYE_STACK_CHECK()                                                                         \
+    do {                                                                                          \
+        if (AYE_CHECKS && AYE_UNLIKELY(aye_stack_pointer() - AYE_STACK_MARGIN >                   \
+                                       (uintptr_t)&__global_base - AYE_STACK_MARGIN))             \
+            aye_stack_overflow();                                                                 \
+    } while (0)
+#else
+#define AYE_STACK_CHECK() ((void)0)
+#endif
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds
@@ -2485,6 +2520,7 @@ impl Gen {
                 self.line(1, &s);
             }
         }
+        self.line(1, "AYE_STACK_CHECK();");
         self.block(f, &f.body, 1);
         self.out.push_str("}\n");
     }

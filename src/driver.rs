@@ -1394,8 +1394,10 @@ fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
         cmd.arg("-pthread");
     } else if link {
         // wasm-ld's stack is 64 KiB, with no guard: 8 MiB, like a native
-        // main thread's.
-        cmd.arg("-Wl,-z,stack-size=8388608");
+        // main thread's. It is placed first, at addresses 0 to
+        // `__global_base`: the prologue check of `AYE_STACK_CHECK` relies
+        // on that.
+        cmd.args(["-Wl,-z,stack-size=8388608", "-Wl,--stack-first"]);
     }
     // No libc and no entry point: the prelude has its own runtime, and the
     // exported functions are the roots. An `extern fn` without a body (or a
