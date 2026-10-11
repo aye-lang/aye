@@ -377,8 +377,9 @@ Goal: `curl` gets a page from a built app (F1's exit check).
 - `framework/web/` (module `web`): `request.aye`, `response.aye`,
   `html.aye`, `route.aye` (`struct Route { method, pattern, handler }`
   and the matcher, literal segments only in F1.1), `serve.aye`
-  (`web.run(alloc, port, routes)` over `std.http`, an arena per request,
-  `--port`, prints `listening on 127.0.0.1:<port>`).
+  (`web.run(alloc, port, routes, public)` over `std.http`, an arena per request,
+  `--port`, prints `listening on 127.0.0.1:<port>`) and `files.aye`
+  (`serveFile`: `public/` files when no route matches, F2.1).
 - `framework/examples/hello/main.aye`: a hand-written table of two
   routes and `main`; `home.aye` with `pub fn page`.
 - `framework/examples/hello/web`: a symlink to `../../web` (until O4.2).

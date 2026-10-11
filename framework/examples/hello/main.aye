@@ -15,5 +15,5 @@ pub fn main() !void {
     let routes = [1]Route{
         Route { method: Method.Get, pattern: "/", handler: page },
     }
-    try web.run(alloc, web.portArg(alloc, 8080), routes[..])
+    try web.run(alloc, web.portArg(alloc, 8080), routes[..], "")
 }
