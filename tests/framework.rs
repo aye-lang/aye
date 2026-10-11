@@ -12,7 +12,9 @@
 //!   layout and a nested one, a `[...path]` catch-all with percent-decoding,
 //!   a `(marketing)` group whose layout wraps `/pricing`, the `not-found.aye` page for a path and for a
 //!   page that returns `Error.NotFound`, an API `route.aye` with JSON, a
-//!   `{"error":"NotFound"}` and a 405, and the files of `public/` with
+//!   `{"error":"NotFound"}` and a 405, the guestbook (a form `POST` that
+//!   answers 303 with `Location` and `Set-Cookie`, the page it points to,
+//!   a `{"error":"BadRequest"}` and a `{"error":"PayloadTooLarge"}`), and the files of `public/` with
 //!   their conditional requests). The `ETag` and `Last-Modified` values of a
 //!   file depend on its modification time in the checkout, so the
 //!   transcripts hold `<etag>` and `<date>` there; `PAGES_ETAG_CASES` send
@@ -50,6 +52,7 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/api/items/9", "api_item_missing.http"),
     ("POST", "/api/items/1", "api_item_post.http"),
     ("GET", "/blog/missing", "blog_missing.http"),
+    ("GET", "/guestbook", "guestbook_empty.http"),
     ("GET", "/docs/a/b%20c", "docs_rest.http"),
     ("GET", "/docs/a/b/c", "docs_slash.http"),
     ("GET", "/docs", "docs_missing.http"),
@@ -88,6 +91,48 @@ const PAGES_BODY_CASES: &[(&str, &str, &str, &str, &str)] = &[
         "Content-Type: text/plain\r\n",
         "msg=hi",
         "api_echo_post_text.http",
+    ),
+    (
+        "POST",
+        "/guestbook",
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+        "name=Ann+B",
+        "guestbook_post.http",
+    ),
+    (
+        "GET",
+        "/guestbook?added=1",
+        "Cookie: last=Ann%20B\r\n",
+        "",
+        "guestbook_added.http",
+    ),
+    (
+        "POST",
+        "/guestbook",
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+        "name=%3Ci%3E",
+        "guestbook_post_escape.http",
+    ),
+    (
+        "GET",
+        "/guestbook",
+        "Cookie: last=%3Ci%3E\r\n",
+        "",
+        "guestbook_escape.http",
+    ),
+    (
+        "POST",
+        "/guestbook",
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+        "name=",
+        "guestbook_post_empty.http",
+    ),
+    (
+        "POST",
+        "/guestbook",
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+        "name=aaaaaaaaaabbbbbbbbbbccccccccccddddddddddE",
+        "guestbook_post_long.http",
     ),
     (
         "GET",
