@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 417
+
+<!doctype html><html><head><title>Pages</title><link rel="stylesheet" href="/style.css"></head><body><nav><a href="/">Home</a> <a href="/about">About</a> <a href="/blog/hello">Blog</a></nav><h1>Guestbook</h1><p>Welcome back, &lt;i&gt;.</p><ul><li>Ann B</li><li>&lt;i&gt;</li></ul><form method="post" action="/guestbook"><label>Name <input name="name" maxlength="40"></label> <button>Sign</button></form></body></html>

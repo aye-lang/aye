@@ -1,0 +1,7 @@
+HTTP/1.1 303 See Other
+Content-Type: text/plain; charset=utf-8
+Location: /guestbook?added=1
+Set-Cookie: last=Ann%20B; Path=/; HttpOnly; SameSite=Lax
+Connection: close
+Content-Length: 0
+

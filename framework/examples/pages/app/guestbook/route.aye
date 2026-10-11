@@ -1,0 +1,20 @@
+// The form of the guestbook: `POST /guestbook` with a form body and a field
+// `name` adds the entry, remembers the name in the `last` cookie and answers
+// 303 to `/guestbook?added=1`. A missing or empty name is `Error.BadRequest`,
+// a long one `Error.PayloadTooLarge`, a full guestbook `Error.Conflict` (JSON,
+// as for every `route.aye`).
+
+import lib.guestbook
+import web.Error
+import web.Request
+import web.Response
+
+pub fn post(req: *Request, res: *mut Response) Error!void {
+    let name = (try req.form("name")) orelse return Error.BadRequest
+    if name.len == 0 {
+        return Error.BadRequest
+    }
+    try guestbook.add(name)
+    try res.redirect("/guestbook?added=1", 303)
+    try res.setCookie("last", name)
+}
