@@ -1,5 +1,5 @@
 use aye::driver::{self, Mode, Root};
-use aye::{codes, diag, doc, fmt};
+use aye::{codes, diag, doc, fmt, lsp};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -16,6 +16,7 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
   aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
   aye cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Aye declarations `@cimport` makes of a C header)
+  aye lsp                       (a language server on stdin and stdout: diagnostics and formatting)
   aye explain <code>
   aye spec [<section> | all]    (no argument: the core of the reference and a list of the other sections)";
 
@@ -199,6 +200,7 @@ fn main() -> ExitCode {
         Some("fmt") => return fmt_cmd(std::env::args().skip(2).collect()),
         Some("doc") => return doc_cmd(std::env::args().skip(2).collect()),
         Some("cimport") => return cimport_cmd(std::env::args().skip(2).collect()),
+        Some("lsp") => return lsp_cmd(std::env::args().skip(2).collect()),
         _ => {}
     }
     if std::env::args().nth(1).as_deref() == Some("explain") {
@@ -337,6 +339,16 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `aye lsp`: serve the Language Server Protocol on stdin and stdout.
+fn lsp_cmd(args: Vec<String>) -> ExitCode {
+    if let Some(a) = args.first() {
+        eprintln!("aye: `lsp` takes no arguments, found `{a}`\n{USAGE}");
+        return ExitCode::from(2);
+    }
+    let code = lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
+    ExitCode::from(code as u8)
 }
 
 /// `aye fmt [--check] <path>`: format a `.aye` file, or every `.aye` file

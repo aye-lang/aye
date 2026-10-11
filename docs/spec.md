@@ -67,6 +67,7 @@ aye fix <path>                                        apply the fix-its of `aye 
 aye test <path> [--filter text] [--json] [--time-limit s] [-j n] [--mode m]   run the `test` blocks of the root module (a directory: every module under it), each in its own process
 aye emit-c <path> [--mode m]                          print the generated C
 aye fmt [--check] <path>                              format in place (a directory: every .aye file under it); --check lists files that would change, exit 1
+aye lsp                                               language server on stdin/stdout: diagnostics and formatting
 aye doc --signatures <path>                           print every pub declaration with its /// comment, no bodies; <path> may be std or std.text
 aye cimport <header> [-Idir] [-DNAME[=value]] [--link lib]   print the Aye declarations that @cimport makes of a C header
 aye explain <code>                                    explain an error code (E0001...) with a wrong and a fixed program

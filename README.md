@@ -451,6 +451,23 @@ opaque), `build.aye`, dependencies of dependencies, renaming imports. std has
 See [`docs/grammar.ebnf`](docs/grammar.ebnf) for the grammar and
 [`docs/decisions.md`](docs/decisions.md) for choices not fixed by the design doc.
 
+## Editor support
+
+`aye lsp` is a Language Server Protocol server on stdin and stdout
+(JSON-RPC 2.0, `Content-Length` framing). It checks the open `.aye` file
+as `aye check <file>` does, with the text of the editor's buffer, and
+sends the errors as diagnostics on open, change and save: the error code
+(`E0018`) is the diagnostic code, and a fix-it's `help:` line is the last
+line of the message. It also formats the whole document (`aye fmt`).
+
+To use it, give any editor with an LSP client the command `aye lsp`
+(no arguments) for the language `aye` and the file extension `.aye`.
+Over stdio, no port. For example, as the server entry of a generic client:
+
+```json
+{ "command": "aye", "args": ["lsp"], "filetypes": ["aye"], "extensions": [".aye"] }
+```
+
 ## Compiler pipeline
 
 `src/lexer.rs` → `src/parser.rs` (`src/ast.rs`) → `src/module.rs` (loads
