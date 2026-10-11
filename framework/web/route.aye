@@ -7,15 +7,26 @@ import std.text.Builder
 /// A page or an API function: reads the request, fills the response.
 pub let Handler = fn(*Request, *mut Response) Error!void
 
-/// One route: a method and a pattern of literal segments and `[name]`
-/// segments (`/`, `/about`, `/blog/[slug]`), and the function that answers
-/// it. A `[name]` segment matches any one non-empty segment of the path;
-/// the handler reads it with `req.param("name")`. A literal route must come
-/// before a `[name]` route that also matches the path.
+/// What a route answers: a `Page` (a `page.aye`; an error of its handler is
+/// answered as plain text) or an `Api` function (a `route.aye`; an error is
+/// answered as JSON `{"error":"<name>"}`).
+pub enum Kind { Page, Api }
+
+/// One route: a method and a pattern of literal segments, `[name]` segments
+/// and a last `[...name]` segment (`/`, `/about`, `/blog/[slug]`,
+/// `/docs/[...path]`), and the function that answers it. A `[name]` segment
+/// matches any one non-empty segment of the path, `[...name]` one or more
+/// non-empty segments; the handler reads them with `req.param("name")`. The
+/// path's segments are percent-decoded after the path is split at each `/`,
+/// so a literal segment matches `%41` as `A`, and `%2F` is not a separator. A
+/// literal route must come before a `[name]` route, and that before a
+/// `[...name]` route, that also matches the path. `kind` is `Page` when left
+/// out.
 pub struct Route {
     method: Method
     pattern: []u8
     handler: Handler
+    kind: Kind = Kind.Page
 }
 
 /// The first route with this method and a pattern that matches the path, or
@@ -81,18 +92,73 @@ fn isParam(seg: []u8) bool {
     return seg.len > 2 && seg[0] == '[' && seg[seg.len - 1] == ']'
 }
 
+// Is `seg` a `[...name]` segment of a pattern? (`isParam` is true for it too.)
+fn isRest(seg: []u8) bool {
+    return seg.len > 5 && seg[0] == '[' && seg[1] == '.' && seg[2] == '.' && seg[3] == '.' && seg[seg.len - 1] == ']'
+}
+
+fn hexOf(c: u8) ?usize {
+    if c >= '0' && c <= '9' {
+        return (c - '0') as usize
+    }
+    if c >= 'a' && c <= 'f' {
+        return (c - 'a') as usize + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return (c - 'A') as usize + 10
+    }
+    return null
+}
+
+// Is the percent-decoding of the path segment `raw` (as `http.percentDecode`
+// decodes it: a `%` without two hex digits stays) equal to `lit`? It decodes
+// as it compares, so it needs no allocator.
+fn eqlDecoded(lit: []u8, raw: []u8) bool {
+    var i: usize = 0
+    var j: usize = 0
+    while j < raw.len {
+        var c = raw[j]
+        j += 1
+        if c == '%' && j + 1 < raw.len {
+            if hexOf(raw[j]) |hi| {
+                if hexOf(raw[j + 1]) |lo| {
+                    c = (hi * 16 + lo) as u8
+                    j += 2
+                }
+            }
+        }
+        if i >= lit.len || lit[i] != c {
+            return false
+        }
+        i += 1
+    }
+    return i == lit.len
+}
+
 // Does the path have as many segments as the pattern, each the same as the
-// pattern's literal or non-empty where the pattern has `[name]`?
+// pattern's literal (after percent-decoding) or non-empty where the pattern
+// has `[name]`, and, where it has `[...name]`, one or more non-empty segments
+// left?
 fn sameSegments(pattern: []u8, path: []u8) bool {
     var ps = text.split(trimSlash(pattern), "/")
     var xs = text.split(trimSlash(path), "/")
     while ps.next() |p| {
+        if isRest(p) {
+            var n: usize = 0
+            while xs.next() |x| {
+                if x.len == 0 {
+                    return false
+                }
+                n += 1
+            }
+            return n > 0
+        }
         let x = xs.next() orelse return false
         if isParam(p) {
             if x.len == 0 {
                 return false
             }
-        } else if !text.eql(p, x) {
+        } else if !eqlDecoded(p, x) {
             return false
         }
     }
@@ -109,4 +175,28 @@ test "patterns with [name] segments" {
     @expect(sameSegments("/", "/"))
     @expect(!sameSegments("/", "/about"))
     @expect(!sameSegments("/about", "/"))
+}
+
+test "patterns with [...name] segments" {
+    @expect(sameSegments("/docs/[...path]", "/docs/a"))
+    @expect(sameSegments("/docs/[...path]", "/docs/a/b/c"))
+    @expect(sameSegments("/docs/[...path]", "/docs/a/b/"))
+    @expect(!sameSegments("/docs/[...path]", "/docs"))
+    @expect(!sameSegments("/docs/[...path]", "/docs/"))
+    @expect(!sameSegments("/docs/[...path]", "/docs/a//b"))
+    @expect(!sameSegments("/docs/[...path]", "/blog/a"))
+    @expect(sameSegments("/[...all]", "/x/y"))
+    @expect(!sameSegments("/[...all]", "/"))
+}
+
+test "path segments are decoded before they are compared" {
+    @expect(sameSegments("/about", "/%61bout"))
+    @expect(sameSegments("/a b", "/a%20b"))
+    @expect(sameSegments("/a%b", "/a%b"))
+    @expect(sameSegments("/a%b", "/a%25b"))
+    @expect(sameSegments("/a%4", "/a%4"))
+    @expect(!sameSegments("/a/b", "/a%2Fb"))
+    @expect(sameSegments("/blog/[slug]", "/blog/a%2Fb"))
+    @expect(!sameSegments("/about", "/about%20"))
+    @expect(!sameSegments("/about", "/abou%74x"))
 }

@@ -9,8 +9,16 @@
 //!   (`framework/gen`, run with `aye run`) writes its `.web/`, which is
 //!   checked, built and started the same way. `tests/framework/pages/X.http`
 //!   are the responses to the requests in `PAGES_CASES` (pages in the root
-//!   layout and a nested one, the `not-found.aye` page, an API `route.aye`
-//!   with JSON and a 405, and the files of `public/`).
+//!   layout and a nested one, a `[...path]` catch-all with percent-decoding,
+//!   a `(marketing)` group whose layout wraps `/pricing`, the `not-found.aye` page for a path and for a
+//!   page that returns `Error.NotFound`, an API `route.aye` with JSON, a
+//!   `{"error":"NotFound"}` and a 405, and the files of `public/` with
+//!   their conditional requests). The `ETag` and `Last-Modified` values of a
+//!   file depend on its modification time in the checkout, so the
+//!   transcripts hold `<etag>` and `<date>` there; `PAGES_ETAG_CASES` send
+//!   the `ETag` of a first `GET` back as `If-None-Match`. `web gen`
+//!   reads the exports of the files with `aye doc --signatures`, so it runs
+//!   with `AYE` set to the `aye` under test.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -39,7 +47,14 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/blog/hello", "blog_hello.http"),
     ("GET", "/blog/layouts", "blog_layouts.http"),
     ("GET", "/api/items/1", "api_item.http"),
+    ("GET", "/api/items/9", "api_item_missing.http"),
     ("POST", "/api/items/1", "api_item_post.http"),
+    ("GET", "/blog/missing", "blog_missing.http"),
+    ("GET", "/docs/a/b%20c", "docs_rest.http"),
+    ("GET", "/docs/a/b/c", "docs_slash.http"),
+    ("GET", "/docs", "docs_missing.http"),
+    ("GET", "/pricing", "pricing.http"),
+    ("GET", "/%70ricing", "pricing.http"),
     ("GET", "/nope", "missing.http"),
     ("GET", "/style.css", "style_css.http"),
     ("HEAD", "/style.css", "style_css_head.http"),
@@ -74,7 +89,26 @@ const PAGES_BODY_CASES: &[(&str, &str, &str, &str, &str)] = &[
         "msg=hi",
         "api_echo_post_text.http",
     ),
+    (
+        "GET",
+        "/style.css",
+        "If-Modified-Since: Fri, 01 Jan 2100 00:00:00 GMT\r\n",
+        "",
+        "style_css_ims.http",
+    ),
+    (
+        "GET",
+        "/style.css",
+        "If-Modified-Since: Sat, 01 Jan 2000 00:00:00 GMT\r\n",
+        "",
+        "style_css_ims_old.http",
+    ),
 ];
+
+/// A method, a path and the file of `tests/framework/pages/` with the
+/// response to the request that has the `ETag` of a first `GET` of the path
+/// as its `If-None-Match`.
+const PAGES_ETAG_CASES: &[(&str, &str, &str)] = &[("GET", "/style.css", "style_css_etag.http")];
 
 /// The built app, killed when dropped.
 struct App {
@@ -160,6 +194,31 @@ fn request_with(app: &App, method: &str, path: &str, extra: &str, body: &str) ->
     String::from_utf8(buf).unwrap().replace("\r\n", "\n")
 }
 
+/// `response` with the values of its `ETag` and `Last-Modified` lines
+/// replaced by `<etag>` and `<date>`.
+fn scrub(response: &str) -> String {
+    response
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.starts_with("ETag: ") {
+                "ETag: <etag>\n"
+            } else if line.starts_with("Last-Modified: ") {
+                "Last-Modified: <date>\n"
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
+/// The value of the header called `name` in `response`.
+fn header_value<'a>(response: &'a str, name: &str) -> &'a str {
+    response
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(": "))
+        .unwrap_or_else(|| panic!("no {name} header in {response:?}"))
+}
+
 #[test]
 fn hello() {
     let app = start(&build("hello"));
@@ -175,6 +234,7 @@ fn pages() {
     let app = root().join("framework").join("examples").join("pages");
     let generated = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
         .arg("run")
         .arg(root().join("framework").join("gen"))
         .arg("--")
@@ -206,13 +266,25 @@ fn pages() {
     for (method, path, file) in PAGES_CASES {
         let want =
             std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
-        assert_eq!(request(&app, method, path), want, "{method} {path}");
+        assert_eq!(scrub(&request(&app, method, path)), want, "{method} {path}");
+    }
+    for (method, path, file) in PAGES_ETAG_CASES {
+        let want =
+            std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
+        let first = request(&app, method, path);
+        let etag = header_value(&first, "ETag");
+        let extra = format!("If-None-Match: {etag}\r\n");
+        assert_eq!(
+            scrub(&request_with(&app, method, path, &extra, "")),
+            want,
+            "{method} {path} with its ETag"
+        );
     }
     for (method, path, extra, body, file) in PAGES_BODY_CASES {
         let want =
             std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
         assert_eq!(
-            request_with(&app, method, path, extra, body),
+            scrub(&request_with(&app, method, path, extra, body)),
             want,
             "{method} {path}"
         );

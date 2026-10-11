@@ -1,0 +1,13 @@
+// The docs of the pages app: `/docs/<a>/<b>/...`. `req.param("path")` is the
+// rest of the path, percent-decoded: `/docs/a/b%20c` shows `a/b c`.
+
+import web.Error
+import web.Request
+import web.Response
+
+pub fn page(req: *Request, res: *mut Response) Error!void {
+    let html = res.html()
+    try html.raw("<h1>Docs: ")
+    try html.text(req.param("path"))
+    try html.raw("</h1>")
+}

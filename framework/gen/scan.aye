@@ -1,5 +1,7 @@
 // The scan of an app: which directories of `app/` have a `page.aye` or a
-// `route.aye`, the URL pattern each one serves and the handlers it has.
+// `route.aye`, the URL pattern each one serves and the handlers it has. What
+// a file exports is read from `aye doc --signatures` (the `aye` program is
+// `$AYE`, else the one on `PATH`).
 
 import std.fs
 import std.fs.ReadDirError
@@ -8,12 +10,14 @@ import std.mem.AllocError
 import std.mem.Allocator
 import std.os
 import std.path
+import std.process
+import std.process.Stdio
 import std.text
 import std.text.Builder
 
 /// A directory of `app/` with a role: `dir` is the directory below `app/`
 /// (`blog/[slug]`; empty for `app/` itself), `url` the pattern it serves
-/// (`/blog/[slug]`), `fns` the names of its handlers: `page` for a
+/// (`/blog/[slug]`; a `(group)` directory adds no segment), `fns` the names of its handlers: `page` for a
 /// `page.aye`, and each of `get`, `post`, `put`, `patch`, `delete` that its
 /// `route.aye` exports. `layout` is true when it has a `layout.aye` (that
 /// exports `layout`), `notFound` when it has a `not-found.aye` (that exports
@@ -46,13 +50,10 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
     for e in found.items {
         if e.kind == fs.Kind.File && text.eql(e.name, "route.aye") {
             let file = try path.join(alloc, here, e.name)
-            let src = fs.readFile(alloc, file) catch |err| {
-                die("cannot read", file, "")
-                return
-            }
+            let sigs = signatures(alloc, file)
             let start = fns.len()
             for m in methods[..] {
-                if exports(alloc, src, m) {
+                if exports(alloc, sigs, m) {
                     if text.eql(m, "get") && start > 0 {
                         die("a page and a get in route.aye are the same route", here, "")
                     }
@@ -75,6 +76,9 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
     for e in found.items {
         if e.kind == fs.Kind.Dir && !text.startsWith(e.name, ".") {
             checkSegment(e.name)
+            if isRest(lastSegment(rel)) {
+                die("a [...name] directory has no directories below it", here, e.name)
+            }
             try scan(alloc, root, try path.join(alloc, rel, e.name), out)
         }
     }
@@ -124,9 +128,19 @@ pub fn routeCount(pages: []Page) usize {
     return n
 }
 
-/// Is `seg` a `[name]` segment?
+/// Is `seg` a `[name]` segment? (It is true for a `[...name]` segment too.)
 pub fn isParam(seg: []u8) bool {
     return seg.len > 2 && seg[0] == '[' && seg[seg.len - 1] == ']'
+}
+
+/// Is `seg` a `[...name]` segment?
+pub fn isRest(seg: []u8) bool {
+    return seg.len > 5 && seg[0] == '[' && seg[1] == '.' && seg[2] == '.' && seg[3] == '.' && seg[seg.len - 1] == ']'
+}
+
+/// Is `seg` a `(group)` segment?
+pub fn isGroup(seg: []u8) bool {
+    return seg.len > 2 && seg[0] == '(' && seg[seg.len - 1] == ')'
 }
 
 /// The identifier a directory is linked as: `blog/[slug]` becomes
@@ -172,6 +186,15 @@ pub fn die(what: []u8, a: []u8, b: []u8) {
     os.exit(1)
 }
 
+// The last segment of `dir` ("" for ""), the part after `parentOf`.
+fn lastSegment(dir: []u8) []u8 {
+    let parent = parentOf(dir)
+    if parent.len == 0 {
+        return dir
+    }
+    return dir[parent.len + 1..]
+}
+
 // `dir` without its last segment ("" for a single segment).
 fn parentOf(dir: []u8) []u8 {
     var i = dir.len
@@ -193,11 +216,7 @@ fn hasRole(alloc: Allocator, here: []u8, found: []fs.DirEntry, file: []u8, name:
                 die("out of memory", "", "")
                 return false
             }
-            let src = fs.readFile(alloc, p) catch |err| {
-                die("cannot read", p, "")
-                return false
-            }
-            if !exports(alloc, src, name) {
+            if !exports(alloc, signatures(alloc, p), name) {
                 die("the file has no pub fn of this name", p, name)
             }
             return true
@@ -206,8 +225,37 @@ fn hasRole(alloc: Allocator, here: []u8, found: []fs.DirEntry, file: []u8, name:
     return false
 }
 
-// Does `src` have a line that starts with `pub fn <name>(`?
-fn exports(alloc: Allocator, src: []u8, name: []u8) bool {
+// The output of `aye doc --signatures <file>`: the declarations that the file
+// exports, one per item, the comments around them and nothing else. The
+// `aye` program is `$AYE`, else the one on `PATH`.
+fn signatures(alloc: Allocator, file: []u8) []u8 {
+    var bin: []u8 = "aye"
+    if os.getenv("AYE") |p| {
+        bin = p
+    }
+    let argv = [4][]u8{bin, "doc", "--signatures", file}
+    var child = process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
+        die("cannot run aye (set AYE to its path)", bin, "")
+        return ""
+    }
+    let out = child.stdout.?.readAll(alloc) catch |err| {
+        die("cannot read the output of aye doc", file, "")
+        return ""
+    }
+    child.stdout.?.close()
+    let status = child.wait() catch |err| {
+        die("cannot wait for aye doc", file, "")
+        return ""
+    }
+    if !status.success() {
+        die("aye doc failed", file, "")
+    }
+    return out
+}
+
+// Does `sigs` (from `signatures`) have a declaration that starts with `pub fn
+// <name>(`? Methods of a struct are indented, so they do not count.
+fn exports(alloc: Allocator, sigs: []u8, name: []u8) bool {
     var b = Builder.init(alloc)
     b.append("pub fn ") catch |e| {
         die("out of memory", "", "")
@@ -219,7 +267,7 @@ fn exports(alloc: Allocator, src: []u8, name: []u8) bool {
         die("out of memory", "", "")
     }
     let needle = b.bytes()
-    var lines = text.split(src, "\n")
+    var lines = text.split(sigs, "\n")
     while lines.next() |line| {
         if text.startsWith(line, needle) {
             return true
@@ -228,21 +276,36 @@ fn exports(alloc: Allocator, src: []u8, name: []u8) bool {
     return false
 }
 
-// `/` and the directory's segments; every segment is checked by `scan`.
+// `/` and the directory's segments, without the `(group)` ones; every
+// segment is checked by `scan`.
 fn urlOf(alloc: Allocator, rel: []u8) ![]u8 {
     var b = Builder.init(alloc)
-    try b.append("/")
-    try b.append(rel)
+    var parts = text.split(rel, "/")
+    while parts.next() |seg| {
+        if seg.len == 0 || isGroup(seg) {
+            continue
+        }
+        try b.append("/")
+        try b.append(seg)
+    }
+    if b.len() == 0 {
+        try b.append("/")
+    }
     return b.bytes()
 }
 
-// The directory names `[...rest]` and `(group)` are Next.js's, not built yet;
+// A directory name is a literal segment, `[name]`, `[...name]` or `(group)`;
 // the name inside `[...]` must be an identifier, as `req.param` names it.
 fn checkSegment(seg: []u8) {
-    if text.startsWith(seg, "[...") || seg[0] == '(' {
-        die("not supported yet", seg, "")
-    }
-    if seg[0] == '[' {
+    if seg[0] == '(' {
+        if !isGroup(seg) {
+            die("not a (group) segment", seg, "")
+        }
+    } else if text.startsWith(seg, "[...") {
+        if !isRest(seg) || !isIdent(seg[4..seg.len - 1]) {
+            die("not a [...name] segment with an identifier name", seg, "")
+        }
+    } else if seg[0] == '[' {
         if !isParam(seg) || !isIdent(seg[1..seg.len - 1]) {
             die("not a [name] segment with an identifier name", seg, "")
         }
@@ -286,21 +349,24 @@ pub fn order(pages: []mut Page) {
     }
 }
 
-// Segment by segment: a literal before a `[name]`, then (unless
-// `sameShape`, which treats every `[name]` as equal to every other) by
-// bytes; a shorter pattern before a longer one. Negative, 0, positive.
+// Segment by segment: a literal before a `[name]` before a `[...name]`, then
+// (unless `sameShape`, which treats every `[name]` as equal to every other,
+// and every `[...name]`) by bytes; a shorter pattern before a longer one.
+// Negative, 0, positive.
 fn compare(a: []u8, b: []u8, sameShape: bool) i32 {
     var xs = text.split(a, "/")
     var ys = text.split(b, "/")
     while xs.next() |x| {
         let y = ys.next() orelse return 1
-        if isParam(x) != isParam(y) {
-            if isParam(x) {
+        let rx = rank(x)
+        let ry = rank(y)
+        if rx != ry {
+            if rx > ry {
                 return 1
             }
             return -1
         }
-        if isParam(x) && sameShape {
+        if rx > 0 && sameShape {
             continue
         }
         let c = cmpBytes(x, y)
@@ -310,6 +376,17 @@ fn compare(a: []u8, b: []u8, sameShape: bool) i32 {
     }
     if ys.next() != null {
         return -1
+    }
+    return 0
+}
+
+// 0 for a literal segment, 1 for `[name]`, 2 for `[...name]`.
+fn rank(seg: []u8) i32 {
+    if isRest(seg) {
+        return 2
+    }
+    if isParam(seg) {
+        return 1
     }
     return 0
 }
