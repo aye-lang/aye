@@ -286,6 +286,9 @@ pub struct Root {
     /// Where URL dependencies are kept; `None` is `$AYE_CACHE` and the
     /// other defaults (`fetch::cache_root`).
     pub cache: Option<PathBuf>,
+    /// Record the member accesses sema resolves in `Checked::members`
+    /// (`aye lsp`); off, the compiler does no work for them.
+    pub members: bool,
 }
 
 impl Root {
@@ -343,6 +346,7 @@ impl Root {
             target: host_target(),
             manifest: None,
             cache: None,
+            members: false,
         })
     }
 
@@ -364,6 +368,7 @@ impl Root {
             target: host_target(),
             manifest: None,
             cache: None,
+            members: false,
         }
     }
 }
@@ -373,6 +378,10 @@ impl Root {
 pub struct Checked {
     pub files: Vec<SourceFile>,
     pub result: Result<sema::Program, Vec<Diag>>,
+    /// With `Root::members`: the member accesses sema resolved, by the
+    /// span of the member's name (`sema::check_members`); empty if sema
+    /// did not run.
+    pub members: Vec<(Span, sema::ResolvedMember)>,
 }
 
 /// Run the front end (lexer, parser, module resolution, sema) on a single
@@ -405,15 +414,28 @@ pub fn front_end(root: Root, need_main: Option<bool>) -> Checked {
         d.truncate(MAX_DIAGS);
         d
     };
+    let mut members = Vec::new();
     let result = ast.map_err(diags).and_then(|ast| {
         let need_main = need_main.unwrap_or_else(|| {
             !ast.items
                 .iter()
                 .any(|i| matches!(i, ast::Item::Test(t) if t.module.is_empty()))
         });
-        sema::check(&ast, need_main, &names, root.target.layout()).map_err(diags)
+        let layout = root.target.layout();
+        let result = if root.members {
+            let (result, found) = sema::check_members(&ast, need_main, &names, layout);
+            members = found;
+            result
+        } else {
+            sema::check(&ast, need_main, &names, layout)
+        };
+        result.map_err(diags)
     });
-    Checked { files, result }
+    Checked {
+        files,
+        result,
+        members,
+    }
 }
 
 /// Apply the fix-its of `diags` to `src`, in order of position: a fix is

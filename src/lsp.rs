@@ -18,7 +18,8 @@
 //!   `fmt::format`, or no edit if the text is formatted or does not lex.
 //! - `textDocument/hover` and `textDocument/definition` (`nav`): the
 //!   declaration that the name at the position stands for, with its `///`
-//!   comment, and where it is declared; `null` if there is none.
+//!   comment, and where it is declared; `null` if there is none. A member
+//!   after a dot is what sema resolved it to (`Root::members`).
 //!
 //! There is no JSON library in the project, so this file has a small JSON
 //! reader for the messages a client sends; output is built with
@@ -489,13 +490,19 @@ fn in_module(name: &str, path: &[String]) -> bool {
     format!("/{dir}").ends_with(&format!("/{}", path.join("/")))
 }
 
-/// The errors of the root `path` (the text `src` replaces the file on
-/// disk's): the name of the document's file, all the files, and the errors
-/// of every file. The root is the one `aye check <path>` loads; a file that
-/// is not on disk is a root of its own.
-fn check(path: &str, src: &str) -> (String, Vec<SourceFile>, Vec<Diag>) {
+/// The root `aye check <path>` loads, the document's file first, with the
+/// text `src` in place of the file on disk's; a file that is not on disk is
+/// a root of its own.
+fn root(path: &str, src: &str) -> Root {
     let mut root = Root::load(path).unwrap_or_else(|_| Root::single(path, src));
     root.files[0].text = src.to_string();
+    root
+}
+
+/// The errors of the root `path` (see `root`): the name of the document's
+/// file, all the files, and the errors of every file.
+fn check(path: &str, src: &str) -> (String, Vec<SourceFile>, Vec<Diag>) {
+    let root = root(path, src);
     let name = root.files[0].name.clone();
     let checked = panic::catch_unwind(AssertUnwindSafe(|| driver::front_end(root, None)));
     match checked {

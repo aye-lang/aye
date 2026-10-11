@@ -546,3 +546,177 @@ fn hover_and_definition() {
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+const TYPED: &str = "/// A point.
+struct Point {
+    /// Across.
+    x: i64
+    y: i64
+
+    /// The sum of the coordinates.
+    pub fn len(self: *Point) i64 {
+        return self.x + self.y
+    }
+}
+
+struct Line {
+    from: Point
+    to: Point
+}
+
+pub fn main() {
+    let p = Point { x: 1, y: 2 }
+    let l = Line { from: p, to: p }
+    @println(p.len())
+    @println(l.to.x)
+    if p.x > 0 {
+        let inner = 1
+        @println(inner)
+    }
+    @println(inner)
+}
+";
+
+#[test]
+fn hover_and_definition_through_types() {
+    let (dir, uri) = scratch("typed", TYPED);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, TYPED));
+    // `inner` after its block is an error; sema still resolves the rest.
+    c.diagnostics();
+
+    // A method through a local: `p.len()`.
+    let h = at(&mut c, 2, "hover", &uri, 20, 16);
+    assert_eq!(
+        hover_text(&h),
+        "```aye\npub fn len(self: *Point) i64\n```\n\nThe sum of the coordinates."
+    );
+    assert_eq!(
+        h.get("range").unwrap().write(),
+        r#"{"start":{"line":20,"character":15},"end":{"line":20,"character":18}}"#
+    );
+    let d = at(&mut c, 3, "definition", &uri, 20, 16);
+    assert_eq!(d.get("uri").and_then(Json::as_str), Some(uri.as_str()));
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":7,"character":11},"end":{"line":7,"character":14}}"#
+    );
+    // Just past the end of `len` is on it.
+    let h = at(&mut c, 4, "hover", &uri, 20, 18);
+    assert!(hover_text(&h).starts_with("```aye\npub fn len("), "{h:?}");
+
+    // A field through a local: `p.x`.
+    let h = at(&mut c, 5, "hover", &uri, 22, 9);
+    assert_eq!(hover_text(&h), "```aye\nx: i64\n```\n\nAcross.");
+    let d = at(&mut c, 6, "definition", &uri, 22, 9);
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":3,"character":4},"end":{"line":3,"character":5}}"#
+    );
+
+    // A chain: `l.to.x`.
+    let h = at(&mut c, 7, "hover", &uri, 21, 15);
+    assert_eq!(hover_text(&h), "```aye\nto: Point\n```");
+    let d = at(&mut c, 8, "definition", &uri, 21, 15);
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":14,"character":4},"end":{"line":14,"character":6}}"#
+    );
+    let h = at(&mut c, 9, "hover", &uri, 21, 18);
+    assert_eq!(hover_text(&h), "```aye\nx: i64\n```\n\nAcross.");
+
+    // A `let` in a block: seen in the block, not after it.
+    let h = at(&mut c, 10, "hover", &uri, 24, 17);
+    assert_eq!(hover_text(&h), "```aye\nlet inner = 1\n```");
+    assert_eq!(at(&mut c, 11, "hover", &uri, 26, 13), Json::Null);
+    assert_eq!(at(&mut c, 12, "definition", &uri, 26, 13), Json::Null);
+
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+const TYPE_FN: &str = "fn Box(comptime T: type) type {
+    return struct {
+        v: T
+
+        /// The value.
+        pub fn get(self: *Self) T {
+            return self.v
+        }
+    }
+}
+
+pub fn main() {
+    let b = Box(i64) { v: 1 }
+    @println(b.get())
+}
+";
+
+#[test]
+fn hover_on_a_member_of_a_type_function() {
+    let (dir, uri) = scratch("typefn", TYPE_FN);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, TYPE_FN));
+    c.diagnostics();
+    // The tokens show no member there: sema's types render it.
+    let h = at(&mut c, 2, "hover", &uri, 13, 15);
+    assert_eq!(
+        hover_text(&h),
+        "```aye\nfn get(self: *Box(i64)) i64\n```\n\nThe value."
+    );
+    let d = at(&mut c, 3, "definition", &uri, 13, 15);
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":5,"character":15},"end":{"line":5,"character":18}}"#
+    );
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn definition_in_a_path_dependency() {
+    let src = "import lib\n\npub fn main() {\n    @println(lib.triple(1))\n}\n";
+    let (dir, _) = scratch("dep", "");
+    let app = dir.join("app");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::write(app.join("main.aye"), src).unwrap();
+    std::fs::write(
+        app.join("aye.toml"),
+        "name = \"app\"\n\n[deps]\nlib = { path = \"../lib\" }\n",
+    )
+    .unwrap();
+    std::fs::write(lib.join("aye.toml"), "name = \"lib\"\n").unwrap();
+    std::fs::write(
+        lib.join("lib.aye"),
+        "/// Three times `n`.\npub fn triple(n: i64) i64 {\n    return n * 3\n}\n",
+    )
+    .unwrap();
+    let uri = format!("file://{}", app.join("main.aye").display());
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, src));
+    c.diagnostics();
+
+    let h = at(&mut c, 2, "hover", &uri, 3, 18);
+    assert_eq!(
+        hover_text(&h),
+        "```aye\npub fn triple(n: i64) i64\n```\n\nThree times `n`."
+    );
+    let d = at(&mut c, 3, "definition", &uri, 3, 18);
+    let file = std::fs::canonicalize(lib.join("lib.aye")).unwrap();
+    assert_eq!(
+        d.get("uri").and_then(Json::as_str),
+        Some(format!("file://{}", file.display()).as_str())
+    );
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":1,"character":7},"end":{"line":1,"character":13}}"#
+    );
+
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
