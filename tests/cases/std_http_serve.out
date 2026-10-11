@@ -13,6 +13,16 @@ Content-Type: text/plain
 Content-Length: 9
 
 GET /c #3<end>
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 10
+
+<end>
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 9
+
+GET /i #5<end>
 HTTP/1.1 400 Bad Request
 Connection: close
 Content-Length: 0
@@ -23,5 +33,5 @@ Content-Type: text/plain
 Connection: close
 Content-Length: 9
 
-GET /d #4<end>
-handled 4
+GET /d #6<end>
+handled 6
