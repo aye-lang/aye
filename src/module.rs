@@ -411,9 +411,11 @@ fn edit_distance(a: &str, b: &str) -> usize {
 
 /// `segs[..n]` as an identifier with field accesses after it.
 fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
+    let end = span.right(first.chars().count() as u32);
     let mut e = ast::Expr {
         kind: ExprKind::Ident(first),
         span,
+        end,
     };
     for (name, sp) in rest {
         e = ast::Expr {
@@ -422,6 +424,7 @@ fn rebuild(first: String, span: Span, rest: &[(String, Span)]) -> ast::Expr {
                 name: name.clone(),
             },
             span: *sp,
+            end: sp.right(name.chars().count() as u32),
         };
     }
     e

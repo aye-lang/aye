@@ -534,23 +534,23 @@ impl Lexer {
             ));
         }
         if digits.is_empty() {
-            return Err(Error::new(E0003, span, "number literal has no digits"));
+            return Err(Error::new(E0003, span, "number literal has no digits").ending(self.here()));
         }
         if is_float {
-            let v: f64 = digits
-                .parse()
-                .map_err(|_| Error::new(E0003, span, "invalid float literal"))?;
+            let v: f64 = digits.parse().map_err(|_| {
+                Error::new(E0003, span, "invalid float literal").ending(self.here())
+            })?;
             if !v.is_finite() {
-                return Err(Error::new(
-                    E0003,
-                    span,
-                    "float literal is out of range for f64",
-                ));
+                return Err(
+                    Error::new(E0003, span, "float literal is out of range for f64")
+                        .ending(self.here()),
+                );
             }
             Ok(Tok::Float(v))
         } else {
             let v = u64::from_str_radix(&digits, radix).map_err(|_| {
                 Error::new(E0003, span, "integer literal is too large (max 2^64-1)")
+                    .ending(self.here())
             })?;
             Ok(Tok::Int(v))
         }
@@ -651,7 +651,8 @@ impl Lexer {
             E0002,
             span,
             "unexpected `;` (Aye ends statements at newlines)",
-        );
+        )
+        .ending(span.right(1));
         if self.depth > 0 {
             return e;
         }

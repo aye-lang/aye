@@ -109,6 +109,10 @@ impl Client {
             caps.get("documentFormattingProvider"),
             Some(&Json::Bool(true))
         );
+        assert!(
+            caps.get("codeActionProvider")
+                .is_some_and(|p| *p != Json::Null)
+        );
         let sync = caps.get("textDocumentSync").unwrap();
         assert_eq!(sync.get("change").and_then(Json::as_i64), Some(1));
         self.notify("initialized", "{}");
@@ -253,6 +257,156 @@ fn change_fixes_the_error() {
         Some(&Json::Arr(Vec::new()))
     );
 
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// `f()` (4:18 to 4:21) has the wrong type: the compiler knows where the call
+/// ends, which the token at the error (`f`) does not tell.
+const MISMATCH: &str =
+    "fn f() i32 {\n    return 1\n}\n\npub fn main() {\n    let n: i64 = f()\n    @println(n)\n}\n";
+
+#[test]
+fn range_ends_where_the_compiler_says() {
+    let (dir, uri) = scratch("range", MISMATCH);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, MISMATCH));
+    let p = c.diagnostics();
+    let list = p.get("diagnostics").unwrap().as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0].get("code").and_then(Json::as_str), Some("E0023"));
+    assert_eq!(list[0].get("severity").and_then(Json::as_i64), Some(1));
+    assert_eq!(
+        list[0].get("range").unwrap().write(),
+        r#"{"start":{"line":5,"character":17},"end":{"line":5,"character":20}}"#
+    );
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// `sum` is assigned but declared with `let` (E0032 at 3:5, fix: `var` at 2:5).
+const LET: &str = "pub fn main() {\n    let sum = 0\n    sum += 1\n    @println(sum)\n}\n";
+
+#[test]
+fn code_action_applies_the_fix() {
+    let (dir, uri) = scratch("action", LET);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, LET));
+    let p = c.diagnostics();
+    let list = p.get("diagnostics").unwrap().as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0].get("code").and_then(Json::as_str), Some("E0032"));
+    let range = list[0].get("range").unwrap().write();
+    assert_eq!(
+        range,
+        r#"{"start":{"line":2,"character":4},"end":{"line":2,"character":7}}"#
+    );
+
+    let ask = |range: &str| {
+        format!(
+            r#"{{"textDocument":{{"uri":{}}},"range":{range},"context":{{"diagnostics":[]}}}}"#,
+            aye::diag::json_str(&uri)
+        )
+    };
+    let reply = c.request(2, "textDocument/codeAction", &ask(&range));
+    let actions = reply.get("result").unwrap().as_array().unwrap();
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    let a = &actions[0];
+    assert_eq!(a.get("kind").and_then(Json::as_str), Some("quickfix"));
+    assert_eq!(
+        a.get("title").and_then(Json::as_str),
+        Some("declare `sum` with `var`")
+    );
+    let attached = a.get("diagnostics").unwrap().as_array().unwrap();
+    assert_eq!(
+        attached[0].get("code").and_then(Json::as_str),
+        Some("E0032")
+    );
+    assert_eq!(attached[0].get("severity").and_then(Json::as_i64), Some(1));
+    let edits = a
+        .get("edit")
+        .and_then(|e| e.get("changes"))
+        .and_then(|c| c.get(&uri))
+        .and_then(Json::as_array)
+        .unwrap();
+    assert_eq!(edits.len(), 1, "{edits:?}");
+    assert_eq!(
+        edits[0].get("range").unwrap().write(),
+        r#"{"start":{"line":1,"character":4},"end":{"line":1,"character":7}}"#
+    );
+    assert_eq!(edits[0].get("newText").and_then(Json::as_str), Some("var"));
+
+    // Where the diagnostic is not: no action.
+    let away = r#"{"start":{"line":0,"character":0},"end":{"line":0,"character":3}}"#;
+    let reply = c.request(3, "textDocument/codeAction", &ask(away));
+    assert_eq!(reply.get("result"), Some(&Json::Arr(Vec::new())));
+
+    // The fixed text is clean.
+    let fixed = LET.replacen("let sum", "var sum", 1);
+    let change = format!(
+        r#"{{"textDocument":{{"uri":{},"version":2}},"contentChanges":[{{"text":{}}}]}}"#,
+        aye::diag::json_str(&uri),
+        aye::diag::json_str(&fixed)
+    );
+    c.notify("textDocument/didChange", &change);
+    assert_eq!(
+        c.diagnostics().get("diagnostics"),
+        Some(&Json::Arr(Vec::new()))
+    );
+
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn import_errors_are_related_information() {
+    let main = "import lib\n\npub fn main() {\n    @println(lib.f())\n}\n";
+    let (dir, uri) = scratch("import", main);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(
+        dir.join("lib/f.aye"),
+        "pub fn f() i32 {\n    return missing\n}\n",
+    )
+    .unwrap();
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, main));
+    let p = c.diagnostics();
+    let list = p.get("diagnostics").unwrap().as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    let d = &list[0];
+    assert_eq!(d.get("severity").and_then(Json::as_i64), Some(1));
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":0,"character":0},"end":{"line":0,"character":10}}"#
+    );
+    assert_eq!(
+        d.get("message").and_then(Json::as_str),
+        Some("module `lib` has 1 error")
+    );
+    let related = d.get("relatedInformation").unwrap().as_array().unwrap();
+    assert_eq!(related.len(), 1, "{related:?}");
+    let loc = related[0].get("location").unwrap();
+    assert!(
+        loc.get("uri")
+            .and_then(Json::as_str)
+            .unwrap()
+            .ends_with("/lib/f.aye"),
+        "{loc:?}"
+    );
+    assert_eq!(
+        loc.get("range").unwrap().write(),
+        r#"{"start":{"line":1,"character":11},"end":{"line":1,"character":18}}"#
+    );
+    assert!(
+        related[0]
+            .get("message")
+            .and_then(Json::as_str)
+            .unwrap()
+            .starts_with("E0018: ")
+    );
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }

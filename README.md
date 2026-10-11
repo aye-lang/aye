@@ -143,6 +143,8 @@ file compiles afterwards and 1 otherwise.
   is the path given to `aye check`); its fix-it edits only that file.
 - `line` and `col` are 1-based; a column counts characters (Unicode scalar
   values) from the start of the line, and a tab counts as one.
+- `end_line` and `end_col`, when present, are the position just after the
+  offending token or expression (the error's range is `line:col` up to it).
 - `fixes` lists the edits of the error's fix-it, applied together (`[]` when
   it has none). Each edit replaces the text from `line:col` up to, not
   including, `end_line:end_col` with `replacement` (positions in the file as

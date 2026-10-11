@@ -43,11 +43,32 @@ pub struct Fix {
     pub edits: Vec<Edit>,
 }
 
+/// How serious a diagnostic is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl Severity {
+    /// The word on the command line and in `--json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        }
+    }
+}
+
 /// A compile error: `file:line:col: error[E0001]: message`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diag {
     pub file: String,
     pub span: Span,
+    /// The position just after the offending token or expression, in the
+    /// same file, if the stage knows it.
+    pub end: Option<Span>,
+    pub severity: Severity,
     pub code: Code,
     pub msg: String,
     pub fix: Option<Fix>,
@@ -57,8 +78,13 @@ impl fmt::Display for Diag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}:{}:{}: error[{}]: {}",
-            self.file, self.span.line, self.span.col, self.code, self.msg
+            "{}:{}:{}: {}[{}]: {}",
+            self.file,
+            self.span.line,
+            self.span.col,
+            self.severity.as_str(),
+            self.code,
+            self.msg
         )
     }
 }
@@ -82,8 +108,13 @@ impl Diag {
                 )
             })
             .collect();
+        let end = self
+            .end
+            .map(|e| format!(r#","end_line":{},"end_col":{}"#, e.line, e.col))
+            .unwrap_or_default();
         format!(
-            r#"{{"severity":"error","code":"{}","file":{},"line":{},"col":{},"message":{},"fixes":[{}]}}"#,
+            r#"{{"severity":"{}","code":"{}","file":{},"line":{},"col":{}{end},"message":{},"fixes":[{}]}}"#,
+            self.severity.as_str(),
             self.code,
             json_str(&self.file),
             self.span.line,
@@ -131,6 +162,7 @@ pub fn json_str(s: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub span: Span,
+    pub end: Option<Span>,
     pub code: Code,
     pub msg: String,
     pub fix: Option<Fix>,
@@ -140,10 +172,18 @@ impl Error {
     pub fn new(code: Code, span: Span, msg: impl Into<String>) -> Error {
         Error {
             span,
+            end: None,
             code,
             msg: msg.into(),
             fix: None,
         }
+    }
+
+    /// Say where the offending token or expression ends (the position just
+    /// after it).
+    pub fn ending(mut self, end: Span) -> Error {
+        self.end = Some(end);
+        self
     }
 
     /// Attach a fix-it of one edit.
@@ -175,6 +215,8 @@ impl Error {
         Diag {
             file,
             span: self.span,
+            end: self.end,
+            severity: Severity::Error,
             code: self.code,
             msg: self.msg,
             fix: self.fix,
@@ -206,6 +248,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_has_severity_and_end() {
+        let mut d = Error::new(crate::codes::E0018, Span::new(3, 5), "undefined")
+            .ending(Span::new(3, 8))
+            .with_file(&["a.aye".to_string()]);
+        assert_eq!(
+            d.to_json(),
+            r#"{"severity":"error","code":"E0018","file":"a.aye","line":3,"col":5,"end_line":3,"end_col":8,"message":"undefined","fixes":[]}"#
+        );
+        d.severity = Severity::Warning;
+        d.end = None;
+        assert!(d.to_json().starts_with(r#"{"severity":"warning","#));
+        assert!(!d.to_json().contains("end_"));
+        assert_eq!(d.to_string(), "a.aye:3:5: warning[E0018]: undefined");
+    }
 
     #[test]
     fn json_str_escapes() {
