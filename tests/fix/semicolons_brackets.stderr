@@ -1,0 +1,3 @@
+semicolons_brackets.aye:3:19: error[E0002]: unexpected `;` (Aye ends statements at newlines)
+semicolons_brackets.aye:3:26: error[E0002]: unexpected `;` (Aye ends statements at newlines)
+semicolons_brackets.aye:6:16: error[E0002]: unexpected `;` (Aye ends statements at newlines)
