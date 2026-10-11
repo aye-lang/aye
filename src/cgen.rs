@@ -1858,8 +1858,11 @@ fn c_field(name: &str) -> String {
 
 fn c_str(bytes: &[u8]) -> String {
     let mut s = String::from("\"");
+    let mut prev = 0u8;
     for &b in bytes {
         match b {
+            // `??(`, `??/` ... are trigraphs: clang warns about them, so break every `??`.
+            b'?' if prev == b'?' => s.push_str("\\?"),
             b'"' => s.push_str("\\\""),
             b'\\' => s.push_str("\\\\"),
             b'\n' => s.push_str("\\n"),
@@ -1869,6 +1872,7 @@ fn c_str(bytes: &[u8]) -> String {
                 let _ = write!(s, "\\{b:03o}");
             }
         }
+        prev = b;
     }
     s.push('"');
     s
