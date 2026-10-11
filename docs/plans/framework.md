@@ -53,7 +53,7 @@ first part of FD1/FD2 (literal routes, a page, the 404).
 | F0 | Design | `docs/framework.md` answers the open choices | done (user questions open) |
 | F1 | Hello-world route served by an Aye HTTP server | `cargo test --release --test framework` | done (F1.1, 2026-10-10) |
 | F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c, F1.2, F1.3, F2.1, F2.2 done; F1.2a, F1.3a, F2.2a, F2.1a done; F2 complete except FD7 `@embedFile` (production) |
-| F3 | Dev server (FD5) | edit → new response, scripted | cards written (F3.1 to F3.7 and F2.3; F3.5 waits for O3.6b) |
+| F3 | Dev server (FD5) | edit → new response, scripted | F3.1–F3.7 and F2.3 done 2026-10-11 (Chrome by hand still open); next F4/F5 cards |
 | F4 | Client code (FD6) | an island under Node 22 and in Chrome | paused |
 | F5 | Production build, numbers, the example app (FD7–FD9) | FD7–FD9 checks | paused |
 
@@ -159,7 +159,7 @@ file by hand. Tests run only the named case (`cargo test --release
 - goal: the error page of F3.4 carries the same script, and the CLI serves `/_web/dev.js` and `/_web/events` with its own ids, so an open page shows the error and reloads when the build is fixed.
 - serves: FD5
 - files: `framework/dev/main.aye`, `framework/dev/diag.aye` (script tag in the page), `tests/framework.rs`
-- verify: `cargo test --release --test framework dev_broken_events` → exit 0; with the app broken, a raw `GET /_web/events` returns `text/event-stream` and an id; the test fixes the file and the reconnect yields an event with a different id (the new server's) within 60 s
+- verify: `cargo test --release --test framework dev_reload_cycle` → exit 0; with the app broken, a raw `GET /_web/events` returns `text/event-stream` and an id; the test fixes the file and the reconnect yields an event with a different id (the new server's) within 60 s
 - depends on: F3.4, F3.5
 - parallel with: –
 - where: local
