@@ -3,7 +3,7 @@
 # this checkout mounted at /work. With no command, opens a shell.
 #
 #     scripts/linux.sh cargo test --release
-#     scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser'
+#     scripts/linux.sh sh -c 'cargo build --release && target/release/aye check tests/example1/app'
 #     LINUX_ARCH=amd64 scripts/linux.sh true     # other architecture (slow, emulated)
 #
 # The image `aye-dev:ubuntu24[-amd64]-<hash>` is built from

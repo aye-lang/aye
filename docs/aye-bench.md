@@ -18,6 +18,8 @@ Measured 2026-10-11 on a cloud VM (Claude cloud session), commit `7babce6`.
 
 ## Build times of `browser/`
 
+The browser is in aye-lang/anyknown since P8.3; the commands below run in the checkout `scripts/downstream.sh` makes at `target/downstream/anyknown`.
+
 Wall clock, three runs each, `target/release/aye build` (fast mirrors `browser/build.sh`).
 
 | mode | runs (s) | median (s) |

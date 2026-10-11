@@ -1,5 +1,5 @@
 //! Shared by the test binaries that run cases on several threads
-//! (`golden`, `conformance`, `browser`); each has `mod common;`.
+//! (`golden`, `conformance`); each has `mod common;`. aye-lang/anyknown keeps a copy.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};

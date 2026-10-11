@@ -12,11 +12,13 @@ on this Mac, arm64 native; amd64 under Rosetta as the last check),
 `target/release/aye check browser`, `cargo test --release` and
 `browser/build.sh` all exit 0, run by `scripts/linux.sh` from any
 worktree (criterion O1 in [`aye.md`](aye.md)). The cloud environment is
-set up by the user elsewhere and is not part of this goal.
+set up by the user elsewhere and is not part of this goal. (Since P8.3 the
+`browser` parts of this check run inside the aye-lang/anyknown checkout of
+`scripts/downstream.sh`.)
 
 Done 2026-10-08 (X1.1–X1.7, `done.md`): the check above holds on
 main b2c723d for arm64 and amd64. Linux load-timing flakes go to the
-browser backlog (P7). Keep it green: a step that touches the C prelude,
+browser backlog (P7, `docs/plans/browser.md` in aye-lang/anyknown). Keep it green: a step that touches the C prelude,
 `@cimport` or platform calls runs `scripts/linux.sh` before merging.
 
 ## X2: rename Ore → Aye
@@ -28,7 +30,7 @@ also "ayelang".
 
 Done 2026-10-08: X2.1 wrote `scripts/rename-aye.py` (76eb976), X2.2
 ran it (3042d53): 513 files moved, 321 rewritten. Kept on purpose:
-page-content fixtures under `browser/tests`, recorded search queries,
+page-content fixtures under `browser/tests` (now in aye-lang/anyknown), recorded search queries,
 and lines that describe the rename.
 
 ## X3: website
@@ -44,7 +46,7 @@ O6.3, when it exists).
 - lane: project
 - goal: the `forms_html5.validation.png` golden no longer contains the checkout path (the URL bar shows the file path), so the test passes from any directory.
 - serves: X5
-- files: `tests/browser.rs` (the test), its golden PNG, whatever sets the URL (prefer a fixed `file:///fixture/...` style URL or a relative display over re-blessing per path)
+- files: `tests/browser.rs` (the test; moved to aye-lang/anyknown in P8.3), its golden PNG, whatever sets the URL (prefer a fixed `file:///fixture/...` style URL or a relative display over re-blessing per path)
 - verify: `cargo test --release --test browser window_forms_html5` → exit 0 from the main checkout and from a copy under `/tmp` (`git worktree add /tmp/x51 HEAD`)
 - depends on: P2.4
 - parallel with: none of the src/ or tests/ steps

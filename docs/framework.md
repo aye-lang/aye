@@ -8,6 +8,11 @@ check). Names in it (`web` for the library module and the command,
 `.web/` for the generated build root) are placeholders: see "Questions
 for the user".
 
+The anyknown browser, which this document cites for code and protocol
+(`browser/...`, `docs/agent-protocol.md`, `browser/COMPILER_GAPS.md`), has lived in
+[aye-lang/anyknown](https://github.com/aye-lang/anyknown) since P8.3; those paths are
+relative to that repo.
+
 Inputs: [`plan.md`](plan.md) (lanes), [`plans/aye.md`](plans/aye.md)
 (the O steps cited below), [`design.md`](design.md) (principles,
 non-goals), [`spec.md`](spec.md) §8 (errors), §12 (modules), §15

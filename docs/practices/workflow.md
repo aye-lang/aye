@@ -2,7 +2,10 @@
 
 How work gets from a worktree into `main`: commits, merges,
 tests, several agents at once, and compiler gaps. Each entry comes from
-a merge or a review in this repo's history.
+a merge or a review in this repo's history. Since P8.3 `browser/`,
+`tests/browser.rs` and the `docs/browser*.md` files live in
+[aye-lang/anyknown](https://github.com/aye-lang/anyknown); the entries below keep
+their old paths because the commits they cite do.
 
 ## Commits
 
@@ -85,7 +88,7 @@ undo it.
 
 ## Multi-agent
 
-### Parallel streams do not edit docs/browser.md
+### Parallel streams do not edit a shared status document
 **Context:** several branches of the same milestone at once.
 **Bad:** the B8 and B7b branches both edited `docs/browser.md`
 (3776f64, e3a285e); d1c8800
@@ -151,8 +154,8 @@ other branch's binary: every `import()` threw "import is not defined".
 A rebuild "fixed" it, and the plan logged a flaky build (P2.7). Builds
 are deterministic: 10 clean builds and 3 under load gave the same C and
 binary, and all 23x/24x JS tests passed.
-**Good:** `browser/build.sh` with no path (it writes `target/anyknown`
-in its own worktree), or a path named after the worktree:
+**Good:** `browser/build.sh` of aye-lang/anyknown with no path (it writes
+`target/anyknown` in its own worktree), or a path named after the worktree:
 `-o $SCRATCH/ak-$(basename "$PWD")`.
 **Why:** a shared output path lets another agent replace your binary
 between your build and your test, with no sign of it.
@@ -186,13 +189,13 @@ the program itself uses.
 
 ## Compiler gaps
 
-### Record a compiler limitation in browser/COMPILER_GAPS.md
+### Record a compiler limitation in the browser's COMPILER_GAPS.md
 **Context:** the browser needs something Aye or std does not do, or does
 badly.
 **Bad:** a silent local workaround; the language never hears of it.
 **Good:** add a numbered entry with **Need**, **Repro**,
-**Workaround**, **Hit by** and **Status**
-(`browser/COMPILER_GAPS.md:8`). The language milestones take their work
+**Workaround**, **Hit by** and **Status** to `browser/COMPILER_GAPS.md`
+in aye-lang/anyknown (line 8 has the format). The language milestones take their work
 from that list (`docs/milestones.md:186`, M9.5: "The browser written in
 Aye recorded what hurt ... Fix those in the compiler and std").
 **Why:** the browser is Aye's test case; its gap list is the language's
@@ -222,7 +225,7 @@ nothing noticed until a Linux machine came.
 **Good:** `scripts/linux.sh` runs any command in an Ubuntu 24.04
 container (Apple `container` CLI) with the checkout mounted at `/work`:
 ```
-scripts/linux.sh sh -c 'cargo build --release && target/release/aye check browser'
+scripts/linux.sh sh -c 'cargo build --release && target/release/aye check tests/example1/app'
 scripts/linux.sh cargo test --release > target/linux-test.log 2>&1
 ```
 The image `aye-dev:ubuntu24-<hash>` builds on first use (about 4 minutes)
@@ -243,8 +246,6 @@ other agents' builds on the Mac.
 - `git merge main`, conflicts resolved and listed in the
   merge message.
 - `cargo build --release`
-- `target/release/aye check browser` (prints nothing on success) when
-  the compiler or std changed
 - the test targets the card touches: `cargo test --release --test golden`,
   `--test conformance`, `--test spec`, `--lib` as applicable, and
   `--test fmt` whenever a `.aye` file was added or changed (it formats
@@ -255,12 +256,15 @@ other agents' builds on the Mac.
   once (2026-10-10: two agents' full suites beside main's pushed the
   load average to 13 on 10 cores and one run took over 34 minutes;
   alone, the suite takes about 10 minutes).
-- `browser/build.sh` when the compiler or std changed (fast mode, to
-  `target/anyknown` in this worktree; `--mode safe|fast|debug` is
-  optional; an output path, if any, stays inside the worktree, see
-  "Build into your own worktree")
-- New compiler gaps are in `browser/COMPILER_GAPS.md`; workarounds for
-  fixed gaps are gone.
-- The report has a "Done so far" paragraph; shared docs
-  (`docs/browser.md`, `docs/browser-sites.md`) are left to the
-  integrator.
+- `sh scripts/downstream.sh; echo $?` → 0 when the merge touches `src/`
+  or `std/` (clones `aye-lang/anyknown` at `tests/downstream/ANYKNOWN_REV`
+  into `target/downstream/`, runs `aye check browser`, `aye test browser`
+  and `cargo test --release --test browser` with this worktree's
+  `target/release/aye`; log in `target/downstream.log`; needs network and
+  `gh auth login`; about 4 minutes). A failure caused by the compiler
+  change is fixed on the compiler side, or in anyknown with a new pin
+  (`docs/plans/anyknown.md`).
+- New compiler gaps are in `browser/COMPILER_GAPS.md` of aye-lang/anyknown;
+  workarounds for fixed gaps are gone.
+- The report has a "Done so far" paragraph; shared status docs
+  (`docs/plan.md`, `docs/plans/*`) are left to the integrator.

@@ -3,7 +3,7 @@
 One line per finished step: id, date, result, merge commit (when one
 exists). "dropped: reason" marks a step that was superseded or is no
 longer needed. Newest phases last; within a phase, by id. The lane plans
-([`aye.md`](aye.md), [`browser.md`](browser.md),
+([`aye.md`](aye.md), [`anyknown.md`](anyknown.md),
 [`framework.md`](framework.md)) list only open work.
 
 ## Aye lane

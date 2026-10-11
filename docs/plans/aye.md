@@ -3,13 +3,14 @@
 The language lane of [`docs/plan.md`](../plan.md): the compiler
 (`src/`), std (`std/`), `tests/` and the toolchain. Primary lane: it
 gets most slots. Its inputs are the criteria below, the open entries of
-`browser/COMPILER_GAPS.md`, and F1.1 (the acceptance test of
+`browser/COMPILER_GAPS.md` (in aye-lang/anyknown), and F1.1 (the acceptance test of
 `std.http`). Finished steps: [`done.md`](done.md).
 
 ## Done criteria
 
 Criteria are named O1–O13 (not to be confused with phases O1.x–O7.x).
-The browser resumes when O6–O9 hold.
+The browser resumes when O6–O9 hold, in its own repo aye-lang/anyknown
+(split in P8; `scripts/downstream.sh` runs it against this compiler).
 
 **Stage0 close-out**
 
@@ -17,7 +18,7 @@ The browser resumes when O6–O9 hold.
   macOS and, after X1.2, on Ubuntu 24.04.
 - O2: `target/release/aye fmt --check` passes over every `.aye` file,
   checked by `cargo test --release --test fmt` (P2.4).
-- O3: `browser/COMPILER_GAPS.md` "## Open" has no entry: each is fixed
+- O3: `browser/COMPILER_GAPS.md` (in aye-lang/anyknown) "## Open" has no entry: each is fixed
   or declined in `docs/decisions.md`; no workaround remains for a fixed
   gap.
 - O4: `cargo test --release --test spec` passes (the spec within ~30k
@@ -42,7 +43,7 @@ The browser resumes when O6–O9 hold.
   compile error naming the target (tests of O2.2–O2.4).
 - O9: `aye test <dir>` runs every module of a tree, prints a time per
   test, stops a test at a time limit, keeps `--filter`, `--module`,
-  `--json` and leak-is-failure (`aye test browser`; tests of O5.1–O5.2).
+  `--json` and leak-is-failure (`aye test browser` in the downstream check; tests of O5.1–O5.2).
 - O10: `aye lsp` (diagnostics, format, hover with `///`, go to
   definition) and `aye doc --html`, each with a test (O6.1–O6.3).
 - O11: `cargo test --release --test conformance` prints passed/total per
@@ -51,7 +52,7 @@ The browser resumes when O6–O9 hold.
 - O12: `docs/aye-bench.md` records a hello-world `std.http` server in
   `fast` mode at least as fast as Node 22's `http` (Go `net/http` as the
   second reference, `ab -k`, same machine), and the debug and fast
-  build times of `browser/`.
+  build times of `browser/` (aye-lang/anyknown).
 - O13: server gate: a fresh agent with only `aye spec` and
   `aye doc --signatures std` writes a JSON REST service (std.http +
   std.json) that passes `aye check` within two rounds and a scripted
@@ -67,7 +68,7 @@ built-in database and cloud clients (`@cimport` covers them).
 - Commands (`USAGE`, `src/main.rs:6`): build, run, emit-c, check, fix, test, fmt, doc --signatures, cimport, explain, spec.
 - std: coro, diag, fs, heap, http (O1.4a), list, log, map, math, mem, net (O1.3, O1.3b), os, path (O1.5a), pool, process (O1.6), sort, sync, testing, text, thread, time. json (O3.1), time with a wall clock (O3.2), crypto hashes (O3.3). json writer (O3.1a), random bytes and encoding (O3.3a), http client with https (O3.4, O3.5). **O6 holds** (checked 2026-10-10 on bf4c5d8, `done.md`).
 - std docs (O1.2): new modules take the index form: one line in `docs/spec.md` §15 plus `///` on every `pub fn` (`tests/spec.rs`).
-- Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport; `X.needs`/`X.tools` skip files), `tests/fmt.rs`, `tests/spec.rs`, `tests/browser.rs`, `tests/framework.rs`. `tests/conformance.rs` (18 areas, 51 programs, native).
+- Tests: `tests/golden.rs` (cases, errors, tests, fix, modules, ffi, cimport; `X.needs`/`X.tools` skip files), `tests/fmt.rs`, `tests/spec.rs`, `tests/framework.rs`; the browser's tests live in aye-lang/anyknown and run through `scripts/downstream.sh`. `tests/conformance.rs` (18 areas, 51 programs, native).
 - Open gaps: #50 (per-OS declarations; O8 needs it), #52 (methods as fn values), #53 (nested structs, generic methods).
 - Toolchain: Homebrew LLVM 23 for ASan and wasm32 (flags in `done.md`, O0.1); Node 22, Go and `ab` are installed locally.
 
@@ -79,7 +80,7 @@ built-in database and cloud clients (`@cimport` covers them).
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | done 2026-10-10 |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | done 2026-10-10 (O6 holds) |
 | O2.x | Targets incl. wasm32 (O8) | the O8 check | current |
-| O5.x | `aye test` maturity (O9) | `aye test browser` | backlog |
+| O5.x | `aye test` maturity (O9) | `aye test browser` (downstream check) | backlog |
 | O4.x | Dependencies (O7) | the O7 check | backlog |
 | O6.x | LSP and HTML docs (O10) | the O10 check | backlog |
 | O7.x | Numbers and the gate (O11–O13) | the O11–O13 checks | backlog |
@@ -123,10 +124,10 @@ brackets.
 - O3.2a `std.time.parseHttp` lenient forms (RFC 850, asctime) if the HTTP client needs them; a `Date` header helper in `std.http` from `now()` (O3.2 report).
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child.
-- P8.x (browser, when it resumes) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
+- P8.x (browser, when it resumes; aye-lang/anyknown) `browser/net/archive.aye` uses `std.fs.readDir`/`stat` instead of its `@cimport` of dirent.h and sys/stat.h (O1.5 report).
 - O2.5a std casts on wasm32: audit the remaining `as usize` casts of 64-bit values in std (O2.5 found 23, all small values today) and `aye cimport` output (`size_t`→`usize`, `long`→`c_long`) under `--target wasm32-wasip1`. Verify: a `cimport` golden built for wasm.
 - O2.5e a std golden that exercises the x86_64 Linux `struct stat` mode offset directly (PR #2 follow-up). Verify: `std_fs_dir` kinds on x86_64 Linux.
-- P-flaky `tests/browser.rs` `window_relayout_after_image_load` failed once in three Linux full runs (observer callback logged before image `onload`), diagnose step (PR #1).
+- P-flaky aye-lang/anyknown `tests/browser.rs` `window_relayout_after_image_load` failed once in three Linux full runs (observer callback logged before image `onload`), diagnose step (PR #1).
 - O2.8a one-step Linux executable from macOS: `--sysroot` pass-through plus `-fuse-ld=lld` (O2.8 report; the `-c` path already satisfies O8). Verify: `aye build --target x86_64-linux hello.aye` links on macOS with a Linux sysroot set.
 - O2.6 stack overflow on wasm: deep recursion traps with `memory access out of bounds`; a prelude or runner check that reports the native panic text (O2.3 report). Verify: `stack_overflow` drops `X.native`.
 - Note (O2.3): Node 22.22.2 segfaults once a wasm heap passes ~32 MiB (plain C reproduces it); the runner uses `--single-threaded-gc`; Node 25 is fine.
@@ -171,7 +172,8 @@ brackets.
 The browser wrote for itself what std lacks: Unix sockets
 (`browser/ui/socket.aye`), an HTTP client on libcurl
 (`browser/net/http.aye`), JSON for JS values (`browser/js/json.aye`), a
-URL parser (`browser/url/url.aye`), encodings (`browser/encoding/`).
+URL parser (`browser/url/url.aye`), encodings (`browser/encoding/`); that
+code is now in aye-lang/anyknown.
 Models for std, not code std can import.
 
 ### Bun as the yardstick

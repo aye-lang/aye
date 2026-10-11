@@ -1,1 +1,0 @@
-log('side effect ran');

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Rename the language from Ore to Aye (X2.1). Stdlib only; run from the repo root.
 
+One-off, already run (X2.2). The `browser/` paths in its tables are the layout at that
+time; `browser/` has since moved to aye-lang/anyknown (P8).
+
   python3 scripts/rename-aye.py --dry-run   change nothing, print a report
   python3 scripts/rename-aye.py --apply     git mv files, then rewrite file contents
 
