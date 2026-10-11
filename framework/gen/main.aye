@@ -1,0 +1,182 @@
+// `web gen`: reads the pages of an app and writes its build root, `.web/`.
+//
+//     aye run framework/gen -- <app> [--web <dir>]
+//
+// `<app>/app/` holds the routes as in Next.js: a directory with a `page.aye`
+// serves its path, `[name]` is one dynamic segment (`req.param("name")`).
+// `.web/` gets a `main.aye`, a `routes/` module with the route table, a link
+// `r/r<i>_<name>` to each route's directory, a link to every other directory
+// of the app except `public/` (`lib`), and `web`, a link to the web module
+// (`--web`, `framework/web` by default). `aye check .web` and `aye build
+// .web` then work. Everything in `.web/` is replaced on each run.
+
+import std.fs
+import std.fs.ReadDirError
+import std.heap.Arena
+import std.heap.General
+import std.list.List
+import std.mem.Allocator
+import std.os
+import std.path
+import std.text
+import std.text.Builder
+
+extern fn getcwd(buf: [*]u8, size: usize) ?[*]u8
+extern fn strlen(s: [*]u8) usize
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let alloc = arena.allocator()
+
+    let args = try os.args(alloc)
+    var app: []u8 = ""
+    var web: []u8 = "framework/web"
+    var i: usize = 1
+    while i < args.len {
+        if text.eql(args[i], "--web") && i + 1 < args.len {
+            web = args[i + 1]
+            i += 2
+        } else if app.len == 0 {
+            app = args[i]
+            i += 1
+        } else {
+            die("usage: gen <app> [--web <dir>]", args[i], "")
+        }
+    }
+    if app.len == 0 {
+        die("usage: gen <app> [--web <dir>]", "", "")
+    }
+    let root = try path.join(alloc, app, "app")
+    if !fs.exists(root) {
+        die("no such directory", root, "")
+    }
+    if !fs.exists(web) {
+        die("no such web module", web, "")
+    }
+
+    var pages = List(Page).init(alloc)
+    try scan(alloc, root, "", &mut pages)
+    order(pages.items())
+    checkClashes(pages.items())
+
+    let out = try path.join(alloc, app, ".web")
+    if fs.exists(out) {
+        try clean(alloc, out)
+    }
+    try fs.mkdir(out)
+    try fs.mkdir(try path.join(alloc, out, "r"))
+    try fs.mkdir(try path.join(alloc, out, "routes"))
+
+    var names = List([]u8).init(alloc)
+    for n in 0..pages.len() {
+        let page = pages.items()[n]
+        let name = try linkName(alloc, n, page.dir)
+        try names.append(name)
+        var target = Builder.init(alloc)
+        try target.append("../../app")
+        if page.dir.len > 0 {
+            try target.append("/")
+            try target.append(page.dir)
+        }
+        try fs.symlink(target.bytes(), try path.join(alloc, try path.join(alloc, out, "r"), name))
+    }
+    try linkOthers(alloc, app, out)
+    try fs.symlink(try absolute(alloc, web), try path.join(alloc, out, "web"))
+
+    try put(alloc, try path.join(alloc, out, "main.aye"), mainSource())
+    try put(alloc, try path.join(alloc, try path.join(alloc, out, "routes"), "routes.aye"), try routesSource(alloc, pages.items(), names.items()))
+
+    var line = Builder.init(alloc)
+    try line.append("web gen: ")
+    try line.append(out)
+    try line.append(", ")
+    try line.appendUint(pages.len() as u64)
+    try line.append(" routes\n")
+    try fs.stdout().write(line.bytes())
+}
+
+// `.web/<dir>` links to the app's own code directories, so that a page can
+// `import lib.posts`.
+fn linkOthers(alloc: Allocator, app: []u8, out: []u8) !void {
+    let found = try fs.readDir(alloc, app)
+    defer found.deinit()
+    for e in found.items {
+        if e.kind != fs.Kind.Dir || text.startsWith(e.name, ".") {
+            continue
+        }
+        if text.eql(e.name, "app") || text.eql(e.name, "public") {
+            continue
+        }
+        if text.eql(e.name, "r") || text.eql(e.name, "routes") || text.eql(e.name, "web") {
+            die("the name is used by .web", e.name, "")
+        }
+        var target = Builder.init(alloc)
+        try target.append("../")
+        try target.append(e.name)
+        try fs.symlink(target.bytes(), try path.join(alloc, out, e.name))
+    }
+}
+
+// Removes `dir` and everything in it. A link is removed, not followed.
+fn clean(alloc: Allocator, dir: []u8) ReadDirError!void {
+    let found = try fs.readDir(alloc, dir)
+    defer found.deinit()
+    for e in found.items {
+        let p = try path.join(alloc, dir, e.name)
+        if e.kind == fs.Kind.Dir {
+            try clean(alloc, p)
+        } else {
+            try fs.remove(p)
+        }
+    }
+    try fs.remove(dir)
+}
+
+// `p` as an absolute path: a link to it must not depend on where it sits.
+fn absolute(alloc: Allocator, p: []u8) ![]u8 {
+    if p.len > 0 && p[0] == '/' {
+        return p
+    }
+    var buf = try alloc.alloc(0 as u8, 4096)
+    let cwd = getcwd(buf.ptr, buf.len) orelse {
+        die("cannot read the current directory", "", "")
+        return p
+    }
+    return path.join(alloc, cwd[0..strlen(cwd)], p)
+}
+
+fn put(alloc: Allocator, file: []u8, content: []u8) !void {
+    let f = try fs.create(file)
+    defer f.close()
+    try f.write(content)
+}
+
+fn mainSource() []u8 {
+    return "// Generated by `web gen`; do not edit.\n\nimport std.heap.General\nimport routes\nimport web\n\npub fn main() !void {\n    var gpa = General.init()\n    defer gpa.deinit()\n    let alloc = gpa.allocator()\n    try web.run(alloc, web.portArg(alloc, 8080), routes.table[..])\n}\n"
+}
+
+fn routesSource(alloc: Allocator, pages: []Page, names: [][]u8) ![]u8 {
+    var b = Builder.init(alloc)
+    try b.append("// Generated by `web gen`; do not edit.\n\n")
+    for n in names {
+        try b.append("import r.")
+        try b.append(n)
+        try b.append("\n")
+    }
+    try b.append("import web.Method\nimport web.Route\n\n")
+    try b.append("pub let table = [")
+    try b.appendUint(pages.len as u64)
+    try b.append("]Route{\n")
+    for i in 0..pages.len {
+        try b.append("    Route { method: Method.Get, pattern: \"")
+        try b.append(pages[i].url)
+        try b.append("\", handler: ")
+        try b.append(names[i])
+        try b.append(".page },\n")
+    }
+    try b.append("}\n")
+    return b.bytes()
+}

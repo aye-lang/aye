@@ -1,0 +1,206 @@
+// The scan of an app: which directories of `app/` have a `page.aye`, and the
+// URL pattern each one serves.
+
+import std.fs
+import std.fs.ReadDirError
+import std.list.List
+import std.mem.AllocError
+import std.mem.Allocator
+import std.os
+import std.path
+import std.text
+import std.text.Builder
+
+/// A route found in `app/`: `dir` is the directory below `app/` (`blog/[slug]`;
+/// empty for `app/` itself), `url` the pattern it serves (`/blog/[slug]`).
+pub struct Page {
+    dir: []u8
+    url: []u8
+}
+
+/// Adds the pages in the directory `rel` below `root` (`<app>/app`) and in the
+/// directories below it to `out`.
+pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadDirError!void {
+    let here = try path.join(alloc, root, rel)
+    let found = try fs.readDir(alloc, here)
+    defer found.deinit()
+    for e in found.items {
+        if e.kind == fs.Kind.File && text.eql(e.name, "page.aye") {
+            try out.append(Page { dir: rel, url: try urlOf(alloc, rel) })
+        }
+    }
+    for e in found.items {
+        if e.kind == fs.Kind.Dir && !text.startsWith(e.name, ".") {
+            checkSegment(e.name)
+            try scan(alloc, root, try path.join(alloc, rel, e.name), out)
+        }
+    }
+}
+
+/// Stops with an error message if two pages are the same route up to the name
+/// of a `[name]` segment (`blog/[a]` and `blog/[b]`).
+pub fn checkClashes(pages: []Page) {
+    for i in 0..pages.len {
+        for j in i + 1..pages.len {
+            if compare(pages[i].url, pages[j].url, true) == 0 {
+                die("two pages are the same route", pages[i].dir, pages[j].dir)
+            }
+        }
+    }
+}
+
+/// Is `seg` a `[name]` segment?
+pub fn isParam(seg: []u8) bool {
+    return seg.len > 2 && seg[0] == '[' && seg[seg.len - 1] == ']'
+}
+
+/// The identifier a directory is linked as: `blog/[slug]` becomes
+/// `blog_slug`, `app/` itself `root`. Letters and digits stay; each run of
+/// other characters becomes one `_`.
+pub fn linkName(alloc: Allocator, index: usize, dir: []u8) AllocError![]u8 {
+    var b = Builder.init(alloc)
+    try b.append("r")
+    try b.appendUint(index as u64)
+    try b.append("_")
+    if dir.len == 0 {
+        try b.append("root")
+        return b.bytes()
+    }
+    var gap = false
+    var started = false
+    for c in dir {
+        if isAlnum(c) {
+            if gap {
+                try b.appendByte('_')
+                gap = false
+            }
+            try b.appendByte(c)
+            started = true
+        } else if started {
+            gap = true
+        }
+    }
+    return b.bytes()
+}
+
+/// Prints `what: a, b` to standard error and ends the program with status 1.
+pub fn die(what: []u8, a: []u8, b: []u8) {
+    fs.stderr().write("web gen: ") catch |e| {}
+    fs.stderr().write(what) catch |e| {}
+    fs.stderr().write(": ") catch |e| {}
+    fs.stderr().write(a) catch |e| {}
+    if b.len > 0 {
+        fs.stderr().write(", ") catch |e| {}
+        fs.stderr().write(b) catch |e| {}
+    }
+    fs.stderr().write("\n") catch |e| {}
+    os.exit(1)
+}
+
+// `/` and the directory's segments; every segment is checked by `scan`.
+fn urlOf(alloc: Allocator, rel: []u8) ![]u8 {
+    var b = Builder.init(alloc)
+    try b.append("/")
+    try b.append(rel)
+    return b.bytes()
+}
+
+// The directory names `[...rest]` and `(group)` are Next.js's, not built yet;
+// the name inside `[...]` must be an identifier, as `req.param` names it.
+fn checkSegment(seg: []u8) {
+    if text.startsWith(seg, "[...") || seg[0] == '(' {
+        die("not supported yet", seg, "")
+    }
+    if seg[0] == '[' {
+        if !isParam(seg) || !isIdent(seg[1..seg.len - 1]) {
+            die("not a [name] segment with an identifier name", seg, "")
+        }
+    }
+}
+
+fn isIdent(s: []u8) bool {
+    if s.len == 0 || (s[0] >= '0' && s[0] <= '9') {
+        return false
+    }
+    for c in s {
+        if !isAlnum(c) && c != '_' {
+            return false
+        }
+    }
+    return true
+}
+
+fn isAlnum(c: u8) bool {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+fn before(a: Page, b: Page) bool {
+    return compare(a.url, b.url, false) < 0
+}
+
+/// Sorts the pages so that, of two routes that both match a path, the one
+/// with the literal segment comes first. Insertion sort: apps have few
+/// routes.
+pub fn order(pages: []mut Page) {
+    var i: usize = 1
+    while i < pages.len {
+        var j = i
+        while j > 0 && before(pages[j], pages[j - 1]) {
+            let t = pages[j]
+            pages[j] = pages[j - 1]
+            pages[j - 1] = t
+            j -= 1
+        }
+        i += 1
+    }
+}
+
+// Segment by segment: a literal before a `[name]`, then (unless
+// `sameShape`, which treats every `[name]` as equal to every other) by
+// bytes; a shorter pattern before a longer one. Negative, 0, positive.
+fn compare(a: []u8, b: []u8, sameShape: bool) i32 {
+    var xs = text.split(a, "/")
+    var ys = text.split(b, "/")
+    while xs.next() |x| {
+        let y = ys.next() orelse return 1
+        if isParam(x) != isParam(y) {
+            if isParam(x) {
+                return 1
+            }
+            return -1
+        }
+        if isParam(x) && sameShape {
+            continue
+        }
+        let c = cmpBytes(x, y)
+        if c != 0 {
+            return c
+        }
+    }
+    if ys.next() != null {
+        return -1
+    }
+    return 0
+}
+
+fn cmpBytes(a: []u8, b: []u8) i32 {
+    var n = b.len
+    if a.len < n {
+        n = a.len
+    }
+    for i in 0..n {
+        if a[i] != b[i] {
+            if a[i] < b[i] {
+                return -1
+            }
+            return 1
+        }
+    }
+    if a.len == b.len {
+        return 0
+    }
+    if a.len < b.len {
+        return -1
+    }
+    return 1
+}

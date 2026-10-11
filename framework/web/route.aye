@@ -7,22 +7,25 @@ import std.text.Builder
 /// A page or an API function: reads the request, fills the response.
 pub let Handler = fn(*Request, *mut Response) Error!void
 
-/// One route: a method and a path of literal segments (`/`, `/about`,
-/// `/docs/intro`), and the function that answers it.
+/// One route: a method and a pattern of literal segments and `[name]`
+/// segments (`/`, `/about`, `/blog/[slug]`), and the function that answers
+/// it. A `[name]` segment matches any one non-empty segment of the path;
+/// the handler reads it with `req.param("name")`. A literal route must come
+/// before a `[name]` route that also matches the path.
 pub struct Route {
     method: Method
     pattern: []u8
     handler: Handler
 }
 
-/// The handler of the first route with this method and path, or null.
-/// Both sides drop one trailing `/`, so `/about/` is `/about`. `Head` finds
-/// the `Get` route.
-pub fn find(routes: []Route, method: Method, path: []u8) ?Handler {
+/// The first route with this method and a pattern that matches the path, or
+/// null. Both sides drop one trailing `/`, so `/about/` is `/about`. `Head`
+/// finds the `Get` route.
+pub fn find(routes: []Route, method: Method, path: []u8) ?Route {
     for r in routes {
         let same = r.method == method || (method == Method.Head && r.method == Method.Get)
         if same && sameSegments(r.pattern, path) {
-            return r.handler
+            return r
         }
     }
     return null
@@ -73,6 +76,37 @@ fn trimSlash(s: []u8) []u8 {
     return s
 }
 
+// Is `seg` a `[name]` segment of a pattern?
+fn isParam(seg: []u8) bool {
+    return seg.len > 2 && seg[0] == '[' && seg[seg.len - 1] == ']'
+}
+
+// Does the path have as many segments as the pattern, each the same as the
+// pattern's literal or non-empty where the pattern has `[name]`?
 fn sameSegments(pattern: []u8, path: []u8) bool {
-    return text.eql(trimSlash(pattern), trimSlash(path))
+    var ps = text.split(trimSlash(pattern), "/")
+    var xs = text.split(trimSlash(path), "/")
+    while ps.next() |p| {
+        let x = xs.next() orelse return false
+        if isParam(p) {
+            if x.len == 0 {
+                return false
+            }
+        } else if !text.eql(p, x) {
+            return false
+        }
+    }
+    return xs.next() == null
+}
+
+test "patterns with [name] segments" {
+    @expect(sameSegments("/blog/[slug]", "/blog/hello"))
+    @expect(sameSegments("/blog/[slug]", "/blog/hello/"))
+    @expect(!sameSegments("/blog/[slug]", "/blog"))
+    @expect(!sameSegments("/blog/[slug]", "/blog/"))
+    @expect(!sameSegments("/blog/[slug]", "/blog/a/b"))
+    @expect(!sameSegments("/blog/[slug]", "/news/a"))
+    @expect(sameSegments("/", "/"))
+    @expect(!sameSegments("/", "/about"))
+    @expect(!sameSegments("/about", "/"))
 }

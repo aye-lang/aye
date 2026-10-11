@@ -335,6 +335,25 @@ pub fn rename(from: []u8, to: []u8) PathError!void {
     try pathResult(aye_std_pathop(2, from.ptr, from.len, to.ptr, to.len))
 }
 
+/// Create a symbolic link at `link` that holds `target` (as given; it is
+/// not looked at). An existing `link` is `Exists`; a path of 4096 bytes or
+/// more is `PathFailed`.
+pub fn symlink(target: []u8, link: []u8) PathError!void {
+    if target.len >= 4096 || link.len >= 4096 {
+        return PathError.PathFailed
+    }
+    // NUL-terminated copies.
+    var t = @zeroed([4096]u8)
+    var l = @zeroed([4096]u8)
+    memcpy(t[0..].ptr, target.ptr, target.len)
+    memcpy(l[0..].ptr, link.ptr, link.len)
+    var code: i32 = 0
+    if cSymlink(t[0..].ptr, l[0..].ptr) != 0 {
+        code = aye_std_fail()
+    }
+    try pathResult(code)
+}
+
 // 0, or -errno (ENOTEMPTY as -39), as nothing or an error.
 fn pathResult(code: i32) PathError!void {
     if code != 0 {
@@ -443,6 +462,8 @@ extern fn aye_std_opendir(path: [*]u8, len: usize, err: *mut i32) ?[*]u8
 extern fn aye_std_readdir(dir: [*]u8, kind: *mut i32) ?[*]u8
 extern fn aye_std_closedir(dir: [*]u8)
 extern fn aye_std_rewinddir(dir: [*]u8)
+extern fn aye_std_fail() i32
+extern("symlink") fn cSymlink(target: [*]u8, link: [*]u8) i32
 extern fn strlen(s: [*]u8) usize
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize

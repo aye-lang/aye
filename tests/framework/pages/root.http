@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Connection: close
+Content-Length: 48
+
+<!doctype html><title>Pages</title><h1>Home</h1>

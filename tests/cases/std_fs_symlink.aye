@@ -1,0 +1,90 @@
+// F1.2: std.fs.symlink, in a directory under /tmp named after the process
+// id (removed at the end).
+
+import std
+import std.heap.General
+import std.text.Builder
+
+extern fn getpid() i32
+
+fn kindName(k: std.fs.Kind) []u8 {
+    return match k {
+        .File => "file"
+        .Dir => "dir"
+        .Symlink => "symlink"
+        .Other => "other"
+    }
+}
+
+// `dir/name` in `b`.
+fn at(b: *mut Builder, dir: []u8, name: []u8) []u8 {
+    b.clear()
+    b.append(dir) catch unreachable
+    b.append("/") catch unreachable
+    b.append(name) catch unreachable
+    return b.bytes()
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var d = Builder.init(alloc)
+    defer d.deinit()
+    try d.append("/tmp/aye-std-fs-symlink-")
+    try d.appendInt(getpid() as i64)
+    let dir = d.bytes()
+    var p = Builder.init(alloc)
+    defer p.deinit()
+    try std.fs.mkdir(dir)
+    try std.fs.mkdir(at(&mut p, dir, "sub"))
+    let f = try std.fs.create(at(&mut p, dir, "sub/b.txt"))
+    try f.write("hello\n")
+    f.close()
+
+    // A link to a file and one to a directory, both relative to the link's
+    // directory; a link to nothing.
+    try std.fs.symlink("sub/b.txt", at(&mut p, dir, "link"))
+    try std.fs.symlink("sub", at(&mut p, dir, "dlink"))
+    try std.fs.symlink("missing", at(&mut p, dir, "dangling"))
+    let l = try std.fs.stat(at(&mut p, dir, "link"))
+    @println(kindName(l.kind))
+    let lf = try std.fs.statFollow(at(&mut p, dir, "link"))
+    @print(lf.size)
+    @print(" ")
+    @println(kindName(lf.kind))
+    let df = try std.fs.statFollow(at(&mut p, dir, "dlink"))
+    @println(kindName(df.kind))
+    if std.fs.statFollow(at(&mut p, dir, "dangling")) |_| {
+        @println("statFollow: found")
+    } else |err| {
+        @println(match err {
+            .NotFound => "statFollow: not found"
+            _ => "statFollow: other error"
+        })
+    }
+    let through = try std.fs.readFile(alloc, at(&mut p, dir, "dlink/b.txt"))
+    defer alloc.free(through)
+    @print(through)
+
+    // Errors: the link exists; its directory does not.
+    std.fs.symlink("sub", at(&mut p, dir, "link")) catch |err| {
+        @println(match err {
+            .Exists => "symlink: exists"
+            _ => "symlink: other error"
+        })
+    }
+    std.fs.symlink("sub", at(&mut p, dir, "no/such")) catch |err| {
+        @println(match err {
+            .NotFound => "symlink: not found"
+            _ => "symlink: other error"
+        })
+    }
+
+    for name in [5][]u8{"link", "dlink", "dangling", "sub/b.txt", "sub"} {
+        try std.fs.remove(at(&mut p, dir, name))
+    }
+    try std.fs.remove(dir)
+    @println(std.fs.exists(dir))
+}
