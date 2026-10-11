@@ -77,7 +77,7 @@ file_lines and json_total did not improve; see below.
 
 Proposed cards:
 
-- O1.17 `std.log.err` / stderr line helper: either document the `error: `
+- O1.17 (done as O1.18a: `std.log.line`) `std.log.err` / stderr line helper: either document the `error: `
   prefix in the §15 `std.log` line, or add `std.fs.eprintln` (no prefix).
   Verify: rerun cli_grep and file_lines x3; zero `std.fs.stderr` rewrites.
 - O1.18 E0006 on `return`/`break` in a match arm names the fix ("use a
