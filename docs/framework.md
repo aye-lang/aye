@@ -141,8 +141,9 @@ method gets 405 with `Allow`.
 - **`web.Request`:** `method` (an enum), `path`, `body`, `arena` (an
   `Allocator`), and methods `param(name) []u8` (panics in debug and safe
   mode on a name that is not a segment of the matched route: a bug, not
-  a request error), `header(name) ?[]u8`; with O3.6 `query(name)`,
-  `form(name)`, `cookie(name)` (`?[]u8`); with O3.1 `json()`.
+  a request error), `header(name) ?[]u8`, `query(name)` and
+  `form(name)` (`Error!?[]u8`, percent-decoded into `arena`),
+  `cookie(name) ?[]u8` (as sent); with O3.1 `json()`.
 - **`web.Response`:** `status: u16` (200 by default),
   `header(name, value)`, `text(s)`, `html() *mut web.Html`, `redirect(url,
   status)`; with O3.1 `json()` (a writer into the body); with O3.6

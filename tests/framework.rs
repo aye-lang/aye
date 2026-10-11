@@ -46,6 +46,34 @@ const PAGES_CASES: &[(&str, &str, &str)] = &[
     ("GET", "/../secret", "traversal.http"),
 ];
 
+/// A method, a path, extra header lines (each ending in `\r\n`), a body and
+/// the file of `tests/framework/pages/` with the response: requests that
+/// carry cookies or a form.
+const PAGES_BODY_CASES: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "GET",
+        "/api/echo?q=a%20b+c%zz&q=2",
+        "Cookie: id=1; name=anchor%20x \r\n",
+        "",
+        "api_echo.http",
+    ),
+    ("GET", "/api/echo", "", "", "api_echo_none.http"),
+    (
+        "POST",
+        "/api/echo",
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+        "x=1&msg=hi+there%21",
+        "api_echo_post.http",
+    ),
+    (
+        "POST",
+        "/api/echo",
+        "Content-Type: text/plain\r\n",
+        "msg=hi",
+        "api_echo_post_text.http",
+    ),
+];
+
 /// The built app, killed when dropped.
 struct App {
     child: Child,
@@ -106,12 +134,23 @@ fn start(exe: &Path) -> App {
 /// The response to `method path`, read until the server closes, with `\r\n`
 /// as `\n`.
 fn request(app: &App, method: &str, path: &str) -> String {
+    request_with(app, method, path, "", "")
+}
+
+/// Like `request`, with `extra` header lines (each ending in `\r\n`) and a
+/// body.
+fn request_with(app: &App, method: &str, path: &str, extra: &str, body: &str) -> String {
     let mut s = TcpStream::connect(("127.0.0.1", app.port)).unwrap();
     s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
         .unwrap();
+    let length = if body.is_empty() {
+        String::new()
+    } else {
+        format!("Content-Length: {}\r\n", body.len())
+    };
     write!(
         s,
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n{extra}{length}\r\n{body}"
     )
     .unwrap();
     let mut buf = Vec::new();
@@ -166,6 +205,15 @@ fn pages() {
         let want =
             std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
         assert_eq!(request(&app, method, path), want, "{method} {path}");
+    }
+    for (method, path, extra, body, file) in PAGES_BODY_CASES {
+        let want =
+            std::fs::read_to_string(root().join("tests/framework/pages").join(file)).unwrap();
+        assert_eq!(
+            request_with(&app, method, path, extra, body),
+            want,
+            "{method} {path}"
+        );
     }
 }
 

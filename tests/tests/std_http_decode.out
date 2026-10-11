@@ -1,0 +1,9 @@
+test "percentDecode keeps plus and bad escapes" ... ok (N ms)
+test "formDecode turns plus into a space" ... ok (N ms)
+test "queryValue takes the first match" ... ok (N ms)
+test "formValue needs the form content type" ... ok (N ms)
+test "cookieValue trims and does not decode" ... ok (N ms)
+test "Request path, query, form and cookie" ... ok (N ms)
+test "Request without a query or a form" ... ok (N ms)
+
+7 passed; 0 failed; 1 modules; N ms

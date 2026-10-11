@@ -1,5 +1,6 @@
 // web.Request: what a handler reads of the HTTP request.
 
+import std.heap.Arena
 import std.http
 import std.mem.Allocator
 import std.text
@@ -9,13 +10,15 @@ import std.text
 /// `Head`.
 pub enum Method { Get, Head, Post, Put, Patch, Delete, Other }
 
-/// One request, as a handler sees it. `path` has no query string; `path`,
-/// `headers` and `body` point into the connection's buffer. `route` is the
+/// One request, as a handler sees it. `path` has no query string; `rawQuery`
+/// is what follows the `?`, as sent (empty when there is none). `path`,
+/// `rawQuery`, `headers` and `body` point into the connection's buffer. `route` is the
 /// pattern of the matched route (`/blog/[slug]`). `arena` lives until the
 /// response is written: handlers allocate from it and never free.
 pub struct Request {
     method: Method
     path: []u8
+    rawQuery: []u8
     route: []u8
     headers: []http.Header
     body: []u8
@@ -33,6 +36,28 @@ pub struct Request {
             }
         }
         unreachable
+    }
+
+    /// The first value of `name` in the query string, percent-decoded (`+`
+    /// is a space) into the request arena; null when there is none.
+    pub fn query(self: *Self, name: []u8) Error!?[]u8 {
+        return try http.queryValue(self.arena, self.rawQuery, name)
+    }
+
+    /// The first value of the field `name` of the body, decoded like
+    /// `query`, when the `Content-Type` is `application/x-www-form-urlencoded`;
+    /// null when there is no such field or the body is of another type.
+    pub fn form(self: *Self, name: []u8) Error!?[]u8 {
+        return try http.formValue(self.arena, self.header("content-type"), self.body, name)
+    }
+
+    /// The value of the cookie `name` of the `Cookie` header, as sent (not
+    /// decoded); null when there is none.
+    pub fn cookie(self: *Self, name: []u8) ?[]u8 {
+        if self.header("cookie") |h| {
+            return http.cookieValue(h, name)
+        }
+        return null
     }
 
     /// The value of the first header called `name`, compared without regard
@@ -55,6 +80,7 @@ test "header ignores case" {
     let req = Request {
         method: Method.Get,
         path: "/",
+        rawQuery: "",
         route: "/",
         headers: hs[..],
         body: "",
@@ -69,10 +95,36 @@ test "param reads a [name] segment" {
     let req = Request {
         method: Method.Get,
         path: "/blog/hello/",
+        rawQuery: "",
         route: "/blog/[slug]",
         headers: []http.Header{},
         body: "",
         arena: @testAllocator(),
     }
     @expectEqual("hello", req.param("slug"))
+}
+
+test "query, form and cookie" {
+    let hs = [3]http.Header{
+        http.Header { name: "Cookie", value: "sid=abc; theme=dark" },
+        http.Header { name: "Content-Type", value: "application/x-www-form-urlencoded" },
+        http.Header { name: "Host", value: "example.test" },
+    }
+    var arena = Arena.init(@testAllocator())
+    defer arena.deinit()
+    let req = Request {
+        method: Method.Post,
+        path: "/search",
+        rawQuery: "q=a%20b+c&n=1",
+        route: "/search",
+        headers: hs[..],
+        body: "msg=hi+you%21",
+        arena: arena.allocator(),
+    }
+    @expectEqual("a b c", (try req.query("q")).?)
+    @expectEqual("1", (try req.query("n")).?)
+    @expect((try req.query("msg")) == null)
+    @expectEqual("hi you!", (try req.form("msg")).?)
+    @expectEqual("dark", req.cookie("theme").?)
+    @expect(req.cookie("none") == null)
 }
