@@ -2,6 +2,7 @@
 
 import std.mem.Allocator
 import std.mem.AllocError
+import std.text
 
 /// The program's arguments; the first is the program itself. The slice is
 /// new memory from `alloc` (free it with `alloc.free`); the arguments are
@@ -24,6 +25,23 @@ pub fn getenv(name: []u8) ?[]u8 {
     return p[0..strlen(p)]
 }
 
+/// The number of CPUs that are online (`sysconf`), at least 1.
+pub fn cpuCount() u32 {
+    // _SC_NPROCESSORS_ONLN is 58 on macOS and 84 on Linux. `struct utsname`
+    // starts with the system's name on both; it is 390 bytes on Linux and
+    // 1280 on macOS.
+    var buf = @zeroed([2048]u8)
+    var name: i32 = 84
+    if uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin") {
+        name = 58
+    }
+    let n = sysconf(name)
+    if n < 1 {
+        return 1
+    }
+    return n as u32
+}
+
 /// End the program with the exit status `code`, after flushing `@print`
 /// output. Deferred statements do not run.
 pub extern fn exit(code: i32)
@@ -32,3 +50,5 @@ extern fn aye_std_argc() i32
 extern fn aye_std_argv(i: i32) [*]u8
 extern fn aye_std_getenv(name: [*]u8, len: usize) ?[*]u8
 extern fn strlen(s: [*]u8) usize
+extern fn sysconf(name: i32) i64
+extern fn uname(buf: [*]u8) i32
