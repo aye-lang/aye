@@ -1206,6 +1206,13 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode, link: bool) -> Resu
             cmd.args(["-Wl,--no-entry", "-Wl,--allow-undefined"]);
         }
     }
+    // An object for another OS or architecture: clang's hosted `stdint.h`
+    // does an `#include_next` into the host's libc headers, which are not
+    // the target's (glibc's `bits/libc-header-start.h`). Freestanding uses
+    // clang's own headers, which the three the prelude includes need.
+    if !link && !p.target.is_wasm() && !p.target.is_host() {
+        cmd.arg("-ffreestanding");
+    }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
         .args(&p.cflags)
