@@ -58,6 +58,14 @@
 //!   the first 8 hex digits of the file's SHA-256 (`shasum`); the dotfile and
 //!   the link are left out. `aye check` and `aye build` of `.web` pass, and a
 //!   gen without `--prod` writes no `assets.aye`.
+//! - `prod_serve` generates the pages example with `--prod`, builds `.web`,
+//!   renames the app tree away and starts the executable from another
+//!   directory with `--dev`: `/style.css` (`max-age=0`) and its hashed URL
+//!   (`immutable`, which `/about` links) are 200 from memory with the
+//!   SHA-256 ETag and no `Last-Modified`, `If-None-Match` gives 304, `HEAD`
+//!   has no body, `/img/logo.svg` is served, `/nope.css`, a traversal path,
+//!   `/_web/dev.js` and `/_web/events` are 404 and no page gets the dev
+//!   script; `/_web/islands/counter.wasm` is served when the island was built.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use aye::driver;
@@ -386,7 +394,17 @@ fn start(exe: &Path) -> App {
 
 /// Like `start`, with `extra` arguments after `--port 0`.
 fn start_with(exe: &Path, extra: &[&str]) -> App {
-    let mut child = Command::new(exe)
+    start_in(exe, None, extra)
+}
+
+/// Like `start_with`, run in the directory `cwd` (this process's own when
+/// `None`).
+fn start_in(exe: &Path, cwd: Option<&Path>, extra: &[&str]) -> App {
+    let mut command = Command::new(exe);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command
         .args(["--port", "0"])
         .args(extra)
         .stdout(Stdio::piped())
@@ -1138,6 +1156,28 @@ fn sha256_hex(path: &Path) -> String {
         .to_string()
 }
 
+/// Runs `web gen` on `app` with the `extra` arguments.
+fn run_gen(app: &Path, extra: &[&str]) {
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(root().join("framework").join("gen"))
+        .arg("--")
+        .arg(app)
+        .arg("--web")
+        .arg(root().join("framework").join("web"))
+        .args(extra)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "web gen failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn gen_prod() {
     let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-gen-prod-app");
@@ -1146,31 +1186,12 @@ fn gen_prod() {
     std::fs::write(app.join("public/big.bin"), vec![7u8; 2 << 20]).unwrap();
     std::fs::write(app.join("public/.hidden"), "x").unwrap();
     std::os::unix::fs::symlink("style.css", app.join("public/link.css")).unwrap();
-    let run_gen = |extra: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_aye"))
-            .current_dir(root())
-            .env("AYE", env!("CARGO_BIN_EXE_aye"))
-            .arg("run")
-            .arg(root().join("framework").join("gen"))
-            .arg("--")
-            .arg(&app)
-            .arg("--web")
-            .arg(root().join("framework").join("web"))
-            .args(extra)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "web gen failed:\n{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
+    let generate = |extra: &[&str]| run_gen(&app, extra);
     let web = app.join(".web");
     // Without `--prod` nothing is embedded.
-    run_gen(&[]);
+    generate(&[]);
     assert!(!web.join("assets.aye").exists());
-    run_gen(&["--prod"]);
+    generate(&["--prod"]);
     let source = std::fs::read_to_string(web.join("assets.aye")).unwrap();
     let islands = web.join("client/counter.wasm").is_file();
     let count = 3 + usize::from(islands);
@@ -1204,7 +1225,7 @@ fn gen_prod() {
         );
         assert!(source.contains(&want), "no {want} in:\n{source}");
     }
-    assert!(source.contains("pub fn lookup(p: []u8) ?*Asset"));
+    assert!(source.contains("import web.Asset"));
     let check = Command::new(env!("CARGO_BIN_EXE_aye"))
         .current_dir(root())
         .arg("check")
@@ -1218,4 +1239,119 @@ fn gen_prod() {
         String::from_utf8_lossy(&check.stderr)
     );
     build_dir("gen-prod", &web);
+}
+
+#[test]
+fn prod_serve() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-prod-serve-app");
+    let gone = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-prod-serve-gone");
+    let from = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-prod-serve-cwd");
+    for dir in [&app, &gone, &from] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    std::fs::create_dir_all(&from).unwrap();
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    run_gen(&app, &["--prod"]);
+    let web = app.join(".web");
+    let main = std::fs::read_to_string(web.join("main.aye")).unwrap();
+    assert!(main.contains("web.runProd("), "{main}");
+    let exe = build_dir("prod-serve", &web);
+    let css = std::fs::read_to_string(app.join("public/style.css")).unwrap();
+    let svg = std::fs::read_to_string(app.join("public/img/logo.svg")).unwrap();
+    let sha = sha256_hex(&app.join("public/style.css"));
+    let etag = format!("\"{sha}\"");
+    let islands = web.join("client/counter.wasm").is_file();
+    // Nothing of the app is on disk any more, and the server runs somewhere else.
+    std::fs::rename(&app, &gone).unwrap();
+    let server = start_in(&exe, Some(&from), &["--dev"]);
+
+    let split = |response: &str| {
+        let (head, body) = response.split_once("\n\n").unwrap();
+        (head.to_string(), body.to_string())
+    };
+    let plain = request(&server, "GET", "/style.css");
+    let (head, body) = split(&plain);
+    assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+    assert_eq!(
+        header_value(&plain, "Content-Type"),
+        "text/css; charset=utf-8"
+    );
+    assert_eq!(header_value(&plain, "Cache-Control"), "public, max-age=0");
+    assert_eq!(header_value(&plain, "ETag"), etag);
+    assert!(!head.contains("Last-Modified"), "{head}");
+    assert_eq!(body, css);
+
+    // The page links the hashed URL, which is immutable.
+    let about = request(&server, "GET", "/about");
+    assert!(about.starts_with("HTTP/1.1 200 OK\n"), "{about}");
+    let hashed = format!("/style.{}.css", &sha[..8]);
+    assert!(
+        about.contains(&format!("<link rel=\"stylesheet\" href=\"{hashed}\">")),
+        "{about}"
+    );
+    assert!(!about.contains("/_web/dev.js"), "--dev is ignored: {about}");
+    let long = request(&server, "GET", &hashed);
+    let (head, body) = split(&long);
+    assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+    assert_eq!(
+        header_value(&long, "Cache-Control"),
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(header_value(&long, "ETag"), etag);
+    assert_eq!(body, css);
+
+    // A matching `If-None-Match` gives 304 and no body, for both URLs.
+    for path in ["/style.css", hashed.as_str()] {
+        let extra = format!("If-None-Match: {etag}\r\n");
+        let cached = request_with(&server, "GET", path, &extra, "");
+        let (head, body) = split(&cached);
+        assert!(head.starts_with("HTTP/1.1 304 "), "{path}: {head}");
+        assert_eq!(header_value(&cached, "ETag"), etag, "{path}");
+        assert!(body.is_empty(), "{path}: {body:?}");
+        let other = request_with(&server, "GET", path, "If-None-Match: \"x\"\r\n", "");
+        assert!(other.starts_with("HTTP/1.1 200 OK\n"), "{path}: {other}");
+    }
+    let headed = request(&server, "HEAD", &hashed);
+    let (head, body) = split(&headed);
+    assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+    assert_eq!(
+        header_value(&headed, "Content-Length"),
+        css.len().to_string()
+    );
+    assert!(body.is_empty(), "{body:?}");
+
+    let logo = request(&server, "GET", "/img/logo.svg");
+    let (head, body) = split(&logo);
+    assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+    assert_eq!(header_value(&logo, "Content-Type"), "image/svg+xml");
+    assert_eq!(body, svg);
+
+    for path in [
+        "/nope.css",
+        "/../Cargo.toml",
+        "/_web/dev.js",
+        "/_web/events",
+        "/_web/islands/nope.wasm",
+    ] {
+        let response = request(&server, "GET", path);
+        assert!(
+            response.starts_with("HTTP/1.1 404 Not Found\n"),
+            "{path}: {response}"
+        );
+    }
+    let script = request(&server, "GET", "/_web/islands.js");
+    assert!(script.starts_with("HTTP/1.1 200 OK\n"), "{script}");
+    if islands {
+        let wasm = request_raw(&server, "GET", "/_web/islands/counter.wasm", "", "");
+        let (head, body) = split_binary(&wasm);
+        assert!(head.starts_with("HTTP/1.1 200 OK\n"), "{head}");
+        assert!(head.contains("Content-Type: application/wasm\n"), "{head}");
+        assert!(
+            head.contains("Cache-Control: public, max-age=0\n"),
+            "{head}"
+        );
+        assert!(body.starts_with(b"\0asm"), "{body:?}");
+    } else {
+        println!("skipped: no wasm32 clang; the island was not embedded");
+    }
 }
