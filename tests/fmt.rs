@@ -110,6 +110,7 @@ fn idempotent_and_same_diagnostics() {
             f.contains("/tests/errors/")
                 || f.contains("/tests/modules/single/")
                 || f.ends_with("/tests/fix/semicolons.aye")
+                || f.ends_with("/tests/fix/semicolons_brackets.aye")
         }),
         "{refused:?}"
     );
@@ -216,6 +217,10 @@ const FMT_EXCLUDED: &[(&str, &str)] = &[
     ),
     ("tests/errors/unknown_escape.aye", "does not lex on purpose"),
     ("tests/fix/semicolons.aye", "has `;` terminators on purpose"),
+    (
+        "tests/fix/semicolons_brackets.aye",
+        "has `;` inside brackets on purpose",
+    ),
     (
         "tests/modules/single/broken.aye",
         "brackets do not match on purpose",
