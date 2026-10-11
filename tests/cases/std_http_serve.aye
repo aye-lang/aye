@@ -1,7 +1,9 @@
 // std.http.Server (O1.4a): a server on a thread, on port 0. A client sends
 // two requests in one write && reads both responses, then a third on the
 // same connection, then a malformed request (400), then `Connection:
-// close`. `stop` ends the server.
+// close`. A HEAD request gets the headers && the Content-Length of the GET
+// body, no body, && the connection serves a GET after it. `stop` ends the
+// server.
 
 import std.heap.General
 import std.http
@@ -101,6 +103,15 @@ pub fn main() !void {
     try c.write("GET /c HTTP/1.1\r\nHost: x\r\n\r\n")
     try readAll(c, 1)
     c.close()
+
+    // HEAD: the length of the body, no body; a GET follows on the same
+    // connection.
+    let hd = try net.connect("127.0.0.1", s.port())
+    try hd.write("HEAD /h HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readAll(hd, 1)
+    try hd.write("GET /i HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readAll(hd, 1)
+    hd.close()
 
     // A malformed request: 400, && the server closes the connection.
     let bad = try net.connect("127.0.0.1", s.port())
