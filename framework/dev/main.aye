@@ -1,0 +1,164 @@
+// `web dev`: generates, checks and builds an app and runs its server.
+//
+//     aye run framework/dev -- <app> [--port N]
+//
+// It runs `web gen` on `<app>` (`aye run framework/gen -- <app> --web
+// framework/web`, so run it from the root of the checkout), then `aye check
+// <app>/.web` and `aye build <app>/.web -o <app>/.web/server`, and starts
+// `<app>/.web/server --port N` (no `--port` when there is none here) as a
+// child. The server's first line, `listening on 127.0.0.1:<port>`, is
+// printed to the standard output, a thread copies the rest of its output
+// there, and its standard error is this program's. The program ends with
+// the server's status (128 plus the signal when a signal ended it). A step
+// that fails has printed its own output; the program then ends with status
+// 1. The `aye` program is `$AYE`, else the one on `PATH`. Killing this
+// program does not stop the server: signal the process group.
+
+import std.fs
+import std.heap.General
+import std.mem.Allocator
+import std.os
+import std.path
+import std.process
+import std.process.Stdio
+import std.text
+import std.thread
+
+/// What the thread that copies the server's output needs.
+struct Copy {
+    from: fs.File
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    let args = try os.args(alloc)
+    var app: []u8 = ""
+    var port: []u8 = ""
+    var i: usize = 1
+    while i < args.len {
+        if text.eql(args[i], "--port") && i + 1 < args.len {
+            port = args[i + 1]
+            i += 2
+        } else if app.len == 0 {
+            app = args[i]
+            i += 1
+        } else {
+            die("usage: dev <app> [--port N]", args[i])
+        }
+    }
+    if app.len == 0 {
+        die("usage: dev <app> [--port N]", "")
+    }
+
+    var bin: []u8 = "aye"
+    if os.getenv("AYE") |p| {
+        bin = p
+    }
+    let web = try path.join(alloc, app, ".web")
+    let server = try path.join(alloc, web, "server")
+    let gen = [7][]u8{bin, "run", "framework/gen", "--", app, "--web", "framework/web"}
+    step(alloc, gen[..], "web gen")
+    let check = [3][]u8{bin, "check", web}
+    step(alloc, check[..], "aye check")
+    let build = [5][]u8{bin, "build", web, "-o", server}
+    step(alloc, build[..], "aye build")
+
+    var child = start(alloc, server, port)
+    let out = child.stdout.?
+    // The first line, a byte at a time, so that nothing after it is taken.
+    var byte = [1]u8{0}
+    while true {
+        let n = out.read(byte[..]) catch |err| {
+            break
+        }
+        if n == 0 {
+            break
+        }
+        fs.stdout().write(byte[..]) catch |err| {
+            break
+        }
+        if byte[0] == '\n' {
+            break
+        }
+    }
+    var job = Copy { from: out }
+    let t = thread.spawn(Copy, copy, &mut job) catch |err| {
+        die("cannot start a thread", "")
+        return
+    }
+    let status = child.wait() catch |err| {
+        die("cannot wait for the server", server)
+        return
+    }
+    t.join()
+    out.close()
+    if status.signal != 0 {
+        os.exit(128 + status.signal)
+    }
+    os.exit(status.code)
+}
+
+/// Copies what the server writes to this program's standard output until the
+/// server closes it.
+fn copy(job: *mut Copy) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let buf = alloc.alloc(0 as u8, 4096) catch |err| {
+        return
+    }
+    while true {
+        let n = job.from.read(buf) catch |err| {
+            return
+        }
+        if n == 0 {
+            return
+        }
+        fs.stdout().write(buf[0..n]) catch |err| {
+            return
+        }
+    }
+}
+
+/// Runs `argv` with this program's standard streams; ends the program with
+/// status 1 when it fails.
+fn step(alloc: Allocator, argv: [][]u8, what: []u8) {
+    var child = process.spawn(alloc, argv, Stdio.Inherit, Stdio.Inherit, Stdio.Inherit) catch |err| {
+        die("cannot run", argv[0])
+        return
+    }
+    let status = child.wait() catch |err| {
+        die("cannot wait for", what)
+        return
+    }
+    if !status.success() {
+        die("failed", what)
+    }
+}
+
+/// Starts the server with its standard output piped.
+fn start(alloc: Allocator, server: []u8, port: []u8) process.Child {
+    var argv = [3][]u8{server, "--port", port}
+    var n: usize = 3
+    if port.len == 0 {
+        n = 1
+    }
+    return process.spawn(alloc, argv[0..n], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
+        die("cannot start the server", server)
+        unreachable
+    }
+}
+
+fn die(what: []u8, a: []u8) {
+    fs.stderr().write("web dev: ") catch |e| {}
+    fs.stderr().write(what) catch |e| {}
+    if a.len > 0 {
+        fs.stderr().write(": ") catch |e| {}
+        fs.stderr().write(a) catch |e| {}
+    }
+    fs.stderr().write("\n") catch |e| {}
+    os.exit(1)
+}

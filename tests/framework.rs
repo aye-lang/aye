@@ -21,10 +21,15 @@
 //!   the `ETag` of a first `GET` back as `If-None-Match`. `web gen`
 //!   reads the exports of the files with `aye doc --signatures`, so it runs
 //!   with `AYE` set to the `aye` under test.
+//! - `framework/dev` (`web dev`) is run with `aye run` on a copy of the pages
+//!   example, in its own process group: it generates, checks and builds the
+//!   app, starts the server and relays its `listening on` line. Killing the
+//!   group must leave no server behind.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
@@ -166,6 +171,94 @@ impl Drop for App {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// The CLI of `web dev`, run in its own process group; the group is killed
+/// when it is dropped, as the server is a grandchild.
+struct Dev {
+    child: Child,
+    port: u16,
+}
+
+impl Dev {
+    /// Sends SIGTERM to the whole process group (`kill` complains when the
+    /// group is already gone, which `Drop` does not mind).
+    fn kill_group(&self) {
+        let _ = Command::new("kill")
+            .args(["-s", "TERM", "--", &format!("-{}", self.child.id())])
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+impl Drop for Dev {
+    fn drop(&mut self) {
+        self.kill_group();
+        let _ = self.child.wait();
+    }
+}
+
+/// Copies the directory `from` to `to` (which must not exist), leaving out
+/// `.web`.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if name == ".web" {
+            continue;
+        }
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &to.join(name));
+        } else {
+            std::fs::copy(entry.path(), to.join(name)).unwrap();
+        }
+    }
+}
+
+/// A port that nothing listens on.
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Runs `aye run framework/dev -- <app> --port <port>` and reads its output
+/// until the `listening on` line.
+fn start_dev(app: &Path, port: u16) -> Dev {
+    let child = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .args(["run", "framework/dev", "--"])
+        .arg(app)
+        .args(["--port", &port.to_string()])
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let want = format!("listening on 127.0.0.1:{port}");
+    let mut dev = Dev { child, port };
+    let mut lines = BufReader::new(dev.child.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        let n = lines.read_line(&mut line).unwrap();
+        assert!(n > 0, "web dev ended before it printed {want:?}");
+        if line.trim() == want {
+            break;
+        }
+    }
+    // Keep reading so that the CLI never blocks on a full pipe.
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut lines, &mut std::io::sink());
+    });
+    dev
+}
+
+/// Does something listen on `port`?
+fn listening(port: u16) -> bool {
+    TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
 /// Builds `framework/examples/<name>` into the target directory.
@@ -334,6 +427,30 @@ fn pages() {
             "{method} {path}"
         );
     }
+}
+
+#[test]
+fn dev_start() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-start");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let want = std::fs::read_to_string(root().join("tests/framework/pages/about.http")).unwrap();
+    let server = App {
+        child: Command::new("true").spawn().unwrap(),
+        port: dev.port,
+    };
+    assert_eq!(request(&server, "GET", "/about"), want);
+    dev.kill_group();
+    let mut gone = false;
+    for _ in 0..50 {
+        if !listening(dev.port) {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(gone, "the server still listens after the group was killed");
 }
 
 #[test]
