@@ -1432,6 +1432,56 @@ pub fn main() {
 
 `aye run app` prints `42`.
 
+### Dependencies
+
+Not implemented yet: path dependencies arrive with O4.2, URL dependencies
+and `aye.lock` with O4.3. Until then this subsection is the design.
+
+A program with dependencies has an `aye.toml` in its root module's
+directory. It is a small subset of TOML: `#` comments, `name = "..."`
+(an identifier: the default executable name), then `[deps]` with one line
+per dependency, either `key = { path = "dir" }` (relative to the
+manifest) or `key = { url = "https://.../x.tar.gz" }` (`https://` or
+`file://`, a `.tar.gz` or `.tgz` archive). Strings have no escapes;
+nothing else is accepted (E0119).
+
+```
+# app/aye.toml
+name = "app"
+
+[deps]
+util = { path = "../util" }
+tinyjson = { url = "https://example.com/tinyjson-1.2.tar.gz" }
+```
+
+- `import tinyjson` is the module of the `.aye` files in the dependency's
+  top directory (for an archive with one top folder, that folder);
+  `import tinyjson.parse` is its `parse/` directory. Other first names
+  are `std` or directories under the root, as before. Messages show
+  `tinyjson.parse.Value`.
+- Inside a dependency, imports are rooted at its own top directory; it
+  sees std and its own modules only. A dependency with a non-empty
+  `[deps]` of its own is E0123 (not supported yet).
+- A key that is `std`, a keyword, or also a directory under the root is
+  E0120: rename the key.
+- `aye build` (no path means `.`) downloads what is missing and writes
+  `aye.lock` next to `aye.toml`, one SHA-256 (lowercase hex of the
+  archive's bytes, as `shasum -a 256` prints it) per URL dependency:
+
+```
+# Written by aye build. Commit it; do not edit it.
+[deps]
+tinyjson = { url = "https://example.com/tinyjson-1.2.tar.gz", sha256 = "9f2c...64 hex digits" }
+```
+
+- A locked archive whose bytes hash differently is E0122; if the change
+  is intended, delete its line in `aye.lock` and build again. A changed
+  `url` gets a new entry. Path dependencies are not locked.
+- Archives are unpacked into `$AYE_CACHE` (else `$XDG_CACHE_HOME/aye`, else `~/.cache/aye`) under
+  `sha256/<hex>/`. When every URL dependency is locked and cached, the
+  build uses no network. A dependency that cannot be read or downloaded
+  is E0121.
+
 ## 13. Tests
 
 ```aye
