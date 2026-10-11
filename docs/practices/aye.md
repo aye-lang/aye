@@ -4,7 +4,10 @@ How to write Aye that the stage0 compiler and the browser expect: errors,
 optionals, memory, builtins, C interop, coroutines and build modes. Most
 entries come from `browser/COMPILER_GAPS.md`, where an old workaround is
 the bad case and the feature that replaced it the good one; the rules
-themselves are in `docs/spec.md` and `docs/decisions.md`.
+themselves are in `docs/spec.md` and `docs/decisions.md`. Paths under
+`browser/` in this file point into
+[aye-lang/anyknown](https://github.com/aye-lang/anyknown) (the code moved there in P8.3);
+line numbers are from the revision before the split.
 
 ## Errors
 
@@ -371,7 +374,7 @@ reaching for `fast` to make a panic go away; the bug stays and becomes
 undefined behavior.
 **Good:**
 ```
-aye test browser                 # debug (default): checks, error return traces, leak reports
+aye test app                     # debug (default): checks, error return traces, leak reports
 aye run app --mode safe          # optimized, all checks still on
 aye build app --mode fast        # optimized, no checks: for measurements and release
 ```
@@ -473,7 +476,7 @@ function through its `aye_rt_` alias (`aye_std_closedir`,
 extern fn aye_std_closedir(dir: [*]u8)
 ```
 **Why:** the prelude's names are ours alone, so no header can declare
-them. `aye check browser` finds this.
+them. `aye check` finds this (the downstream check runs it on `browser/`).
 
 ## Coroutines (`std.coro`)
 

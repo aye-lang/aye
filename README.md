@@ -513,7 +513,7 @@ doc's Example 1 with an `app.toml` that is valid, missing and invalid.
 ` ```aye-error ` programs do not, it names every pub function of std, and it
 stays within 30k tokens.
 
-Before you change the compiler, std or the browser, read
+Before you change the compiler or std, read
 [`docs/practices/`](docs/practices/README.md): good and bad cases from this
 project. When you learn a lesson that will come up again, add an entry there.
 
@@ -521,8 +521,8 @@ project. When you learn a lesson that will come up again, add an entry there.
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT), at your option. Third-party files keep their own
-notices: the Octane benchmark ports in `browser/tests/jsbench/` (see its
-README) and jQuery in `browser/tests/jsdom/scripts/`.
+notices. The Octane benchmark ports and jQuery that the anyknown browser tests use live in
+[aye-lang/anyknown](https://github.com/aye-lang/anyknown), with their notices.
 
 Unless you explicitly state otherwise, any contribution you submit for
 inclusion in this project, as defined in the Apache-2.0 license, is dual

@@ -1,3 +1,0 @@
-The parser adds them.
-
-And closes paragraphs.

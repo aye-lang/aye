@@ -1,5 +1,0 @@
-Visible
-
-Shown: scripts never run in B1
-
-Also visible

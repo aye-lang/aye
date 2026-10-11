@@ -6,7 +6,7 @@
 // The C constants that differ between macOS and Linux (the layout of
 // `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
 // or SO_NOSIGPIPE) are chosen at run time from `uname`, as
-// `browser/ui/socket.aye` does. Writes never raise SIGPIPE: a closed peer
+// `browser/ui/socket.aye` in aye-lang/anyknown does. Writes never raise SIGPIPE: a closed peer
 // is an error.
 
 import std.text

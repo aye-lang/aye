@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installs everything the full Aye suite needs on Ubuntu 24.04 (arm64 or
-# amd64): `cargo build --release`, `aye check browser`, `cargo test
-# --release` and `browser/build.sh`. Run as root or with sudo access.
+# amd64): `cargo build --release`, `cargo test --release` and
+# `scripts/downstream.sh` (the anyknown browser; the libcurl, FreeType and
+# SDL2 packages below are for it). Run as root or with sudo access.
 # Used by the Containerfile (scripts/linux.sh) and by the cloud VM.
 #
 #     sh scripts/setup-ubuntu.sh

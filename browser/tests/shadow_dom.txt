@@ -1,8 +1,0 @@
-Title
-
-Light text
-
-Closed root
-
-nested inner light
-first link
