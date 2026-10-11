@@ -1009,9 +1009,10 @@ AYE_RT double aye_std_nan(void) { return __builtin_nan(""); }
 /* std.json: `ecvt` of `x` >= 0: its first `n` (1 to 17) decimal digits,
    correctly rounded, in a buffer that the next call overwrites, with the
    decimal point's position in `*pt` and 0 in `*sg`. wasi-libc's `ecvt`
-   stops at 15 digits, so there it comes from `snprintf` (freestanding:
-   from JS's `toExponential`). */
-#ifdef __wasm32__
+   stops at 15 digits and glibc's rounds the 17th digit (`DBL_MAX` came
+   back as 1.7976931348623160e+308, which does not parse), so there it
+   comes from `snprintf` (freestanding: from JS's `toExponential`). */
+#if defined(__wasm32__) || defined(__linux__)
 #ifndef AYE_FREESTANDING
 extern int aye_rt_snprintf(char *, size_t, const char *, ...) __asm__(AYE_SYM("snprintf"));
 #endif

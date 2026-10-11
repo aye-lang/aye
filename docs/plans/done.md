@@ -65,6 +65,8 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O5.2 | 2026-10-10 | `aye test --time-limit <s>` (default 10, CPU time via `RLIMIT_CPU` and `wait4` rusage, wall guard 10x, `FAILED (time limit: ...)`, `"cpu_ms"` and `"timed_out"` in `--json`) and `-j <n>` (default cores, results in test order); fixture `tests/tests/time_limit` (native), `test_jobs_case` compares `-j 1` and `-j 4`; README and spec §13 | 91fb479 |
 | O1.17a | 2026-10-10 | `tests/common/mod.rs`: `jobs_for(per_core)`, `run_queue` takes a slot from a process-wide budget so concurrent callers never exceed `jobs()`; golden defaults to 2 jobs per core (inconclusive: golden stays ~380 s at 30-50% CPU, the bottleneck is the first exec of each new executable, O1.17b) | fefa325 |
 | O2.7 | 2026-10-10 | wasm32-freestanding runtime: libm via `__builtin_*` (sqrt, floor, ceil, trunc, fabs, copysign, round) and `env.Math` imports (sin...fmod, pow), `env.strtod`, `env.aye_clock`, `env.aye_fmt_double` (ecvt), busy-wait `nanosleep`, single-thread pthread mutex/cond stubs; loader and decisions updated; `X.freestanding` on 8 more cases plus `json_roundtrip`, `sync_single`; freestanding golden 3 → 11, sweep 73 → 78 of 116; Linux golden shows a pre-existing O5.2 failure (O5.2c) | 4652d03 |
+| O5.2c | 2026-10-11 | `aye test --time-limit` on Linux: a `SIGXCPU` death counts as the time limit even when the accounted CPU is a little under it (Linux delivers it early); `tests/time_limit.aye` passes on Linux | 48a4043 |
+| O3.1b | 2026-10-11 | `aye_std_ecvt` uses `snprintf("%.*e")` on Linux too (glibc `ecvt` rounds the 17th digit, `DBL_MAX` did not round-trip through `std.json`) | 48a4043 |
 
 ## Browser lane
 

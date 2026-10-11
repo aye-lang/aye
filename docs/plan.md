@@ -15,11 +15,9 @@ green on main at fefa325 (28 cards merged on 2026-10-10; O6, O8 and O9
 hold). The state is this file's lane table, [`plans/done.md`](plans/done.md)
 and `git worktree list`. All agent branches are merged. Notes:
 
-- **O2.7** merged (freestanding golden 3 → 11). Its Linux golden run
-  exposed two pre-existing bugs, first thing tomorrow: **O5.2c** (the
-  `aye test` CPU time limit does not trigger on Linux) and **O3.1b**
-  (`std.json` cannot read back `DBL_MAX` on glibc). Until O5.2c lands,
-  `scripts/linux.sh` golden fails on `tests/time_limit.aye`.
+- **O2.7** merged (freestanding golden 3 → 11). The two Linux bugs its
+  Linux run exposed (O5.2c, O3.1b) are fixed on main (2026-10-11); the
+  first cloud session verifies the Linux full suite (rule 7).
 - **O1.17b** (first-exec stall): merged as a docs-only decisions entry.
   Cause: macOS `syspolicyd`/Gatekeeper/XProtect assess every new
   executable on first exec (~0.37 s, includes a network notarization
@@ -45,8 +43,8 @@ Then, in order:
    the Linux triples compile on Linux, cross-linking from a Mac needs a
    sysroot, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 and O5.2 done. **O9 holds** (checked on 91fb479: `aye test
    <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
-   `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. Next: O5.2c, O3.1b, then
-   O5.1a, O2.8, O1.17b round 2.
+   `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. O5.2c and O3.1b done (2026-10-11). In flight: O1.15a, O1.16, cloud
+   Linux suite. Next: O5.1a, O2.8 (cloud), O2.5b (cloud), O1.17b round 2.
 3. **AI-writability eval** (north star): `scripts/eval.py`
    (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
    15/15 and showed the spec core is still too large for Claude Code's
@@ -56,7 +54,7 @@ Then, in order:
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O5.2c, O3.1b, then O5.1a | local; the user's cloud when available |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O5 test maturity next (O6, O8 hold) | O1.15a, O1.16; cloud: Linux suite | local; the user's cloud when available |
 | Browser ([`plans/browser.md`](plans/browser.md)) | 2, maintenance | frozen (M1–M3 hold) | – until O6–O9 | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | F1 done (F1.1, 2026-10-10) | – (paused) | cloud |
 
@@ -113,7 +111,15 @@ its area. Nothing else of the plan.
    it; main updates them once per batch
    ([workflow.md, "Parallel streams do not edit docs/browser.md"](practices/workflow.md#parallel-streams-do-not-edit-docsbrowsermd)).
    New compiler gaps go in `browser/COMPILER_GAPS.md`.
-7. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
+7. **Linux lane (cloud).** A card with `where: cloud` runs in a Claude
+   cloud session (a Linux VM from GitHub `aye-lang/aye`), never through
+   the local Apple `container`: Linux-only bugs, the WASI toolchain on
+   Linux (O2.5b), cross-link sysroots (O2.8), and the Linux full suite
+   after each batch (`scripts/setup-ubuntu.sh`, then `cargo test
+   --release`). It delivers a branch or PR; main reviews, merges, and
+   runs the macOS suite once. `main` is pushed after every green suite
+   so the cloud sees the current state (user, 2026-10-11: push freely).
+8. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
    step (cause written down, fix proposed); the fix is the next card.
 8. **Browser symptoms:** before dispatching a browser fix, confirm the
    symptom on current `main` (`page_load.py check --screens`). P3.4 and
