@@ -1,0 +1,44 @@
+// A test executable runs only the tests, so `main` and what only `main`
+// reaches are left out: `main` calls a C function that no library
+// defines, and the tests still link. What a test calls is kept, also
+// through a function value and a `dyn` vtable.
+
+extern fn aye_no_such_function(x: i64) i64
+
+fn onlyFromMain() i64 {
+    return aye_no_such_function(1)
+}
+
+fn double(x: i64) i64 {
+    return x * 2
+}
+
+struct Seven {
+    n: i64
+
+    fn get(self: *Self) i64 {
+        return self.n
+    }
+}
+
+interface Getter {
+    fn get(self: *Self) i64
+}
+
+fn viaDyn(g: dyn Getter) i64 {
+    return g.get()
+}
+
+pub fn main() {
+    @println(onlyFromMain())
+}
+
+test "a function value" {
+    let f = double
+    @expectEqual(14, f(7))
+}
+
+test "a dyn method" {
+    var s = Seven { n: 7 }
+    @expectEqual(7, viaDyn(&s))
+}
