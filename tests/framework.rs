@@ -1173,9 +1173,15 @@ fn island_tools() -> bool {
 /// Runs `island_e2e.mjs` against the server on `port`: the last line it
 /// prints, `text=<count>`.
 fn island_text(port: u16) -> String {
+    island_text_at(port, "/counter")
+}
+
+/// Like `island_text`, for the island on the page `path`.
+fn island_text_at(port: u16, path: &str) -> String {
     let out = Command::new("node")
         .arg(root().join("tests/framework/island_e2e.mjs"))
         .arg(format!("http://127.0.0.1:{port}/"))
+        .arg(path)
         .output()
         .unwrap();
     assert!(
@@ -1734,4 +1740,22 @@ fn posts_comments() {
             "{method} {path}"
         );
     }
+}
+
+/// The likes island of the posts app: the post page has its `div` and the
+/// islands script tag once, `web gen` builds `likes.wasm`, and two clicks in
+/// the Node e2e script make `♥ 2` (the count is not stored).
+#[test]
+fn posts_likes() {
+    if !island_tools() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let server = posts_server("framework-posts-likes-app");
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-posts-likes-app");
+    assert!(app.join(".web/client/likes.wasm").is_file());
+    let page = request(&server, "GET", "/posts/hello");
+    assert_eq!(page.matches("data-island=\"likes\"").count(), 1, "{page}");
+    assert_eq!(page.matches("/_web/islands.js").count(), 1, "{page}");
+    assert_eq!(island_text_at(server.port, "/posts/hello"), "text=♥ 2");
 }
