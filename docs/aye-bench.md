@@ -97,5 +97,4 @@ before, after, Go, after, before:
 | Go `net/http` | 168947 / 312386 / 305329 | | 305329 | 18548 |
 
 On Linux the pool is 1.7x the thread per connection at `-c 64` (about 0.8x Go, from 0.45x), and `-c 1` is unchanged. The cloud VM rerun
-(4 cores, the table at the top) is still to do. The per-request arena stays: `Arena` has no `reset`, so one arena per connection is not a
-one-line change (O7.4).
+(4 cores, the table at the top) is still to do.
