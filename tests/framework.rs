@@ -53,6 +53,15 @@
 //!   (built as above) starts at `Count: 3`, two clicks give `Count: 5`, and
 //!   an island whose `.wasm` is missing logs one `console.error`. Skipped
 //!   like `island_build`.
+//! - `tests/framework/island_e2e.mjs` (Node 22) plays the browser against a
+//!   running app: it fetches `/counter`, builds a fake DOM from the island
+//!   `div`, runs the served `/_web/islands.js` with a real `fetch` of the
+//!   `.wasm`, clicks twice and prints `text=Count: 5` (`island_e2e`, on a
+//!   copy of the pages example). `dev_island` runs it against `web dev`
+//!   (the dev tag comes before the islands tag), changes the label in
+//!   `islands/counter/view/view.aye` from `Count: ` to `Total: `, waits for
+//!   the restart and expects `text=Total: 5`: `web gen` rebuilt the island.
+//!   Skipped like `island_build`.
 //! - `web gen --prod` (`gen_prod`, on a copy of the pages example with a
 //!   2 MiB `public/big.bin`, a dotfile and a symlink) also writes
 //!   `.web/assets.aye`: one `@embedFile` per regular file of `public/` and
@@ -1149,6 +1158,85 @@ fn islands_glue() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Count: 5");
+}
+
+/// Can an island be built and played: the wasm32 toolchain, `node` and
+/// Node 22?
+fn island_tools() -> bool {
+    driver::find_target("wasm32-freestanding")
+        .unwrap()
+        .toolchain_available()
+        && driver::node_available()
+        && node_22()
+}
+
+/// Runs `island_e2e.mjs` against the server on `port`: the last line it
+/// prints, `text=<count>`.
+fn island_text(port: u16) -> String {
+    let out = Command::new("node")
+        .arg(root().join("tests/framework/island_e2e.mjs"))
+        .arg(format!("http://127.0.0.1:{port}/"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the island script failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn island_e2e() {
+    if !island_tools() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-island-e2e-app");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    run_gen(&app, &[]);
+    let web = app.join(".web");
+    assert!(web.join("client/counter.wasm").is_file());
+    let server = start(&build_dir("island-e2e", &web));
+    assert_eq!(island_text(server.port), "text=Count: 5");
+}
+
+#[test]
+fn dev_island() {
+    if !island_tools() {
+        println!("skipped: no wasm32 clang or no node 22");
+        return;
+    }
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-island");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let limit = Duration::from_secs(120);
+    let page = try_get(dev.port, "/counter").unwrap();
+    let dev_tag = page.find("/_web/dev.js").expect("no dev tag in /counter");
+    let islands_tag = page
+        .find("/_web/islands.js")
+        .expect("no islands tag in /counter");
+    assert!(dev_tag < islands_tag, "the dev tag comes first:\n{page}");
+    assert_eq!(island_text(dev.port), "text=Count: 5");
+
+    let view = app.join("islands/counter/view/view.aye");
+    let source = std::fs::read_to_string(&view).unwrap();
+    assert!(source.contains("try b.append(\"Count: \")"));
+    std::fs::write(
+        &view,
+        source.replace("try b.append(\"Count: \")", "try b.append(\"Total: \")"),
+    )
+    .unwrap();
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(wait_line(&dev, &want, limit), "no {want:?} after the edit");
+    assert_eq!(island_text(dev.port), "text=Total: 5");
 }
 
 /// The hex SHA-256 of the file at `path`, from `shasum` (macOS) or
