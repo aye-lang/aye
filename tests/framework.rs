@@ -24,7 +24,10 @@
 //! - `framework/dev` (`web dev`) is run with `aye run` on a copy of the pages
 //!   example, in its own process group: it generates, checks and builds the
 //!   app, starts the server and relays its `listening on` line. Killing the
-//!   group must leave no server behind.
+//!   group must leave no server behind. When the test edits
+//!   `app/about/page.aye` of its copy, the CLI prints `restarting`, starts
+//!   the server again on the same port and relays the new `listening on`
+//!   line; a change in `public/` restarts nothing.
 //! - The `test` blocks of `framework/web` run with `aye test`.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -32,6 +35,8 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -178,6 +183,8 @@ impl Drop for App {
 struct Dev {
     child: Child,
     port: u16,
+    /// The lines the CLI prints after the first `listening on` line.
+    lines: Receiver<String>,
 }
 
 impl Dev {
@@ -239,7 +246,11 @@ fn start_dev(app: &Path, port: u16) -> Dev {
         .spawn()
         .unwrap();
     let want = format!("listening on 127.0.0.1:{port}");
-    let mut dev = Dev { child, port };
+    let mut dev = Dev {
+        child,
+        port,
+        lines: mpsc::channel().1,
+    };
     let mut lines = BufReader::new(dev.child.stdout.take().unwrap());
     loop {
         let mut line = String::new();
@@ -250,10 +261,33 @@ fn start_dev(app: &Path, port: u16) -> Dev {
         }
     }
     // Keep reading so that the CLI never blocks on a full pipe.
+    let (tx, rx) = mpsc::channel();
+    dev.lines = rx;
     std::thread::spawn(move || {
-        let _ = std::io::copy(&mut lines, &mut std::io::sink());
+        let mut line = String::new();
+        while lines.read_line(&mut line).is_ok_and(|n| n > 0) {
+            if tx.send(line.trim().to_string()).is_err() {
+                return;
+            }
+            line.clear();
+        }
     });
     dev
+}
+
+/// Waits at most `limit` for a line of the CLI that contains `want`; the
+/// lines before it are dropped.
+fn wait_line(dev: &Dev, want: &str, limit: Duration) -> bool {
+    let end = Instant::now() + limit;
+    while let Some(left) = end.checked_duration_since(Instant::now()) {
+        match dev.lines.recv_timeout(left) {
+            Ok(line) if line.contains(want) => return true,
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => return false,
+            Err(RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    false
 }
 
 /// Does something listen on `port`?
@@ -451,6 +485,43 @@ fn dev_start() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     assert!(gone, "the server still listens after the group was killed");
+}
+
+#[test]
+fn dev_reload() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-dev-reload");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    let dev = start_dev(&app, free_port());
+    let server = App {
+        child: Command::new("true").spawn().unwrap(),
+        port: dev.port,
+    };
+    assert!(request(&server, "GET", "/about").contains("<h1>About</h1>"));
+
+    let page = app.join("app/about/page.aye");
+    let source = std::fs::read_to_string(&page).unwrap();
+    std::fs::write(&page, source.replace("<h1>About</h1>", "<h1>About us</h1>")).unwrap();
+    let limit = Duration::from_secs(120);
+    assert!(
+        wait_line(&dev, "restarting (app/about/page.aye changed)", limit),
+        "no restart line"
+    );
+    let want = format!("listening on 127.0.0.1:{}", dev.port);
+    assert!(
+        wait_line(&dev, &want, limit),
+        "no {want:?} after the restart"
+    );
+    assert!(request(&server, "GET", "/about").contains("<h1>About us</h1>"));
+
+    let css = app.join("public/style.css");
+    let style = std::fs::read_to_string(&css).unwrap();
+    std::fs::write(&css, format!("{style}\n/* edited */\n")).unwrap();
+    assert!(
+        !wait_line(&dev, "restarting", Duration::from_secs(1)),
+        "a change in public/ restarted the server"
+    );
+    assert!(request(&server, "GET", "/style.css").contains("/* edited */"));
 }
 
 #[test]

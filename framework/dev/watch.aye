@@ -1,0 +1,114 @@
+// What `web dev` watches: the `.aye` files of an app and when they were
+// last changed.
+
+import std.fs
+import std.fs.ReadDirError
+import std.list.List
+import std.mem.Allocator
+import std.path
+import std.text
+
+/// A watched file: its path below the app (`app/about/page.aye`) and its
+/// modification time in nanoseconds.
+pub struct Entry {
+    path: []u8
+    mtime: i64
+}
+
+/// The watched files of an app, in no particular order.
+pub struct Snapshot {
+    items: []Entry
+}
+
+/// Reads the modification times of every `.aye` file below the directory
+/// `root`. Directories that start with `.` (`.web/`) and `public/` at the
+/// top are left out, as are links to directories. All memory comes from
+/// `alloc`: give it an arena and free the arena with the snapshot.
+pub fn snapshot(alloc: Allocator, root: []u8) ReadDirError!Snapshot {
+    var out = List(Entry).init(alloc)
+    try walk(alloc, root, "", &mut out)
+    return Snapshot { items: out.items() }
+}
+
+fn walk(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Entry)) ReadDirError!void {
+    let here = try path.join(alloc, root, rel)
+    let found = try fs.readDir(alloc, here)
+    defer found.deinit()
+    for e in found.items {
+        if e.kind == fs.Kind.Dir {
+            if text.startsWith(e.name, ".") || (rel.len == 0 && text.eql(e.name, "public")) {
+                continue
+            }
+            try walk(alloc, root, try path.join(alloc, rel, e.name), out)
+        } else if e.kind != fs.Kind.Other && text.endsWith(e.name, ".aye") {
+            let file = try path.join(alloc, rel, e.name)
+            let full = try path.join(alloc, root, file)
+            if fs.mtime(full) |ns| {
+                try out.append(Entry { path: file, mtime: ns })
+            }
+        }
+    }
+}
+
+/// The path of a file that is in `b` and not in `a`, is in `a` and not in
+/// `b`, or has another modification time in the two; null when the two
+/// snapshots are the same.
+pub fn changed(a: Snapshot, b: Snapshot) ?[]u8 {
+    for x in b.items {
+        var same = false
+        for y in a.items {
+            if text.eql(x.path, y.path) {
+                if x.mtime != y.mtime {
+                    return x.path
+                }
+                same = true
+                break
+            }
+        }
+        if !same {
+            return x.path
+        }
+    }
+    for y in a.items {
+        var found = false
+        for x in b.items {
+            if text.eql(x.path, y.path) {
+                found = true
+                break
+            }
+        }
+        if !found {
+            return y.path
+        }
+    }
+    return null
+}
+
+test "same snapshots are not a change" {
+    let a = [2]Entry{Entry { path: "app/page.aye", mtime: 5 }, Entry { path: "lib/x.aye", mtime: 7 }}
+    let b = [2]Entry{Entry { path: "lib/x.aye", mtime: 7 }, Entry { path: "app/page.aye", mtime: 5 }}
+    @expect(changed(Snapshot { items: a[..] }, Snapshot { items: b[..] }) == null)
+}
+
+test "a newer file, a new file and a removed file are changes" {
+    let a = [2]Entry{Entry { path: "app/page.aye", mtime: 5 }, Entry { path: "lib/x.aye", mtime: 7 }}
+    let newer = [2]Entry{Entry { path: "app/page.aye", mtime: 9 }, Entry { path: "lib/x.aye", mtime: 7 }}
+    let added = [3]Entry{a[0], a[1], Entry { path: "app/new.aye", mtime: 1 }}
+    let removed = [1]Entry{a[0]}
+    let before = Snapshot { items: a[..] }
+    if changed(before, Snapshot { items: newer[..] }) |p| {
+        @expect(text.eql(p, "app/page.aye"))
+    } else {
+        @expect(false)
+    }
+    if changed(before, Snapshot { items: added[..] }) |p| {
+        @expect(text.eql(p, "app/new.aye"))
+    } else {
+        @expect(false)
+    }
+    if changed(before, Snapshot { items: removed[..] }) |p| {
+        @expect(text.eql(p, "lib/x.aye"))
+    } else {
+        @expect(false)
+    }
+}
