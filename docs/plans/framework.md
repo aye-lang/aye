@@ -41,9 +41,9 @@ first part of FD1/FD2 (literal routes, a page, the 404).
 ## Current state (2026-10-08)
 
 - `framework/web/` (request, response, `Html`, literal routes, `web.run`), `framework/examples/hello/` and `tests/framework.rs` exist (F1.1, ef6f47b).
-- F0.1 design merged (0124e64); the user has not yet answered its three
-  questions (`docs/framework.md`, "Questions for the user": names, the
-  `design.md` wording, TypeScript). F1.1 does not depend on them.
+- F0.1 design merged (0124e64); its three open questions (names, the
+  `design.md` wording, TypeScript) were decided 2026-10-12
+  (`docs/framework.md`, "Decided questions").
 - F1.1 needed no compiler gap; `Arena.reset` was not needed (`std.http` makes an arena per request).
 
 ## Phases

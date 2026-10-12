@@ -371,7 +371,7 @@ props; a generated `/_web/islands.js` loads `counter.wasm` and calls its
 `mount`. The export and import syntax is O2.4's.
 
 **Proposed wording** for design.md's non-goal (today: 不取代 JavaScript：
-網頁內容的腳本語言仍是 JS，Aye 只寫引擎本身。), for the user to approve:
+網頁內容的腳本語言仍是 JS，Aye 只寫引擎本身。), taken 2026-10-12 (see "Decided questions"):
 
 > 不取代 JavaScript：網頁的腳本語言仍是 JS，anyknown 引擎照規格實作它。Aye
 > 寫引擎、伺服器與工具；Aye 也能編譯成 wasm32 在網頁裡執行（框架的
@@ -483,13 +483,15 @@ meets them:
 10. **Signals.** Graceful stop on `SIGTERM` (O3.6) needs a way to catch a
     signal; `std.os` has none. (F3)
 
-## Questions for the user
+## Decided questions
 
-Product promises only:
+Decided 2026-10-12 (the AI decides, `docs/plan.md` "Who decides"):
 
-1. **Names:** the framework's name, its command (`web` here) and the
-   build directory (`.web/`).
-2. **Approve the design.md wording** above, or rewrite it.
-3. **TypeScript:** is "type-stripping in the shared parser" the promise
-   (erasable TS syntax only, as Node 22 does), or full TS (enums,
-   namespaces) too?
+1. **Names:** the framework is Aye Web; its command stays `web` and its
+   build directory `.web/`, as the code, tests and docs already use.
+2. **design.md wording:** the proposed non-goal above is taken as is
+   (`design.md`, 目標與非目標).
+3. **TypeScript:** type-stripping only, erasable syntax as Node 22
+   does it; `enum`, `namespace` and parameter properties are an error
+   that names the construct. Full TS needs code generation, a second
+   compiler the framework does not want.
