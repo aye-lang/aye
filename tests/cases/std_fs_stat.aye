@@ -1,8 +1,9 @@
 // O2.5e: std.fs.stat reads the mode and mtime out of `struct stat` at
 // per-OS offsets (macOS, x86_64 and aarch64 Linux); this prints the kind
-// of a file, a directory, a symbolic link and a character device, and
-// that each mtime is set. The output is the same on every OS. Runs in a
-// directory under /tmp named after the process id (removed at the end).
+// of a file, a directory and a symbolic link, and that each mtime is set.
+// The output is the same on every OS and on wasm32-wasip1 (no /dev there).
+// Runs in a directory under /tmp named after the process id (removed at
+// the end).
 
 import std
 import std.heap.General
@@ -60,7 +61,6 @@ pub fn main() !void {
     show("dir", try std.fs.stat(at(&mut p, dir, "sub")))
     show("link", try std.fs.stat(at(&mut p, dir, "link")))
     show("followed", try std.fs.statFollow(at(&mut p, dir, "link")))
-    show("device", try std.fs.stat("/dev/null"))
 
     for name in [3][]u8{"link", "file", "sub"} {
         try std.fs.remove(at(&mut p, dir, name))
