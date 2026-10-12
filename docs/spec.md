@@ -1888,6 +1888,7 @@ Builder.appendChar(self: *mut Self, code: u32) AllocError!void    UTF-8 encoded
 Builder.appendInt(self: *mut Self, v: i64) AllocError!void
 Builder.appendUint(self: *mut Self, v: u64) AllocError!void
 Builder.appendFloat(self: *mut Self, v: f64) AllocError!void      the text of @print (%g)
+Builder.appendFloatExact(self: *mut Self, v: f64) AllocError!void shortest digits that read back (JSON.stringify layout; nan, inf, -inf)
 Builder.toOwned(self: *mut Self) AllocError![]mut u8              exact-size copy; free with alloc.free; builder empty after
 ```
 
