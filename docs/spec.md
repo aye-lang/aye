@@ -1603,7 +1603,7 @@ std.coro      coroutines: create, resume, yield                              bel
 std.testing   the leak-checked allocator of a test                           below
 std.log       err/info: "error: "/"info: " lines to stderr; line: no prefix  below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
-std.os        args, getenv, exit, cpuCount                                   below
+std.os        args, getenv, exit, cpuCount, onStop/stopRequested (signals)  below
 std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
@@ -1621,7 +1621,9 @@ port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves on
 that lives until the response is written (a `HEAD` response omits the
 body, not its `Content-Length`; `res.stream()` keeps the connection open
 as an event stream that `s.broadcast(alloc, event, data)` writes to, after
-`res.body` if it is not empty: the first chunk, as is). `req.query(alloc, name)` and
+`res.body` if it is not empty: the first chunk, as is). `s.stop()`
+(any thread) is graceful: answered responses are written whole, other
+connections close, `run` returns; after `std.os.onStop()`, so does SIGTERM. `req.query(alloc, name)` and
 `req.form(alloc, name)` give the first value of a query or urlencoded form
 field, percent-decoded (`+` is a space) in `alloc`, and `req.cookie(name)`
 a cookie as sent; each gives null when missing. The client is `http.get(arena,
@@ -2200,6 +2202,8 @@ std.os.args(alloc: Allocator) AllocError![][]u8   the arguments; [0] is the prog
 std.os.getenv(name: []u8) ?[]u8                   the variable's value (points into the environment; do not free); null if unset
 std.os.cpuCount() u32                             the number of CPUs online (at least 1)
 std.os.exit(code: i32)                            exit now with this status (flushes @print output; deferred statements do not run)
+std.os.onStop()                                   SIGINT and SIGTERM set a flag instead of ending the program (call once, early)
+std.os.stopRequested() bool                       has SIGINT or SIGTERM come since onStop? (std.http's Server.run checks it)
 ```
 
 To exit with a status and still free everything, do the work in a function

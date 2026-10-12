@@ -160,6 +160,7 @@ pub fn main() !void {
     let c = try net.connect("127.0.0.1", s.port())
     try c.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
     try readUntil(c, "first\n\n")
+    _ = waitOpen(&mut s, 1)
     @print("streams: ")
     @println(s.streams())
 
@@ -197,6 +198,7 @@ pub fn main() !void {
     let d = try net.connect("127.0.0.1", s.port())
     try d.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
     try readUntil(d, "first\n\n")
+    _ = waitOpen(&mut s, 2)
     @print("streams: ")
     @println(s.streams())
     d.close()

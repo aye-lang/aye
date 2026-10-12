@@ -1,0 +1,129 @@
+// std.http graceful stop (O3.6c): after `std.os.onStop()`, SIGTERM sets a
+// flag instead of ending the program, and `Server.run` returns as `stop`
+// makes it. The program sends itself SIGTERM while a handler is answering
+// `/slow` (8 MiB, more than the socket takes at once): the response still
+// arrives whole, the idle keep-alive connection is closed, `run` returns,
+// and the listener no longer accepts.
+
+import std.heap.General
+import std.http
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.os
+import std.sync.Atomic
+import std.text
+import std.text.Builder
+import std.thread
+import std.time
+
+struct App {
+    // 1 once the `/slow` handler runs; it answers once `gate` is 1.
+    inflight: Atomic(u32)
+    gate: Atomic(u32)
+}
+
+let BIG: usize = 8 * 1024 * 1024
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    if text.eql(req.path(), "/slow") {
+        app.inflight.store(1)
+        while app.gate.load() == 0 {
+            time.sleep(10)
+        }
+        var b = Builder.init(alloc)
+        for i in 0..BIG {
+            b.appendByte('x') catch |e| {
+                return
+            }
+        }
+        res.body = b.bytes()
+        return
+    }
+    res.body = "ok"
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+// Reads from `c` until EOF or 10 s pass; gives the number of bytes.
+fn readAll(c: Conn) usize {
+    var buf = @zeroed([65536]u8)
+    var got: usize = 0
+    while true {
+        let n = c.readTimeout(buf[..], 10000) catch |e| {
+            return got
+        }
+        if n == 0 {
+            return got
+        }
+        got += n
+    }
+    return got
+}
+
+extern fn getpid() i32
+extern fn kill(pid: i32, sig: i32) i32
+
+pub fn main() !void {
+    os.onStop()
+    var app = App { inflight: Atomic(u32).init(0), gate: Atomic(u32).init(0) }
+    var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
+    s.workers = 2
+    let port = s.port()
+    let t = try thread.spawn(Server, run, &mut s)
+
+    // An idle keep-alive connection, answered once.
+    let idle = try net.connect("127.0.0.1", port)
+    try idle.write("GET /fast HTTP/1.1\r\nHost: x\r\n\r\n")
+    var buf = @zeroed([256]u8)
+    let n = try idle.readTimeout(buf[..], 5000)
+    @print("fast answered: ")
+    @println(text.endsWith(buf[0..n], "\r\n\r\nok"))
+
+    // A request in flight when SIGTERM comes.
+    let slow = try net.connect("127.0.0.1", port)
+    try slow.write("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+    while app.inflight.load() == 0 {
+        time.sleep(10)
+    }
+    @print("stop requested before: ")
+    @println(os.stopRequested())
+    _ = kill(getpid(), 15)
+    while !os.stopRequested() {
+        time.sleep(10)
+    }
+    @println("sent SIGTERM")
+    // The workers see the flag within about 100 ms; then the handler answers.
+    time.sleep(300)
+    app.gate.store(1)
+    // Not read yet: the worker is left with most of the response pending
+    // when it stops, and writes it before it closes the connection.
+    time.sleep(300)
+
+    let head = "HTTP/1.1 200 OK\r\nContent-Length: 8388608\r\n\r\n"
+    let got = readAll(slow)
+    @print("slow response whole: ")
+    @println(got == head.len + BIG)
+    slow.close()
+    @print("idle connection closed: ")
+    @println(readAll(idle) == 0)
+    idle.close()
+
+    t.join()
+    @println("run returned")
+    let again = net.connect("127.0.0.1", port) catch |e| {
+        @println("listener closed: true")
+        return
+    }
+    again.close()
+    @println("listener closed: false")
+}
