@@ -737,12 +737,14 @@ pub struct Server {
         return self.listener.port()
     }
 
-    /// Serves until `stop`: starts `workers - 1` threads and serves on this
-    /// one too. Each worker waits (`poll`) on the listener and on the
-    /// connections it has accepted, and answers the requests that arrive;
-    /// the kernel spreads the connections over the workers. Then it closes
-    /// the open connections, waits for the workers and closes the listener.
-    /// `alloc` is used only by this thread, for the bookkeeping.
+    /// Serves until `stop` (or SIGINT or SIGTERM after `std.os.onStop()`):
+    /// starts `workers - 1` threads and serves on this one too. Each worker
+    /// waits (`poll`) on the listener and on the connections it has
+    /// accepted, and answers the requests that arrive; the kernel spreads
+    /// the connections over the workers. Then it finishes the answered
+    /// responses (see `stop`), closes the open connections, waits for the
+    /// workers and closes the listener. `alloc` is used only by this
+    /// thread, for the bookkeeping.
     pub fn run(self: *mut Self, alloc: Allocator) AllocError!void {
         var n = self.workers
         if n < 1 {
@@ -861,9 +863,11 @@ pub struct Server {
     }
 
     /// Asks `run` to return: sets the flag and connects once to wake up the
-    /// workers. Safe to call from any thread; a request that is being
-    /// handled is answered, the other open connections are closed, and `run`
-    /// returns within about 100 ms.
+    /// workers. Safe to call from any thread; the listener stops accepting,
+    /// a request that is being handled is answered (the rest of a response
+    /// the socket has not taken is written first, for at most `idleMs`),
+    /// the other open connections are closed, and `run` returns within about
+    /// 100 ms. SIGINT or SIGTERM does the same after `std.os.onStop()`.
     pub fn stop(self: *mut Self) {
         self.stopped.store(1)
         let c = net.connect(self.loopback, self.listener.port()) catch |e| {
@@ -1126,6 +1130,9 @@ fn workerMain(s: *mut Server) {
             break
         }
         let r = poll(fds.items().ptr, fds.len() as u64, tick)
+        if os.stopRequested() {
+            s.stopped.store(1)
+        }
         let now = time.monotonicMs()
         // Backwards, so that `swapRemove` moves only entries already seen
         // and `fds.items()[i + 1]` stays the entry of `open.items()[i]`.
@@ -1169,8 +1176,35 @@ fn workerMain(s: *mut Server) {
             }
         }
     }
+    drain(s, &open, &mut fds)
     for o in open.items() {
         closeOpen(s, alloc, o)
+    }
+}
+
+// After `stop`: writes the rest of the answered responses that the sockets
+// have not taken yet (event streams aside), for at most `idleMs`, so that a
+// client gets the whole response before its connection is closed.
+fn drain(s: *mut Server, open: *List(*mut Open), fds: *mut List(PollFd)) {
+    let end = time.monotonicMs() + s.idleMs as u64
+    while time.monotonicMs() < end {
+        fds.clear()
+        for o in open.items() {
+            if o.pending.len > 0 && !o.stream {
+                fds.append(PollFd { fd: o.conn.fd, events: POLLOUT, revents: 0 }) catch |e| {
+                    return
+                }
+            }
+        }
+        if fds.len() == 0 {
+            return
+        }
+        _ = poll(fds.items().ptr, fds.len() as u64, 100)
+        for o in open.items() {
+            if o.pending.len > 0 && !o.stream && !put(o, o.pending) {
+                o.pending = []u8{}
+            }
+        }
     }
 }
 

@@ -1,4 +1,11 @@
 // std.os: the process.
+//
+// Signals: `onStop()` makes SIGINT (Ctrl-C) and SIGTERM (`kill`) set a flag
+// instead of ending the program, and `stopRequested()` reads it. The handler
+// only sets the flag, as a C signal handler may; the program checks it where
+// it waits (`std.http`'s `Server.run` does, and returns as `stop` makes it).
+// There are no handler functions: an Aye function is not safe to run inside
+// a signal handler.
 
 import std.mem.Allocator
 import std.mem.AllocError
@@ -42,12 +49,28 @@ pub fn cpuCount() u32 {
     return n as u32
 }
 
+/// From now on SIGINT and SIGTERM do not end the program: they set the flag
+/// that `stopRequested` reads. Call it once, at the start of `main`, before
+/// starting threads. A `poll` or `accept` that is waiting when the signal
+/// comes returns early (EINTR) on the thread that takes it.
+pub fn onStop() {
+    aye_std_on_stop()
+}
+
+/// Has SIGINT or SIGTERM come since `onStop`? False when `onStop` was not
+/// called. Safe from any thread.
+pub fn stopRequested() bool {
+    return aye_std_stop_requested()
+}
+
 /// End the program with the exit status `code`, after flushing `@print`
 /// output. Deferred statements do not run.
 pub extern fn exit(code: i32)
 
 extern fn aye_std_argc() i32
 extern fn aye_std_argv(i: i32) [*]u8
+extern fn aye_std_on_stop()
+extern fn aye_std_stop_requested() bool
 extern fn aye_std_getenv(name: [*]u8, len: usize) ?[*]u8
 extern fn strlen(s: [*]u8) usize
 extern fn sysconf(name: i32) i64
