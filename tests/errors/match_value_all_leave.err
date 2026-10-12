@@ -1,0 +1,2 @@
+match_value_all_leave.aye:7:13: error[E0124]: `match` used as a value, but every arm returns, breaks or continues: write it as a statement, or give an arm a value
+match_value_all_leave.aye:22:17: error[E0124]: `match` used as a value, but every arm returns, breaks or continues: write it as a statement, or give an arm a value
