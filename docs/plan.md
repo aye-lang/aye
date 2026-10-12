@@ -106,14 +106,16 @@ its area. Nothing else of the plan.
    unless the card names it; main updates them once per batch
    ([workflow.md, "Parallel streams do not edit a shared status document"](practices/workflow.md#parallel-streams-do-not-edit-a-shared-status-document)).
    New compiler gaps go in `browser/COMPILER_GAPS.md` of aye-lang/anyknown.
-7. **Linux lane (cloud).** A card with `where: cloud` runs in a Claude
-   cloud session (a Linux VM from GitHub `aye-lang/aye`), never through
-   the local Apple `container`: Linux-only bugs, the WASI toolchain on
-   Linux (O2.5b), cross-link sysroots (O2.8), and the Linux full suite
-   after each batch (`scripts/setup-ubuntu.sh`, then `cargo test
-   --release`). It delivers a branch or PR; main reviews, merges, and
-   runs the macOS suite once. `main` is pushed after every green suite
-   so the cloud sees the current state (user, 2026-10-11: push freely).
+7. **Cloud is the integrator (user, 2026-10-12).** The work runs in
+   Claude cloud sessions (Ubuntu 24.04 VM, a fresh clone of
+   `aye-lang/aye`), merges included: the session that finishes a step
+   reviews it, merges it into `main` and pushes `main` (rule 11). Only
+   one integrator: the local Mac session does not merge while the cloud
+   owns `main`; it pulls first. macOS is checked by the CI macOS job
+   (`.github/workflows/ci.yml`, free once the repo is public); until it
+   runs, a change to macOS-only paths (`cfg!(target_os = "macos")`:
+   cimport's sysroot and libclang lookup, the Mach-O and
+   `x86_64-macos` targets) waits for a green macOS run before merging.
 8. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
    step (cause written down, fix proposed); the fix is the next card.
 8. **Browser symptoms:** before dispatching a browser fix, confirm the
@@ -127,12 +129,15 @@ its area. Nothing else of the plan.
     `docs/practices/` in the same commit as its fix.
 11. **Cloud steps** (Ubuntu 24.04 VM, a fresh clone): if a tool is
     missing, run `sudo sh scripts/setup-ubuntu.sh` first. Work on a
-    branch `<step id>-<slug>` from `main`, push it and open a pull
-    request to `main` whose body is the report (rule 10). Never push to
-    `main` or merge; main merges one PR at a time and runs the macOS
-    checklist. The VM is Linux, so `scripts/linux.sh` is not used
-    there; `scripts/downstream.sh` runs as is (it needs a GitHub login for
-    the private anyknown repo).
+    branch `<step id>-<slug>` from `main`. To merge: the commit audit
+    below, `main` merged into the branch, the Linux full suite (`cargo
+    test --release`; `scripts/downstream.sh` when `src/` or `std/`
+    changed), then a fast-forward push of `main`; the report (rule 10)
+    is the merge commit's or the last commit's message. A PR is only
+    for a change someone should see before it lands. The VM is Linux,
+    so `scripts/linux.sh` is not used there; `scripts/downstream.sh`
+    needs read access to the private anyknown repo (the session's
+    GitHub access), and never writes to it.
 
 Merging (main's side):
 
@@ -194,8 +199,8 @@ goes to the backlog or to `done.md` as dropped.
   its own and makes every decision in this repo (aye-lang/aye), going
   public included. Do not ask the user; decide, write the decision down
   (here, in a lane plan or in `decisions.md`) and go on. The user only
-  stops work when their token budget runs out. Rule 7's cloud limits
-  still hold (a cloud session pushes a branch; main merges).
+  stops work when their token budget runs out. Merges and pushes to
+  `main` are the cloud session's too (rule 7).
 - **anyknown is the user's (user, 2026-10-12):** aye-lang/anyknown is
   the user's product and outside the AI's decisions: it stays private,
   its license, visibility and product choices are the user's. From
