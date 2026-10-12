@@ -1200,7 +1200,10 @@ fn cli_target_linux_link(work: &Path, arch: &str, machine: u16) -> Result<(), St
         println!("skipped cli/aye build --target {target}: AYE_SYSROOT is not set");
         return Ok(());
     };
-    if !Path::new(&sysroot).join(format!("usr/lib/{arch}-linux-gnu")).is_dir() {
+    if !Path::new(&sysroot)
+        .join(format!("usr/lib/{arch}-linux-gnu"))
+        .is_dir()
+    {
         println!("skipped cli/aye build --target {target}: AYE_SYSROOT is not a {arch} sysroot");
         return Ok(());
     }
