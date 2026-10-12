@@ -1,15 +1,16 @@
+import std.encoding
+import std.heap.General
+import std.mem.Allocator
 import std.crypto.Sha256
 import std.crypto.sha256
 
-fn hex(d: []u8) {
-    let digits = "0123456789abcdef"
-    for b in d {
-        let hi = (b >> 4) as usize
-        let lo = (b & 15) as usize
-        @print(digits[hi..hi + 1])
-        @print(digits[lo..lo + 1])
+fn hex(alloc: Allocator, d: []u8) {
+    let text = encoding.hexEncode(alloc, d) catch {
+        @println("alloc failed")
+        return
     }
-    @println("")
+    @println(text)
+    alloc.free(text)
 }
 
 /// One million "a", fed in chunks of 1000 bytes.
@@ -23,14 +24,17 @@ fn million() [32]u8 {
 }
 
 pub fn main() {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
     let d0 = sha256("abc")
-    hex(d0[..])
+    hex(alloc, d0[..])
     let d1 = sha256("")
-    hex(d1[..])
+    hex(alloc, d1[..])
     let d2 = sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
-    hex(d2[..])
+    hex(alloc, d2[..])
     let d3 = sha256("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu")
-    hex(d3[..])
+    hex(alloc, d3[..])
     let dm = million()
-    hex(dm[..])
+    hex(alloc, dm[..])
 }

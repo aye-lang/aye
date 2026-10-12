@@ -21,7 +21,8 @@ pub fn base64Encode(alloc: Allocator, data: []u8) AllocError![]mut u8 {
 
 /// The bytes of base64 `text` (RFC 4648 section 4). The text must be
 /// padded; a byte outside the alphabet gives `InvalidCharacter` and a
-/// length that is not a multiple of 4, `InvalidLength`.
+/// length that is not a multiple of 4, `InvalidLength`. Non-zero trailing
+/// bits in the last symbol (RFC 4648 section 3.5) give `InvalidCharacter`.
 pub fn base64Decode(alloc: Allocator, text: []u8) DecodeError![]mut u8 {
     return decode64(alloc, text, false)
 }
@@ -139,6 +140,18 @@ fn decode64(alloc: Allocator, text: []u8, url: bool) DecodeError![]mut u8 {
         }
     }
     let rest = end % 4
+    // RFC 4648 section 3.5: the unused trailing bits of the last symbol
+    // must be zero ("QR==" is not a canonical "A").
+    if rest > 1 {
+        let last = base64Value(text[end - 1], url)
+        var spare: i32 = 3
+        if rest == 2 {
+            spare = 15
+        }
+        if (last & spare) != 0 {
+            return InputError.InvalidCharacter
+        }
+    }
     var n = end / 4 * 3
     if rest > 1 {
         n += rest - 1

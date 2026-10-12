@@ -95,6 +95,14 @@ test "base64 rejects bad characters and lengths" {
     rejects(alloc, encoding.base64UrlDecode, "Zg=", InputError.InvalidLength)
 }
 
+test "base64 rejects non-zero trailing bits" {
+    let alloc = @testAllocator()
+    decodes(alloc, encoding.base64Decode, "QQ==", "A")
+    rejects(alloc, encoding.base64Decode, "QR==", InputError.InvalidCharacter)
+    rejects(alloc, encoding.base64Decode, "QUJ=", InputError.InvalidCharacter)
+    rejects(alloc, encoding.base64UrlDecode, "QR", InputError.InvalidCharacter)
+}
+
 test "hex lowercase out, both cases in" {
     let alloc = @testAllocator()
     let data = [4]u8{0x00, 0x0f, 0xa5, 0xff}

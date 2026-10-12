@@ -1,50 +1,54 @@
+import std.encoding
+import std.heap.General
+import std.mem.Allocator
 import std.crypto.hmacSha256
 import std.crypto.HmacSha256
 
-fn hex(d: []u8) {
-    let digits = "0123456789abcdef"
-    for b in d {
-        let hi = (b >> 4) as usize
-        let lo = (b & 15) as usize
-        @print(digits[hi..hi + 1])
-        @print(digits[lo..lo + 1])
+fn hex(alloc: Allocator, d: []u8) {
+    let text = encoding.hexEncode(alloc, d) catch {
+        @println("alloc failed")
+        return
     }
-    @println("")
+    @println(text)
+    alloc.free(text)
 }
 
 pub fn main() {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
     let k0 = [20]u8{0x0b, ..}
     let m0 = "Hi There"
     let d0 = hmacSha256(k0[..], m0[..])
-    hex(d0[..])
+    hex(alloc, d0[..])
     let k1 = "Jefe"
     let m1 = "what do ya want for nothing?"
     let d1 = hmacSha256(k1[..], m1[..])
-    hex(d1[..])
+    hex(alloc, d1[..])
     let k2 = [20]u8{0xaa, ..}
     let m2 = [50]u8{0xdd, ..}
     let d2 = hmacSha256(k2[..], m2[..])
-    hex(d2[..])
+    hex(alloc, d2[..])
     let k3 = [25]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
     let m3 = [50]u8{0xcd, ..}
     let d3 = hmacSha256(k3[..], m3[..])
-    hex(d3[..])
+    hex(alloc, d3[..])
     let k4 = [20]u8{0x0c, ..}
     let m4 = "Test With Truncation"
     let d4 = hmacSha256(k4[..], m4[..])
-    hex(d4[..16])
+    hex(alloc, d4[..16])
     let k5 = [131]u8{0xaa, ..}
     let m5 = "Test Using Larger Than Block-Size Key - Hash Key First"
     let d5 = hmacSha256(k5[..], m5[..])
-    hex(d5[..])
+    hex(alloc, d5[..])
     let k6 = [131]u8{0xaa, ..}
     let m6 = "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
     let d6 = hmacSha256(k6[..], m6[..])
-    hex(d6[..])
+    hex(alloc, d6[..])
     var h = HmacSha256.init(k6[..])
     h.update(m6[..10])
     h.update(m6[10..100])
     h.update(m6[100..])
     let ds = h.final()
-    hex(ds[..])
+    hex(alloc, ds[..])
 }
