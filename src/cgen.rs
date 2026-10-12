@@ -1075,7 +1075,12 @@ AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
    stdout and stderr pipes (-1 where there is none). Returns 0 or the errno
    of the failure, including that of `execvp` in the child, which reports it
    through a close-on-exec pipe. Every pipe end is close-on-exec; `dup2`
-   clears the flag on the child's 0, 1 and 2. */
+   clears the flag on the child's 0, 1 and 2. `args` goes on with `envc`
+   NUL-terminated `NAME=value` strings (`envc` < 0: the child inherits this
+   process's environment) and, when `hascwd` is set, one more string, the
+   child's working directory. The first spawn sets SIGPIPE to ignored in
+   this process, so that a write to an exited child's stdin fails with
+   EPIPE; the child gets the default action back before `execvp`. */
 extern int aye_rt_pipe(int *) __asm__(AYE_SYM("pipe"));
 extern int aye_rt_close(int) __asm__(AYE_SYM("close"));
 extern int aye_rt_dup2(int, int) __asm__(AYE_SYM("dup2"));
@@ -1085,14 +1090,19 @@ extern long aye_rt_read_fd(int, void *, size_t) __asm__(AYE_SYM("read"));
 extern long aye_rt_write_fd(int, const void *, size_t) __asm__(AYE_SYM("write"));
 extern int aye_rt_waitpid(int, int *, int) __asm__(AYE_SYM("waitpid"));
 extern int aye_rt_fcntl(int, int, ...) __asm__(AYE_SYM("fcntl"));
+extern int aye_rt_chdir(const char *) __asm__(AYE_SYM("chdir"));
+extern void (*aye_rt_signal(int, void (*)(int)))(int) __asm__(AYE_SYM("signal"));
+extern char **aye_rt_environ __asm__(AYE_SYM("environ"));
 extern void aye_rt_exit_now(int) __asm__(AYE_SYM("_exit")) __attribute__((noreturn));
-AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t *out) {
+AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t envc, int32_t hascwd, int32_t modes, int32_t *out) {
     int pp[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int ep[2] = {-1, -1};
     int err = 0;
     int pid = -1;
-    char **argv = aye_rt_malloc(((size_t)argc + 1) * sizeof(char *));
+    int ne = envc < 0 ? 0 : envc;
+    char **argv = aye_rt_malloc(((size_t)argc + 1 + (size_t)ne + 1) * sizeof(char *));
     if (!argv) return 12;
+    char **envp = argv + argc + 1;
     char *a = (char *)args;
     for (int i = 0; i < argc; i++) {
         argv[i] = a;
@@ -1100,6 +1110,14 @@ AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t
         a++;
     }
     argv[argc] = 0;
+    for (int i = 0; i < ne; i++) {
+        envp[i] = a;
+        while (*a) a++;
+        a++;
+    }
+    envp[ne] = 0;
+    char *cwd = hascwd ? a : 0;
+    aye_rt_signal(13, (void (*)(int))1);
     for (int s = 0; s < 3; s++) {
         if (((modes >> (2 * s)) & 3) == 0) continue;
         if (aye_rt_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
@@ -1117,6 +1135,9 @@ AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t
             if (pp[s][0] < 0) continue;
             if (aye_rt_dup2(s == 0 ? pp[s][0] : pp[s][1], s) < 0) goto child_fail;
         }
+        aye_rt_signal(13, (void (*)(int))0);
+        if (cwd && aye_rt_chdir(cwd) != 0) goto child_fail;
+        if (envc >= 0) aye_rt_environ = envp;
         aye_rt_execvp(argv[0], argv);
     child_fail:;
         int e = *aye_rt_errno_loc();

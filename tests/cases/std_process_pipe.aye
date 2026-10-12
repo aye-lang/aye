@@ -1,0 +1,26 @@
+// O1.6a: a write to the stdin of a child that has exited is a
+// `WriteError`, not SIGPIPE.
+
+import std
+import std.heap.General
+import std.process
+import std.process.Stdio
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    let argv = [_][]u8{"/bin/true"}
+    var child = try process.spawn(alloc, argv[..], Stdio.Pipe, Stdio.Inherit, Stdio.Inherit)
+    // Wait without closing our end of the pipe.
+    var raw: i32 = 0
+    _ = waitpid(child.pid, &mut raw, 0)
+    child.stdin.?.write("into the void\n") catch |e| {
+        @println(@tagName(e))
+        return
+    }
+    @println("unreachable")
+}
+
+extern fn waitpid(pid: i32, status: *mut i32, options: i32) i32
