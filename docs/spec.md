@@ -2251,17 +2251,19 @@ std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system 
 std.net.connect(host: []u8, port: u16) ConnectError!Conn
 Listener.accept(self: Self) AcceptError!Conn   waits for the next connection
 Listener.port(self: Self) u16                  the port it listens on
+Listener.fd(self: Self) i32                    its file descriptor, for poll (do not close it)
 Listener.close(self: Self)
 Conn.read(self: Self, buf: []mut u8) ReadError!usize   waits; at most buf.len bytes; 0 when the peer closed
 Conn.readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize   read, waiting at most ms (poll)
 Conn.write(self: Self, bytes: []u8) WriteError!void    write everything
 Conn.writeSome(self: Self, bytes: []u8) WriteError!usize   what the socket takes now; 0: buffer full
-Conn.setNonBlocking(self: Self) bool   O_NONBLOCK: writeSome and read do not wait (poll first)
+Conn.setNonBlocking(self: Self) bool   O_NONBLOCK: writeSome gives 0 and read WouldBlock instead of waiting (poll first)
+Conn.fd(self: Self) i32                its file descriptor, for poll (do not close it)
 Conn.close(self: Self)
 error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
 error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
 error AcceptError { AcceptFailed }
-error ReadError { TimedOut, ConnectionReset, ReadFailed }
+error ReadError { TimedOut, ConnectionReset, WouldBlock, ReadFailed }
 error WriteError { ConnectionClosed, WriteFailed }
 ```
 

@@ -673,3 +673,32 @@ winning that race; on the 4-vCPU Ubuntu VM the second `/events` case
 lost it every time (`streams: 1`, expected 2). The library order stays;
 the test waits with `waitOpen` (as the `/big` case already did) before
 printing the count.
+
+## A slow handler's worker gives its other connections away (O3.9b)
+
+Since O3.9 each `std.http` worker runs its handlers inline, so a handler
+that sleeps or blocks held up every other connection of its worker. A
+pool of handler threads fixes that but costs a hand-off (a lock, a wake,
+a wake back) on every request, which the hello hot path would feel. O3.9b
+keeps handlers inline and moves the *other* connections instead: around
+each handler call the worker publishes `state` 1, `since` and `current`
+(two atomic stores and one compare-and-swap per request). Every other
+worker, at most every 10 ms on its loop (so within its 100 ms `poll` tick
+when idle), looks at the others; one whose handler has run for more than
+`SLOW_MS` (20 ms) is set to `state` 2, its connections except `current`
+move to the looking worker's list, and `state` goes back to 1. After the
+handler the owner waits for 1 (spins with `sched_yield` while a move
+is under way), so it never sees its list change except at that point,
+and when `moved` is set it starts its loop afresh. To let a connection
+change threads, each `Open` now has its own `General` (its arena and
+input buffer live on it), and the `Open` records come from one
+server-wide `General` under a mutex (once per connection, not per
+request). With `workers = 1` nothing moves. `ab -k -c 64`: within noise
+(docs/aye-bench.md, O3.9b). Golden `http_slow_handler`: eight
+connections, one handler sleeps 300 ms, the other seven are answered
+first; it fails on the O3.9a server.
+
+`std.net` also got `ReadError.WouldBlock` (a non-blocking `read` with no
+data; `readError` maps EAGAIN) and `Listener.fd()`/`Conn.fd()`; the field
+is `sock` now, since a struct cannot have a field and a method of one
+name (E0015).

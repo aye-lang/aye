@@ -14,27 +14,33 @@ import std.text
 pub error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
 pub error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
 pub error AcceptError { AcceptFailed }
-pub error ReadError { TimedOut, ConnectionReset, ReadFailed }
+pub error ReadError { TimedOut, ConnectionReset, WouldBlock, ReadFailed }
 pub error WriteError { ConnectionClosed, WriteFailed }
 
 /// A socket that waits for connections.
 pub struct Listener {
-    fd: i32
+    sock: i32
     portNumber: u16
 
     /// Waits for the next connection.
     pub fn accept(self: Self) AcceptError!Conn {
         while true {
-            let fd = accept(self.fd, null, null)
+            let fd = accept(self.sock, null, null)
             if fd >= 0 {
                 noSigpipe(fd)
-                return Conn { fd: fd }
+                return Conn { sock: fd }
             }
             if aye_std_errno() != EINTR {
                 return AcceptError.AcceptFailed
             }
         }
         unreachable
+    }
+
+    /// The socket's file descriptor, for `poll` (O3.9b). It stays owned by
+    /// the listener: do not close it.
+    pub fn fd(self: Self) i32 {
+        return self.sock
     }
 
     /// The port it listens on: the one the system picked for port 0.
@@ -44,19 +50,26 @@ pub struct Listener {
 
     /// Stops listening and releases the port.
     pub fn close(self: Self) {
-        _ = close(self.fd)
+        _ = close(self.sock)
     }
 }
 
 /// A TCP connection.
 pub struct Conn {
-    fd: i32
+    sock: i32
+
+    /// The socket's file descriptor, for `poll` (O3.9b). It stays owned by
+    /// the connection: do not close it.
+    pub fn fd(self: Self) i32 {
+        return self.sock
+    }
 
     /// Waits for data and reads at most `buf.len` bytes: the number read, 0
-    /// when the peer has closed its side.
+    /// when the peer has closed its side. On a non-blocking connection
+    /// (`setNonBlocking`) with no data there, WouldBlock.
     pub fn read(self: Self, buf: []mut u8) ReadError!usize {
         while true {
-            let n = read(self.fd, buf.ptr, buf.len)
+            let n = read(self.sock, buf.ptr, buf.len)
             if n >= 0 {
                 return n as usize
             }
@@ -71,7 +84,7 @@ pub struct Conn {
     /// `read`, waiting at most `ms` milliseconds for data (`poll`):
     /// TimedOut when none came.
     pub fn readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize {
-        var fds = [1]PollFd{PollFd { fd: self.fd, events: POLLIN, revents: 0 }}
+        var fds = [1]PollFd{PollFd { fd: self.sock, events: POLLIN, revents: 0 }}
         while true {
             let r = poll(fds[..].ptr, 1, ms as i32)
             if r > 0 {
@@ -114,7 +127,7 @@ pub struct Conn {
             flags = MSG_NOSIGNAL_LINUX
         }
         while true {
-            let n = send(self.fd, bytes.ptr, bytes.len, flags)
+            let n = send(self.sock, bytes.ptr, bytes.len, flags)
             if n > 0 {
                 return n as usize
             }
@@ -133,16 +146,16 @@ pub struct Conn {
     }
 
     /// Makes the connection non-blocking (`O_NONBLOCK`): `writeSome` gives
-    /// 0 instead of waiting, and `read` gives ReadFailed when no data is
-    /// there, so wait with `poll` first. False when the system refused.
+    /// 0 instead of waiting, and `read` gives WouldBlock when no data is
+    /// there, so wait with `poll` (on `fd()`) first. False when the system refused.
     pub fn setNonBlocking(self: Self) bool {
-        let flags = fcntl(self.fd, F_GETFL)
-        return flags >= 0 && fcntl(self.fd, F_SETFL, flags | pick(0x4, 0x800)) == 0
+        let flags = fcntl(self.sock, F_GETFL)
+        return flags >= 0 && fcntl(self.sock, F_SETFL, flags | pick(0x4, 0x800)) == 0
     }
 
     /// Closes the connection.
     pub fn close(self: Self) {
-        _ = close(self.fd)
+        _ = close(self.sock)
     }
 }
 
@@ -186,7 +199,7 @@ pub fn listen(host: []u8, port: u16) ListenError!Listener {
                 }
                 freeaddrinfo(head)
                 // sin_port and sin6_port are both at byte 2
-                return Listener { fd: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
+                return Listener { sock: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
             }
             e = aye_std_errno()
             _ = close(fd)
@@ -226,7 +239,7 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
             if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
                 freeaddrinfo(head)
                 noSigpipe(fd)
-                return Conn { fd: fd }
+                return Conn { sock: fd }
             }
             e = aye_std_errno()
             _ = close(fd)
@@ -312,7 +325,7 @@ fn resolve(host: []u8, port: u16, flags: i32, head: *mut ?*mut AddrInfo) i32 {
     return getaddrinfo(name[..].ptr, service[..].ptr, &hints, head)
 }
 
-/// C's `struct pollfd`, for `poll` on `Listener.fd` and `Conn.fd`
+/// C's `struct pollfd`, for `poll` on `Listener.fd()` and `Conn.fd()`
 /// (`std.http.Server` uses it).
 pub extern struct PollFd {
     fd: i32
@@ -370,6 +383,9 @@ fn readError(e: i32) ReadError {
     }
     if e == etimedout() {
         return ReadError.TimedOut
+    }
+    if e == eagain() {
+        return ReadError.WouldBlock
     }
     return ReadError.ReadFailed
 }

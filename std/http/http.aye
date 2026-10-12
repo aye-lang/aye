@@ -24,6 +24,7 @@ import std.net.Conn
 import std.net.ListenError
 import std.net.Listener
 import std.net.PollFd
+import std.net.ReadError
 import std.os
 import std.sync.Atomic
 import std.sync.Mutex
@@ -660,6 +661,9 @@ pub fn listen(comptime T: type, host: []u8, port: u16, ctx: *mut T, handler: fn(
         loopback: lo,
         streamLock: Mutex.init(),
         streamHead: null,
+        openLock: Mutex.init(),
+        openGpa: General.init(),
+        crew: []mut Worker{},
     }
 }
 
@@ -697,8 +701,12 @@ fn defaultWorkers() u32 {
 /// until `poll` says there is room, so a client that reads slowly holds up
 /// only itself. Its next request (pipelined or not) is answered only after
 /// the response is all written, and a client that takes no bytes for
-/// `idleMs` is closed. A write error closes the connection. A slow handler
-/// is out of scope: it still holds up the other connections of its worker.
+/// `idleMs` is closed. A write error closes the connection.
+///
+/// Slow handlers (O3.9b): a worker that has run one handler for more than
+/// 20 ms has its other connections taken over by another worker, which
+/// serves them from then on, so a slow handler holds up only its own
+/// connection. With `workers = 1` there is no other worker to take them.
 ///
 /// Server-sent events (O3.6b): a handler that calls `res.stream()` makes its
 /// connection a stream, which `broadcast` writes events to from any thread.
@@ -724,7 +732,7 @@ pub struct Server {
     idleMs: u32
     /// How many threads `run` serves on (at most 64): the number of CPUs,
     /// at least 2, to begin with. Set it before `run`. A handler that blocks
-    /// holds up the other connections of its thread.
+    /// holds up only its own connection (see `Server`).
     workers: u32
     stopped: Atomic(u32)
     // 1 while a worker accepts (`tryAccept`).
@@ -734,6 +742,13 @@ pub struct Server {
     streamLock: Mutex
     // The open streams, linked through `Open.next`.
     streamHead: ?*mut Open
+    // The `Open` records of all workers come from `openGpa`, under
+    // `openLock`, so that any worker can close one (O3.9b).
+    openLock: Mutex
+    openGpa: General
+    // The workers of `run`, so that one can take the connections of
+    // another whose handler is slow.
+    crew: []mut Worker
 
     /// The port it listens on.
     pub fn port(self: *Self) u16 {
@@ -756,15 +771,18 @@ pub struct Server {
         if n > 64 {
             n = 64
         }
+        let crew = try alloc.alloc(Worker { s: self, open: List(*mut Open).init(alloc), current: null, state: Atomic(u32).init(0), since: Atomic(u64).init(0), moved: false, lastLook: 0 }, n as usize)
+        defer alloc.free(crew)
+        self.crew = crew
         var none: ?Thread = null
         let threads = try alloc.alloc(none, (n - 1) as usize)
         defer alloc.free(threads)
         for i in 0..threads.len {
-            threads[i] = thread.spawn(Server, workerMain, self) catch |e| {
+            threads[i] = thread.spawn(Worker, workerMain, &mut crew[i + 1]) catch |e| {
                 break
             }
         }
-        workerMain(self)
+        workerMain(&mut crew[0])
         for i in 0..threads.len {
             if threads[i] |t| {
                 t.join()
@@ -772,6 +790,8 @@ pub struct Server {
         }
         self.listener.close()
         self.streamLock.deinit()
+        self.openLock.deinit()
+        self.openGpa.deinit()
     }
 
     /// The number of open event streams.
@@ -887,7 +907,7 @@ pub struct Server {
             return null
         }
         defer self.accepting.store(0)
-        var fds = [1]PollFd{PollFd { fd: self.listener.fd, events: POLLIN, revents: 0 }}
+        var fds = [1]PollFd{PollFd { fd: self.listener.fd(), events: POLLIN, revents: 0 }}
         if poll(fds[..].ptr, 1, 0) <= 0 {
             return null
         }
@@ -899,10 +919,10 @@ pub struct Server {
 
     // Reads what the peer of `o` has sent (a `poll` said it is there) and
     // answers each whole request in it; false when `o` is to be closed.
-    fn serveReady(self: *mut Self, alloc: Allocator, o: *mut Open) bool {
+    fn serveReady(self: *mut Self, w: *mut Worker, o: *mut Open) bool {
         var chunk = @zeroed([4096]u8)
         let n = o.conn.read(chunk[..]) catch |e| {
-            return false
+            return e == ReadError.WouldBlock
         }
         if n == 0 {
             return false
@@ -913,14 +933,14 @@ pub struct Server {
         o.inbuf.append(chunk[0..n]) catch |e| {
             return false
         }
-        return self.serveBuffered(alloc, o)
+        return self.serveBuffered(w, o)
     }
 
     // Writes what the socket of `o` takes of its pending output (a `poll`
     // said it has room). Once all of it is written, the connection is
     // closed if the response said so, or the requests already read are
     // answered; false when `o` is to be closed.
-    fn flushReady(self: *mut Self, alloc: Allocator, o: *mut Open) bool {
+    fn flushReady(self: *mut Self, w: *mut Worker, o: *mut Open) bool {
         if !put(o, o.pending) {
             return false
         }
@@ -934,21 +954,21 @@ pub struct Server {
         if o.closing {
             return false
         }
-        return self.serveBuffered(alloc, o)
+        return self.serveBuffered(w, o)
     }
 
     // Answers each whole request in `o.inbuf` from `o.off` on, in order. It
     // stops at a response the socket did not take whole: the worker writes
     // the rest when `poll` says there is room (`flushReady`) and only then
     // answers the next request. False when `o` is to be closed.
-    fn serveBuffered(self: *mut Self, alloc: Allocator, o: *mut Open) bool {
+    fn serveBuffered(self: *mut Self, w: *mut Worker, o: *mut Open) bool {
         let a = o.arena.allocator()
         while self.stopped.load() == 0 {
             let parsed = parse(a, o.inbuf.bytes()[o.off..], self.limits) catch |e| {
                 if e == ParseError.Incomplete {
                     o.arena.reset()
                     if o.off > 0 {
-                        var rest = Builder.init(alloc)
+                        var rest = Builder.init(o.gpa.allocator())
                         rest.append(o.inbuf.bytes()[o.off..]) catch |e2| {
                             rest.deinit()
                             return false
@@ -969,7 +989,15 @@ pub struct Server {
             var req = parsed.request
             o.off += parsed.consumed
             var res = Response { status: 200, headers: []Header{}, body: []u8{} }
+            // While the handler runs, another worker may take the other
+            // connections of `w` (`rescue`); it waits for state 2 to end.
+            w.current = o
+            w.since.store(time.monotonicMs())
+            w.state.store(1)
             self.handler(self.ctx, &req, &mut res, a)
+            while !w.state.compareSwap(1, 0) {
+                _ = sched_yield()
+            }
             let keep = req.keepAlive()
             var how: []u8 = ""
             if !keep {
@@ -1069,12 +1097,14 @@ pub struct Server {
 // A connection that a worker holds: the bytes from `off` on are read and not
 // yet parsed; `last` is when bytes last came (`time.monotonicMs`). `arena`
 // serves one request at a time (parse, handler, send) and is reset after
-// each; `inbuf` is on the worker's allocator, so it survives the reset.
+// each; `inbuf` survives the reset. Both are on the connection's own `gpa`,
+// so the connection can move to another worker (O3.9b).
 // `pending` is the part of the last response the socket has not taken yet:
 // it is in the arena, so the arena is reset only once it is written, and
 // `closing` says to close the connection then.
 struct Open {
     conn: Conn
+    gpa: General
     arena: Arena
     inbuf: Builder
     off: usize
@@ -1089,14 +1119,85 @@ struct Open {
     dead: Atomic(u32)
 }
 
-fn closeOpen(s: *mut Server, alloc: Allocator, o: *mut Open) {
+// A new `Open` for `c` from the server's `openGpa`, or null.
+fn makeOpen(s: *mut Server, c: Conn, now: u64) ?*mut Open {
+    s.openLock.lock()
+    defer s.openLock.unlock()
+    let shared = s.openGpa.allocator()
+    let o = shared.create(Open { conn: c, gpa: General.init(), arena: Arena.init(shared), inbuf: Builder.init(shared), off: 0, last: now, pending: []u8{}, closing: false, stream: false, next: null, dead: Atomic(u32).init(0) }) catch |e| {
+        return null
+    }
+    o.arena = Arena.init(o.gpa.allocator())
+    o.inbuf = Builder.init(o.gpa.allocator())
+    return o
+}
+
+fn closeOpen(s: *mut Server, o: *mut Open) {
     if o.stream {
         s.unlinkStream(o)
     }
     o.conn.close()
     o.arena.deinit()
     o.inbuf.deinit()
-    alloc.destroy(o)
+    o.gpa.deinit()
+    s.openLock.lock()
+    defer s.openLock.unlock()
+    s.openGpa.allocator().destroy(o)
+}
+
+// A worker of `Server.run`, as the other workers see it (O3.9b). `open` is
+// the connections it serves. While it runs a handler, `state` is 1,
+// `since` is when the handler began and `current` is the connection the
+// handler runs for; another worker that finds the handler running for more
+// than SLOW_MS sets `state` to 2, moves the other connections to itself
+// (`rescue`), sets `moved` and `state` back to 1. The worker waits for
+// `state` 1 to go back to 0 after the handler, so it never sees `open`
+// change under it, and starts its loop afresh when `moved` is set.
+struct Worker {
+    s: *mut Server
+    open: List(*mut Open)
+    current: ?*mut Open
+    state: Atomic(u32)
+    since: Atomic(u64)
+    moved: bool
+    // When it last looked for a slow worker.
+    lastLook: u64
+}
+
+// How long a handler may run before the other connections of its worker
+// move to another worker, in milliseconds.
+let SLOW_MS: u64 = 20
+
+// Takes the connections of each other worker whose handler has run for more
+// than SLOW_MS, all but the one the handler runs for.
+fn rescue(me: *mut Worker, now: u64) {
+    let s = me.s
+    for k in 0..s.crew.len {
+        let w = &mut s.crew[k]
+        if w == me || w.state.load() != 1 {
+            continue
+        }
+        let since = w.since.load()
+        if now < since + SLOW_MS || !w.state.compareSwap(1, 2) {
+            continue
+        }
+        var i = w.open.len()
+        while i > 0 {
+            i -= 1
+            let o = w.open.items()[i]
+            if w.current |c| {
+                if c == o {
+                    continue
+                }
+            }
+            me.open.append(o) catch |e| {
+                break
+            }
+            w.open.swapRemove(i)
+            w.moved = true
+        }
+        w.state.store(1)
+    }
 }
 
 // Fills `fds` with the listener, then one entry per connection of `open`:
@@ -1104,24 +1205,26 @@ fn closeOpen(s: *mut Server, alloc: Allocator, o: *mut Open) {
 // for bytes to read.
 fn pollSet(fds: *mut List(PollFd), listener: Listener, open: *List(*mut Open)) AllocError!void {
     fds.clear()
-    try fds.append(PollFd { fd: listener.fd, events: POLLIN, revents: 0 })
+    try fds.append(PollFd { fd: listener.fd(), events: POLLIN, revents: 0 })
     for o in open.items() {
         var ev = POLLIN
         if o.pending.len > 0 {
             ev = POLLOUT
         }
-        try fds.append(PollFd { fd: o.conn.fd, events: ev, revents: 0 })
+        try fds.append(PollFd { fd: o.conn.fd(), events: ev, revents: 0 })
     }
 }
 
-// A worker of `Server.run`, with its own allocator (they are not shared).
-// It wakes at least every 100 ms to see `stop` and the idle connections.
-fn workerMain(s: *mut Server) {
+// A worker of `Server.run`, with its own allocator for its lists (they are
+// not shared). It wakes at least every 100 ms to see `stop`, the idle
+// connections and the slow workers.
+fn workerMain(w: *mut Worker) {
+    let s = w.s
     var gpa = General.init()
     defer gpa.deinit()
     let alloc = gpa.allocator()
-    var open = List(*mut Open).init(alloc)
-    defer open.deinit()
+    w.open = List(*mut Open).init(alloc)
+    defer w.open.deinit()
     var fds = List(PollFd).init(alloc)
     defer fds.deinit()
     var tick: i32 = 100
@@ -1129,7 +1232,7 @@ fn workerMain(s: *mut Server) {
         tick = s.idleMs as i32
     }
     while s.stopped.load() == 0 {
-        pollSet(&mut fds, s.listener, &open) catch |e| {
+        pollSet(&mut fds, s.listener, &w.open) catch |e| {
             break
         }
         let r = poll(fds.items().ptr, fds.len() as u64, tick)
@@ -1138,17 +1241,17 @@ fn workerMain(s: *mut Server) {
         }
         let now = time.monotonicMs()
         // Backwards, so that `swapRemove` moves only entries already seen
-        // and `fds.items()[i + 1]` stays the entry of `open.items()[i]`.
-        var i = open.len()
+        // and `fds.items()[i + 1]` stays the entry of `w.open.items()[i]`.
+        var i = w.open.len()
         while i > 0 {
             i -= 1
-            let o = open.items()[i]
+            let o = w.open.items()[i]
             var keep = true
             if r > 0 && fds.items()[i + 1].revents != 0 {
                 if o.pending.len > 0 {
-                    keep = s.flushReady(alloc, o)
+                    keep = s.flushReady(w, o)
                 } else {
-                    keep = s.serveReady(alloc, o)
+                    keep = s.serveReady(w, o)
                 }
                 o.last = now
             } else if o.stream {
@@ -1156,10 +1259,29 @@ fn workerMain(s: *mut Server) {
             } else if now - o.last >= s.idleMs as u64 {
                 keep = false
             }
-            if !keep {
-                closeOpen(s, alloc, o)
-                open.swapRemove(i)
+            if w.moved {
+                // Another worker took the rest during a slow handler: only
+                // `o` is left, maybe at another index.
+                w.moved = false
+                if !keep {
+                    for k, x in w.open.items() {
+                        if x == o {
+                            w.open.swapRemove(k)
+                            break
+                        }
+                    }
+                    closeOpen(s, o)
+                }
+                break
             }
+            if !keep {
+                closeOpen(s, o)
+                w.open.swapRemove(i)
+            }
+        }
+        if now - w.lastLook >= 10 {
+            w.lastLook = now
+            rescue(w, now)
         }
         if r > 0 && fds.items()[0].revents != 0 {
             if s.tryAccept() |c| {
@@ -1168,20 +1290,21 @@ fn workerMain(s: *mut Server) {
                     break
                 }
                 _ = c.setNonBlocking()
-                let o = alloc.create(Open { conn: c, arena: Arena.init(alloc), inbuf: Builder.init(alloc), off: 0, last: now, pending: []u8{}, closing: false, stream: false, next: null, dead: Atomic(u32).init(0) }) catch |e| {
+                let made = makeOpen(s, c, now)
+                if made |o| {
+                    w.open.append(o) catch |e| {
+                        closeOpen(s, o)
+                        continue
+                    }
+                } else {
                     c.close()
-                    continue
-                }
-                open.append(o) catch |e| {
-                    closeOpen(s, alloc, o)
-                    continue
                 }
             }
         }
     }
-    drain(s, &open, &mut fds)
-    for o in open.items() {
-        closeOpen(s, alloc, o)
+    drain(s, &w.open, &mut fds)
+    for o in w.open.items() {
+        closeOpen(s, o)
     }
 }
 
@@ -1194,7 +1317,7 @@ fn drain(s: *mut Server, open: *List(*mut Open), fds: *mut List(PollFd)) {
         fds.clear()
         for o in open.items() {
             if o.pending.len > 0 && !o.stream {
-                fds.append(PollFd { fd: o.conn.fd, events: POLLOUT, revents: 0 }) catch |e| {
+                fds.append(PollFd { fd: o.conn.fd(), events: POLLOUT, revents: 0 }) catch |e| {
                     return
                 }
             }
@@ -1247,11 +1370,12 @@ let POLLOUT: i16 = 4
 
 // True when the socket of `conn` can take bytes at once (`poll`, no wait).
 fn writable(conn: Conn) bool {
-    var fds = [1]PollFd{PollFd { fd: conn.fd, events: POLLOUT, revents: 0 }}
+    var fds = [1]PollFd{PollFd { fd: conn.fd(), events: POLLOUT, revents: 0 }}
     return poll(fds[..].ptr, 1, 0) > 0 && (fds[0].revents & POLLOUT) != 0
 }
 
 extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
+extern fn sched_yield() i32
 
 // The client: HTTP/1.1, one request per connection (`Connection: close`).
 // `http://` runs over `std.net`. For `https://`, libcurl (linked only where
@@ -1594,6 +1718,7 @@ struct Stream {
             return match e {
                 .TimedOut => ClientError.TimedOut
                 .ConnectionReset => ClientError.ConnectionClosed
+                .WouldBlock => ClientError.TimedOut
                 .ReadFailed => ClientError.ConnectionClosed
             }
         }
