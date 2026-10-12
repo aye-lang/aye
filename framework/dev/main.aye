@@ -147,7 +147,6 @@ pub fn main() !void {
     var cur: usize = 0
     var before = read(arenas[0].allocator(), app) orelse {
         die("cannot read", app)
-        unreachable
     }
     var running: ?Server = null
     var serving: ?Fallback = null
@@ -361,7 +360,6 @@ fn capture(tmp: Allocator, argv: [][]u8, what: []u8, pipeOut: bool) Ran {
     }
     var child = process.spawn(tmp, argv, Stdio.Inherit, outMode, Stdio.Pipe) catch |err| {
         die("cannot run", argv[0])
-        unreachable
     }
     var out: []u8 = ""
     if child.stdout |f| {
@@ -373,7 +371,6 @@ fn capture(tmp: Allocator, argv: [][]u8, what: []u8, pipeOut: bool) Ran {
     fs.stderr().write(err) catch |e| {}
     let status = child.wait() catch |e| {
         die("cannot wait for", what)
-        unreachable
     }
     if status.success() {
         return Ran { ok: true, out: out, err: err }
@@ -422,18 +419,15 @@ fn serveError(alloc: Allocator, port: []u8, report: []u8, app: []u8) ?Fallback {
     alloc.free(id)
     let page = alloc.alloc(Page { body: body, frame: frame }, 1) catch |err| {
         die("out of memory", "")
-        unreachable
     }
     var tries: usize = 0
     while true {
         if http.listen(Page, "127.0.0.1", number, &mut page[0], answer) |srv| {
             let cell = alloc.alloc(srv, 1) catch |err| {
                 die("out of memory", "")
-                unreachable
             }
             let t = thread.spawn(http.Server, runFallback, &mut cell[0]) catch |err| {
                 die("cannot start a thread", "")
-                unreachable
             }
             let bound = cell[0].port()
             var addr = Builder.init(alloc)
@@ -533,7 +527,6 @@ fn start(alloc: Allocator, server: []u8, port: []u8) Server {
     }
     var child = process.spawn(alloc, argv[0..n], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
         die("cannot start the server", server)
-        unreachable
     }
     let out = child.stdout.?
     // The first line, a byte at a time, so that nothing after it is taken.
@@ -558,15 +551,12 @@ fn start(alloc: Allocator, server: []u8, port: []u8) Server {
     ended.store(0)
     let job = alloc.alloc(Copy { from: out }, 1) catch |err| {
         die("out of memory", "")
-        unreachable
     }
     let t = thread.spawn(Copy, copy, &mut job[0]) catch |err| {
         die("cannot start a thread", "")
-        unreachable
     }
     let owned = line.toOwned() catch |err| {
         die("out of memory", "")
-        unreachable
     }
     return Server { child: child, copier: t, job: job, line: owned }
 }
@@ -600,7 +590,7 @@ fn runnable(alloc: Allocator, p: []u8) ![]u8 {
     return try path.join(alloc, ".", p)
 }
 
-fn die(what: []u8, a: []u8) {
+fn die(what: []u8, a: []u8) noreturn {
     fs.stderr().write("web dev: ") catch |e| {}
     fs.stderr().write(what) catch |e| {}
     if a.len > 0 {
