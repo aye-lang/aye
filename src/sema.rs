@@ -8108,17 +8108,19 @@ impl<'a> Checker<'a> {
             }
             checked[i] = Some(arm);
         }
-        // Arms that all leave (`return`, `break`, `continue`) give no type.
-        let ty = if is_stmt {
-            Type::Void
-        } else {
-            want.unwrap_or(
-                if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))) {
-                    Type::Void
-                } else {
-                    Type::Error
-                },
-            )
+        // Arms that all leave (`return`, `break`, `continue`) give no value,
+        // so such a `match` cannot be used as one.
+        let ty = match want {
+            _ if is_stmt => Type::Void,
+            Some(t) => t,
+            None if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))) => {
+                return err(
+                    E0124,
+                    e.span,
+                    "`match` used as a value, but every arm returns, breaks or continues: write it as a statement, or give an arm a value",
+                );
+            }
+            None => Type::Error,
         };
         let arms = checked.into_iter().map(Option::unwrap).collect();
         Ok(TExpr {

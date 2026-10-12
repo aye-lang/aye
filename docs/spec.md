@@ -61,7 +61,7 @@ aye run <path> [--mode debug|safe|fast] [-- args...]  build to a temp file and r
 aye build <path> [-o out] [--mode m]                  build an executable (default name: the file or directory name)
     [--cflags "flags"]                                (build, run, test) more clang flags: --cflags -fsanitize=thread
     [--no-link lib]                                   (build, run, test; repeatable) treat the `@linkOptional("lib")` library as not installed: not linked, `@hasLink` false (`std.http` then has no libcurl: https is `HttpsUnsupported`); a name no `@linkOptional` declares is E0100
-    [-c]                                              (build) compile to an object file `<name>.o` without linking; any --target, no sysroot needed (a Linux target on macOS links only with a Linux sysroot)
+    [-c]                                              (build) compile to an object file `<name>.o` without linking; any --target, no sysroot needed (a Linux target on macOS links only with a Linux sysroot: `AYE_SYSROOT=<dir>`, linked with lld)
     [--target t]                                      (build, run, test, emit-c, check) t: aarch64-macos x86_64-macos aarch64-linux x86_64-linux wasm32-wasip1 wasm32-freestanding; unknown E0117, std module the target lacks E0118; wasm32-wasip1 programs run under Node's `node:wasi`; wasm32-freestanding has no libc and no `main` is needed: `pub extern fn` is exported to JS, `main` is exported as `aye_main`, output and abort are the imports `env.aye_write(fd, ptr, len)` and `env.aye_abort()`; std also imports `env.aye_clock(id)`, `env.aye_fmt_double(ptr, cap, x, n)`, `strtod` and libm's `sin cos tan asin acos atan atan2 exp log log2 log10 pow fmod hypot` by name (`tests/wasm/loader.mjs` provides them)
 aye check <path> [--json]                             report all compile errors; no C, no clang
 aye fix <path>                                        apply the fix-its of `aye check` in place, repeat (at most 10 rounds)
@@ -933,7 +933,8 @@ Arms are separated by newlines or `,`.
   have the same type. An arm may also be `return [value]`, `break` or
   `continue`: it leaves, so it has no value and takes the type of the
   other arms (`let n = match o { .Some { n } => n, .None => return
-  error.Missing }`).
+  error.Missing }`). At least one arm must give a value: a `match` used
+  as a value whose arms all leave is E0124 (write it as a statement).
 - As a statement, each arm is a block, `return [value]`, `break`,
   `continue` or an expression statement: a call (or builtin), `try`,
   `catch`, `match` or `unreachable` (`.A => try self.f()`). Assignments
@@ -1603,7 +1604,7 @@ std.coro      coroutines: create, resume, yield                              bel
 std.testing   the leak-checked allocator of a test                           below
 std.log       err/info: "error: "/"info: " lines to stderr; line: no prefix  below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
-std.os        args, getenv, exit, cpuCount                                   below
+std.os        args, getenv, exit, cpuCount, onStop/stopRequested (signals)  below
 std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
@@ -1621,7 +1622,9 @@ port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves on
 that lives until the response is written (a `HEAD` response omits the
 body, not its `Content-Length`; `res.stream()` keeps the connection open
 as an event stream that `s.broadcast(alloc, event, data)` writes to, after
-`res.body` if it is not empty: the first chunk, as is). `req.query(alloc, name)` and
+`res.body` if it is not empty: the first chunk, as is). `s.stop()`
+(any thread) is graceful: answered responses are written whole, other
+connections close, `run` returns; after `std.os.onStop()`, so does SIGTERM. `req.query(alloc, name)` and
 `req.form(alloc, name)` give the first value of a query or urlencoded form
 field, percent-decoded (`+` is a space) in `alloc`, and `req.cookie(name)`
 a cookie as sent; each gives null when missing. The client is `http.get(arena,
@@ -2200,6 +2203,8 @@ std.os.args(alloc: Allocator) AllocError![][]u8   the arguments; [0] is the prog
 std.os.getenv(name: []u8) ?[]u8                   the variable's value (points into the environment; do not free); null if unset
 std.os.cpuCount() u32                             the number of CPUs online (at least 1)
 std.os.exit(code: i32)                            exit now with this status (flushes @print output; deferred statements do not run)
+std.os.onStop()                                   SIGINT and SIGTERM set a flag instead of ending the program (call once, early)
+std.os.stopRequested() bool                       has SIGINT or SIGTERM come since onStop? (std.http's Server.run checks it)
 ```
 
 To exit with a status and still free everything, do the work in a function

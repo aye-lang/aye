@@ -1198,6 +1198,79 @@ fn cli_target_linux_link_error(work: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// With `AYE_SYSROOT` set to a Linux sysroot (`scripts/linux-sysroot.sh`),
+/// `aye build --target <arch>-linux` links `hello.aye` on macOS into an ELF
+/// 64-bit executable of `e_machine` `machine`, which prints hello in an
+/// Ubuntu container when Apple's `container` CLI is there. Skipped off
+/// macOS, without `AYE_SYSROOT`, or when the sysroot is for the other arch.
+fn cli_target_linux_link(work: &Path, arch: &str, machine: u16) -> Result<(), String> {
+    let target = format!("{arch}-linux");
+    if !cfg!(target_os = "macos") {
+        println!("skipped cli/aye build --target {target}: not macOS");
+        return Ok(());
+    }
+    let Some(sysroot) = std::env::var_os("AYE_SYSROOT") else {
+        println!("skipped cli/aye build --target {target}: AYE_SYSROOT is not set");
+        return Ok(());
+    };
+    if !Path::new(&sysroot)
+        .join(format!("usr/lib/{arch}-linux-gnu"))
+        .is_dir()
+    {
+        println!("skipped cli/aye build --target {target}: AYE_SYSROOT is not a {arch} sysroot");
+        return Ok(());
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = work.join(format!("linux_link_{arch}"));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let exe = dir.join("hello");
+    let (_, err, code) = aye(
+        root,
+        &[
+            "build",
+            "--target",
+            &target,
+            "tests/cases/hello.aye",
+            "-o",
+            exe.to_str().unwrap(),
+        ],
+    )?;
+    if code != Some(0) {
+        return Err(format!("`aye build --target {target}`: {code:?}\n{err}"));
+    }
+    // The ELF header: 64-bit little endian, type 2 or 3 (executable or PIE)
+    // at offset 16 and the machine at offset 18.
+    let bytes = std::fs::read(&exe).map_err(|e| e.to_string())?;
+    if bytes[..6] != [0x7f, b'E', b'L', b'F', 2, 1]
+        || !matches!(bytes[16..18], [2, 0] | [3, 0])
+        || bytes[18..20] != machine.to_le_bytes()
+    {
+        return Err(format!(
+            "not an ELF 64-bit {arch} executable: {:02x?}",
+            &bytes[..20]
+        ));
+    }
+    let container_arch = if arch == "x86_64" { "amd64" } else { "arm64" };
+    let run = Command::new("container")
+        .args(["run", "--rm", "--arch", container_arch, "-v"])
+        .arg(format!("{}:/o", dir.display()))
+        .args(["ubuntu:24.04", "/o/hello"])
+        .output();
+    let Ok(out) = run else {
+        println!("skipped running the {target} program: no `container` CLI");
+        return Ok(());
+    };
+    let want = std::fs::read_to_string(root.join("tests/cases/hello.out")).unwrap();
+    if !out.status.success() || !String::from_utf8_lossy(&out.stdout).ends_with(&want) {
+        return Err(format!(
+            "the {target} program printed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}
+
 /// `aye build --target wasm32-wasip1` links `hello.aye` into a WebAssembly
 /// module (bytes `\0asm`). Skipped without the WASI toolchain.
 fn cli_target_wasm(work: &Path) -> Result<(), String> {
@@ -2107,6 +2180,16 @@ fn main() {
             &mut jobs,
             "cli/aye build --target x86_64-linux: the link error".to_string(),
             move || cli_target_linux_link_error(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target x86_64-linux: AYE_SYSROOT link".to_string(),
+            move || cli_target_linux_link(w, "x86_64", 0x3e),
+        );
+        add(
+            &mut jobs,
+            "cli/aye build --target aarch64-linux: AYE_SYSROOT link".to_string(),
+            move || cli_target_linux_link(w, "aarch64", 0xb7),
         );
         add(
             &mut jobs,

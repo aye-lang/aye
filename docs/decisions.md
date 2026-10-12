@@ -658,3 +658,17 @@ Split build in debug mode, measured once: front end 0.5 s, then writing the file
 | user + sys, s | 14.2 / 14.4 / 14.0 | 12.5 / 13.2 / 12.9 (-9%) |
 
 `aye build browser` is unchanged: 26,457,152 bytes of C, 9.6-9.9 s user + sys before and after.
+
+## A stream is counted after its first chunk drains (O3.6e)
+
+Since O3.6d a streaming response writes its body right after the head and
+the worker calls `linkStream` only once that write has drained
+(`std/http/http.aye`, the `stream` branch of the response writer), so a
+`broadcast` never interleaves with the first chunk. The cost is that a
+client can read the first frame and ask `Server.streams()` before the
+worker has linked the stream. The `http_sse` golden printed
+`s.streams()` right after reading `first`, so it depended on the worker
+winning that race; on the 4-vCPU Ubuntu VM the second `/events` case
+lost it every time (`streams: 1`, expected 2). The library order stays;
+the test waits with `waitOpen` (as the `/big` case already did) before
+printing the count.
