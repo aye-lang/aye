@@ -173,3 +173,25 @@ often than not. A likely cause: the kernel hashes the 64 keep-alive connections 
 more than 16, where the herd let an idle worker win them. Still below `workers = 1` (16.1k in O3.9b) without `-k`: each
 connection costs a `makeOpen` under the server-wide `openLock` and a `General` of its own. Accepting up to 16 waiting
 connections per wake instead of one measured the same (12706 / 104698 in one pass) and was dropped.
+
+## 2026-10-12 open lock (O3.9d, Ubuntu 24.04 cloud VM)
+
+O3.9d asked whether `makeOpen` and `closeOpen` under the server-wide `openLock` hold back new connections without `-k`. Upper
+bound first: a build of `a6339c4` with the lock taken out of both (safe only in `--mode fast`, where `General` is plain
+malloc/free) against `a6339c4` itself. `nproc` 4, Linux 6.18.44 Firecracker, Ubuntu 24.04, load average 1.5 to 2.4 (this session
+only), `scripts/bench/hello_http.aye` built `--mode fast`, 1000 `-k` warm-up requests, then `ab -c 64 -n 100000` without `-k`
+three times and `ab -k -c 64 -n 200000` three times. No failed requests anywhere.
+
+| pass | server | no -k, -c 64 runs (req/s) | median | -k -c 64 runs (req/s) | median |
+|---|---|---|---|---|---|
+| 1 | before | 12015 / 11386 / 11437 | 11437 | 86782 / 88498 / 90921 | 88498 |
+| 2 | no lock | 11733 / 12053 / 12321 | 12053 | 95821 / 93887 / 89988 | 93887 |
+| 2 | before | 11868 / 11964 / 11804 | 11864 | 91698 / 80277 / 75168 | 80277 |
+| 3 | before | 10440 / 11849 / 11321 | 11321 | 77972 / 79914 / 73451 | 77972 |
+| 3 | no lock | 11334 / 11521 / 11190 | 11334 | 81618 / 87135 / 85328 | 85328 |
+
+Paired without `-k`: +1.6% and +0.1%, inside this VM's noise. The client is the limit: during a no-`-k` run `ab` uses 97% of one
+CPU while the server uses about 55% of one CPU over its 4 workers (`top`), and two `ab -c 32 -n 100000` at once reach 12674 + 13364
+and 13151 + 12548 req/s before, 14135 + 13997 and 12398 + 12729 without the lock (about 26k together either way). The lock is
+taken twice per connection, uncontended at this rate, so it was left as is. To see server-side gains on the accept path, a
+multi-threaded client (`wrk`, or several `ab`) is needed first.
