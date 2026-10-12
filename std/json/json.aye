@@ -735,61 +735,7 @@ pub fn writeNumber(b: *mut Builder, v: f64) AllocError!void {
     if v != v || v > 1.7976931348623157e308 || v < -1.7976931348623157e308 {
         return b.append("null")
     }
-    if copysign(1.0, v) < 0.0 {
-        try b.appendByte('-')
-    }
-    let a = fabs(v)
-    if a == 0.0 {
-        return b.appendByte('0')
-    }
-    if a < 9007199254740992.0 {
-        let n = a as u64
-        if n as f64 == a {
-            return b.appendUint(n)
-        }
-    }
-    var digits = [17]u8{0, ..}
-    let d = shortest(a, digits[..])
-    let ds = digits[..d.count]
-    let n = d.point as i64
-    let k = d.count as i64
-    if k <= n && n <= 21 {
-        try b.append(ds)
-        var z = n - k
-        while z > 0 {
-            try b.appendByte('0')
-            z -= 1
-        }
-        return
-    }
-    if 0 < n && n <= 21 {
-        try b.append(ds[..n as usize])
-        try b.appendByte('.')
-        return b.append(ds[n as usize..])
-    }
-    if -6 < n && n <= 0 {
-        try b.append("0.")
-        var z = -n
-        while z > 0 {
-            try b.appendByte('0')
-            z -= 1
-        }
-        return b.append(ds)
-    }
-    try b.appendByte(ds[0])
-    if d.count > 1 {
-        try b.appendByte('.')
-        try b.append(ds[1..])
-    }
-    try b.appendByte('e')
-    var e = n - 1
-    if e < 0 {
-        try b.appendByte('-')
-        e = -e
-    } else {
-        try b.appendByte('+')
-    }
-    return b.appendInt(e)
+    return b.appendFloatExact(v)
 }
 
 fn newline(b: *mut Builder, indent: usize) AllocError!void {
@@ -831,68 +777,5 @@ fn writeString(b: *mut Builder, s: []u8) AllocError!void {
     try b.appendByte('"')
 }
 
-// The decimal digits of a positive float and where the point goes: the
-// value is 0.DIGITS x 10^point.
-struct Digits {
-    count: usize
-    point: i32
-}
-
-// Writes the shortest digits that `strtod` reads back as exactly `a` (1 to
-// 17 of them; 17 always do) to the start of `out`. `ecvt` rounds `a`
-// correctly to `p` digits, so the first `p` that reads back is the
-// shortest.
-fn shortest(a: f64, out: []mut u8) Digits {
-    var cand = [48]u8{0, ..}
-    var pt = [1]i32{0}
-    var sg = [1]i32{0}
-    var p: usize = 1
-    var point: i32 = 0
-    while true {
-        let raw = aye_std_ecvt(a, p as i32, pt[..].ptr, sg[..].ptr)
-        point = pt[0]
-        cand[0] = '0'
-        cand[1] = '.'
-        var i: usize = 0
-        while i < p {
-            out[i] = raw[i]
-            cand[2 + i] = raw[i]
-            i += 1
-        }
-        cand[2 + p] = 'e'
-        let end = putInt(cand[..], 3 + p, point)
-        cand[end] = 0
-        if p == 17 || strtod(cand[..].ptr, []u8{}.ptr) == a {
-            break
-        }
-        p += 1
-    }
-    return Digits { count: p, point: point }
-}
-
-// Writes the decimal `v` (|v| < 1000) to `buf` from `at`; returns the end.
-fn putInt(buf: []mut u8, at: usize, v: i32) usize {
-    var i = at
-    var x = v
-    if x < 0 {
-        buf[i] = '-'
-        i += 1
-        x = -x
-    }
-    if x >= 100 {
-        buf[i] = '0' + (x / 100) as u8
-        i += 1
-    }
-    if x >= 10 {
-        buf[i] = '0' + ((x / 10) % 10) as u8
-        i += 1
-    }
-    buf[i] = '0' + (x % 10) as u8
-    return i + 1
-}
-
 // `end` is a `char **` in C; std passes null.
 extern fn strtod(s: [*]u8, end: [*]u8) f64
-extern fn aye_std_ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
-extern fn copysign(x: f64, y: f64) f64
-extern fn fabs(x: f64) f64

@@ -1,11 +1,10 @@
 // RFC 8259 valid texts: each is parsed and printed back in a canonical
-// compact form (strings re-escaped, numbers printed with six digits).
+// compact form (strings re-escaped, numbers with their shortest round-trip digits).
 
 import std.heap.Arena
 import std.heap.General
 import std.json
 import std.json.Value
-import std.mem.AllocError
 import std.text
 import std.text.Builder
 
@@ -47,73 +46,6 @@ let CASES =
     \\{"k" : { "n" : [ ] } }
     \\["\u00e9","\ud834\udd1e"]
 
-fn hex(b: *mut Builder, c: u8) AllocError!void {
-    let digits = "0123456789abcdef"
-    try b.append("\\u00")
-    try b.appendByte(digits[(c >> 4) as usize])
-    try b.appendByte(digits[(c & 15) as usize])
-}
-
-fn renderString(b: *mut Builder, s: []u8) AllocError!void {
-    try b.appendByte('"')
-    for c in s {
-        match c {
-            '"' => try b.append("\\\"")
-            '\\' => try b.append("\\\\")
-            '\n' => try b.append("\\n")
-            '\r' => try b.append("\\r")
-            '\t' => try b.append("\\t")
-            0x08 => try b.append("\\b")
-            0x0C => try b.append("\\f")
-            _ => {
-                if c < 0x20 {
-                    try hex(b, c)
-                } else {
-                    try b.appendByte(c)
-                }
-            }
-        }
-    }
-    try b.appendByte('"')
-}
-
-fn render(b: *mut Builder, v: *Value) AllocError!void {
-    match v.* {
-        .Null => try b.append("null")
-        .Bool { value } => {
-            if value {
-                try b.append("true")
-            } else {
-                try b.append("false")
-            }
-        }
-        .Number { value } => try b.appendFloat(value)
-        .String { value } => try renderString(b, value)
-        .Array { items } => {
-            try b.appendByte('[')
-            for i, _ in items {
-                if i > 0 {
-                    try b.appendByte(',')
-                }
-                try render(b, &items[i])
-            }
-            try b.appendByte(']')
-        }
-        .Object { members } => {
-            try b.appendByte('{')
-            for i, _ in members {
-                if i > 0 {
-                    try b.appendByte(',')
-                }
-                try renderString(b, members[i].key)
-                try b.appendByte(':')
-                try render(b, &members[i].value)
-            }
-            try b.appendByte('}')
-        }
-    }
-}
-
 fn show(gpa: *mut General, label: []u8, input: []u8) !void {
     var arena = Arena.init(gpa.allocator())
     defer arena.deinit()
@@ -126,7 +58,7 @@ fn show(gpa: *mut General, label: []u8, input: []u8) !void {
         @println(out.bytes())
         return
     }
-    try render(&mut out, &v)
+    try json.write(&mut out, &v)
     @println(out.bytes())
 }
 
