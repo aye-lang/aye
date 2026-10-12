@@ -1,0 +1,47 @@
+// `@targetOs()`: only the branch for the target is built, so a branch may
+// call C functions that the other targets lack (`getpid` and `sysconf` are
+// not in wasm32-freestanding; `aye_test_nowhere` is in no library, and no
+// target is both wasi and macOS).
+
+extern fn getpid() i32
+extern fn sysconf(name: i32) i64
+extern fn aye_test_nowhere() i32
+
+fn processors() i64 {
+    // _SC_NPROCESSORS_ONLN
+    if @targetOs() is .macos {
+        return sysconf(58)
+    } else if @targetOs() is .linux {
+        return sysconf(84)
+    }
+    return 1
+}
+
+fn nowhere() i32 {
+    return aye_test_nowhere()
+}
+
+fn kind() []u8 {
+    return match @targetOs() {
+        .macos, .linux => "unix",
+        .wasi => "wasi",
+        .freestanding => "bare",
+    }
+}
+
+pub fn main() {
+    let wasm = @targetOs() is .wasi || @targetOs() is .freestanding
+    if wasm {
+        @println(@tagName(@targetOs()))
+    } else {
+        @println("native")
+    }
+    if !(@targetOs() is .wasi) && !(@targetOs() is .freestanding) {
+        @println(getpid() > 0)
+        @println(processors() > 0)
+    } else if @targetOs() is .wasi && @targetOs() is .macos {
+        @println(nowhere())
+    }
+    @println(kind())
+    @println(@targetOs() is .linux || @targetOs() is .macos)
+}

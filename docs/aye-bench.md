@@ -119,3 +119,57 @@ On Linux the pool is 1.7x the thread per connection at `-c 64` (about 0.8x Go, f
 (4 cores, the table at the top) is still to do.
 
 2026-10-11 O7.4a (macOS, local, load 5 to 8): one arena per keep-alive connection, reset after each request, instead of one per request. `ab -k -c 64 -n 100000`, median of 3, over 3 to 4 rounds: before 119k req/s (rounds 116.6k to 121.8k), after 124k (123.6k to 125.3k; one round at 66k while another job ran); `-c 1`: 48.0k to 48.9k before, 43.2k to 48.4k after. Within the noise: the hello handler allocates little, so the saving is not visible here.
+
+## 2026-10-12 slow handlers (O3.9b, Ubuntu 24.04 cloud VM)
+
+O3.9b lets another worker take the connections of a worker whose handler runs for more than 20 ms (docs/decisions.md). Same VM shape
+as the F5.9 table (`nproc` 4, Linux 6.18.44 Firecracker, Ubuntu 24.04), `scripts/bench/hello_http.aye` built `--mode fast`, the
+commands of `scripts/bench/run.sh` (`ab -k -c 64 -n 200000` three times after 1000 warm-up requests; `-c 1 -n 50000` once), then
+`ab -c 64 -n 50000` without `-k`. "before" is `e643c63` (main), "after" this branch. Three passes (before/after, before/after,
+after/before), load average 0.7 to 2.5 (this session only; nothing else ran). No failed requests anywhere.
+
+| pass | server | -c 64 runs (req/s) | median | -c 1 req/s | no -k, -c 64 req/s |
+|---|---|---|---|---|---|
+| 1 | before | 93044 / 81993 / 85797 | 85797 | 15948 | 9202 |
+| 1 | after | 95147 / 96498 / 89326 | 95147 | 16131 | 9202 |
+| 2 | before | 100957 / 105847 / 90160 | 100957 | 16952 | 9720 |
+| 2 | after | 87722 / 99042 / 87953 | 87953 | 15299 | 9290 |
+| 3 | after | 86286 / 92481 / 100982 | 92481 | 16861 | 9889 |
+| 3 | before | 88315 / 96069 / 99632 | 96069 | 17620 | 9802 |
+
+Median of the pass medians: before 96069, after 92481 (-3.7%); `-c 1` 16952 and 16131 (-4.8%). The passes disagree in sign
+(+11%, -13%, -3.7%), so the change is inside the run-to-run noise of this VM (about ±10%), under the 10% limit.
+
+Thundering herd: without `-k` (`ab -c 64 -n 50000`, three runs) the hello server does 15214 / 16227 / 16069 req/s with
+`workers = 1` and 9392 / 9829 / 9226 with the default 4 workers: every worker `poll`s the listener, so each new connection wakes
+all of them and only one accepts (`tryAccept`); 4 workers are 42% slower than 1 for a new connection per request. Proposed
+follow-up: one listener per worker with `SO_REUSEPORT` on Linux (the kernel picks the worker), or an accept hand-off.
+
+## 2026-10-12 accept herd (O3.9c, Ubuntu 24.04 cloud VM)
+
+O3.9c gives each `std.http` worker its own listener on Linux (`SO_REUSEPORT`, docs/decisions.md), so the kernel hands a new
+connection to one worker instead of waking all four. `nproc` 4, Linux 6.18.44 Firecracker, Ubuntu 24.04, load average 1.9 to
+2.6 (this session only), `scripts/bench/hello_http.aye` built `--mode fast`, 1000 `-k` warm-up requests, then `ab -c 64 -n
+100000` without `-k` three times and `ab -k -c 64 -n 200000` three times (the `run.sh` command). "before" is `228c89a` (main),
+"after" this branch. Six passes, alternating order; passes 1 and 4 ran only one side. No failed requests anywhere.
+
+| pass | server | no -k, -c 64 runs (req/s) | median | -k -c 64 runs (req/s) | median |
+|---|---|---|---|---|---|
+| 1 | before | 9066 / 8982 / 9025 | 9025 | 108560 / 107927 / 112898 | 108560 |
+| 1 | after | 12534 / 12145 / 12172 | 12172 | 87143 / 86187 / 85724 | 86187 |
+| 2 | before | 9121 / 9479 / 9188 | 9188 | 110731 / 106086 / 93067 | 106086 |
+| 2 | after | 10728 / 13046 / 12479 | 12479 | 90591 / 89993 / 100163 | 90591 |
+| 3 | before | 9441 / 8960 / 9077 | 9077 | 93826 / 90471 / 82150 | 90471 |
+| 3 | after | 11920 / 12259 / 12130 | 12130 | 97274 / 105949 / 101287 | 101287 |
+| 4 | after | 12509 / 12524 / 13351 | 12524 | 96494 / 99185 / 91816 | 96494 |
+| 5 | after | 11909 / 13386 / 13111 | 13111 | 85065 / 87112 / 102800 | 87112 |
+| 5 | before | 8970 / 9138 / 9253 | 9138 | 109480 / 92747 / 90761 | 92747 |
+| 6 | before | 9280 / 9344 / 8990 | 9280 | 93895 / 108970 / 103002 | 103002 |
+| 6 | after | 12484 / 13046 / 12441 | 12484 | 91049 / 107041 / 99284 | 99284 |
+
+Median of the pass medians: without `-k` 9138 → 12482 req/s (+37%); with `-k` 103002 → 93543 (-9.2%, under the 10% limit).
+The paired `-k` passes disagree in sign (-15%, +12%, -6%, -3.6%), inside this VM's ±10% noise, but the after side is lower more
+often than not. A likely cause: the kernel hashes the 64 keep-alive connections over the four listeners, so some worker gets
+more than 16, where the herd let an idle worker win them. Still below `workers = 1` (16.1k in O3.9b) without `-k`: each
+connection costs a `makeOpen` under the server-wide `openLock` and a `General` of its own. Accepting up to 16 waiting
+connections per wake instead of one measured the same (12706 / 104698 in one pass) and was dropped.

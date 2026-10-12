@@ -53,6 +53,18 @@ pub enum Os {
     Freestanding,
 }
 
+impl Os {
+    /// The tag of the OS in `sema::TARGET_OS` (`@targetOs()`).
+    pub fn tag(self) -> usize {
+        match self {
+            Os::Macos => 0,
+            Os::Linux => 1,
+            Os::Wasip1 => 2,
+            Os::Freestanding => 3,
+        }
+    }
+}
+
 /// What a program is built for (`--target`).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Target {
@@ -525,7 +537,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
     let links = linked(&typed, target, &no_link)?;
-    let ir = oir::lower(&typed, &links);
+    let ir = oir::lower(&typed, &links, target.os.tag());
     let (c, parts) = cgen::emit(
         &ir,
         &file_names(&checked.files),
@@ -637,7 +649,7 @@ pub fn compile_tests_to_c(
     );
     let typed = checked.result?;
     let links = linked(&typed, target, &no_link)?;
-    let ir = oir::lower(&typed, &links);
+    let ir = oir::lower(&typed, &links, target.os.tag());
     let files = file_names(&checked.files);
     let mut dirs: Vec<PathBuf> = Vec::new();
     for f in checked.files.iter().filter(|f| !f.std && !f.dep) {
@@ -1394,8 +1406,10 @@ fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
         cmd.arg("-pthread");
     } else if link {
         // wasm-ld's stack is 64 KiB, with no guard: 8 MiB, like a native
-        // main thread's.
-        cmd.arg("-Wl,-z,stack-size=8388608");
+        // main thread's. It is placed first, at addresses 0 to
+        // `__global_base`: the prologue check of `AYE_STACK_CHECK` relies
+        // on that.
+        cmd.args(["-Wl,-z,stack-size=8388608", "-Wl,--stack-first"]);
     }
     // No libc and no entry point: the prelude has its own runtime, and the
     // exported functions are the roots. An `extern fn` without a body (or a
@@ -1413,10 +1427,28 @@ fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
     if !link && !p.target.is_wasm() && !p.target.is_host() {
         cmd.arg("-ffreestanding");
     }
+    if link {
+        let sysroot = std::env::var_os("AYE_SYSROOT").map(PathBuf::from);
+        cmd.args(cross_link_args(p.target, host_target(), sysroot.as_deref()));
+    }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags())
         .args(&p.cflags);
     Ok(cmd)
+}
+
+/// The flags that link for a Linux `target` on a macOS `host`: the Linux
+/// sysroot (`AYE_SYSROOT`: a copy of the target's `/usr/include`, `/usr/lib`
+/// and `/lib`) and lld, since Apple's ld64 links only Mach-O. None without a
+/// sysroot (clang then fails, and the error suggests `-c`).
+fn cross_link_args(target: &Target, host: &Target, sysroot: Option<&Path>) -> Vec<String> {
+    match sysroot {
+        Some(dir) if target.os == Os::Linux && host.os == Os::Macos => vec![
+            format!("--sysroot={}", dir.display()),
+            "-fuse-ld=lld".to_string(),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 /// The libraries at the end of a clang command that links.
@@ -1446,7 +1478,14 @@ fn clang_failed(p: &CProgram, link: bool) -> String {
     }
     if !p.target.is_host() {
         let hint = if link {
-            "; `aye build -c` compiles to an object file without linking, which needs no sysroot"
+            if p.target.os == Os::Linux
+                && host_target().os == Os::Macos
+                && std::env::var_os("AYE_SYSROOT").is_none()
+            {
+                "; to link, set AYE_SYSROOT to a Linux sysroot (lld links); `aye build -c` compiles to an object file without linking, which needs no sysroot"
+            } else {
+                "; `aye build -c` compiles to an object file without linking, which needs no sysroot"
+            }
         } else {
             ""
         };
@@ -1461,6 +1500,24 @@ fn clang_failed(p: &CProgram, link: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cross_link_args_for_linux_from_macos() {
+        let t = |n| find_target(n).unwrap();
+        let dir = Path::new("/sr");
+        assert_eq!(
+            cross_link_args(t("x86_64-linux"), t("aarch64-macos"), Some(dir)),
+            ["--sysroot=/sr", "-fuse-ld=lld"]
+        );
+        assert_eq!(
+            cross_link_args(t("aarch64-linux"), t("x86_64-macos"), Some(dir)),
+            ["--sysroot=/sr", "-fuse-ld=lld"]
+        );
+        assert!(cross_link_args(t("x86_64-linux"), t("aarch64-macos"), None).is_empty());
+        assert!(cross_link_args(t("x86_64-linux"), t("aarch64-linux"), Some(dir)).is_empty());
+        assert!(cross_link_args(t("x86_64-macos"), t("aarch64-macos"), Some(dir)).is_empty());
+        assert!(cross_link_args(t("wasm32-wasip1"), t("aarch64-macos"), Some(dir)).is_empty());
+    }
 
     #[test]
     fn link_flags_for_frameworks_libraries_and_packages() {

@@ -95,6 +95,9 @@ imported), so `not-found.aye` is fine. Each role has its own function
 name (`page`, `layout`, `notFound`, `get`, `post`, ...), so the files of
 one directory never clash (#26). A directory with both `page.aye` and a
 `get` in `route.aye` is an error from the generator, as in Next.js.
+Any other `.aye` file in a route directory (a `helper.aye` beside
+`page.aye`) belongs to no module and is an error from the generator; shared
+code goes in a module outside `app/` (`lib/`), imported by the route files.
 
 Options:
 
@@ -270,8 +273,9 @@ read timeouts through `poll`). Options:
   writes, keep-alive with an idle timeout, a cap on connections (503
   past it). Each connection thread has its own `General` (allocators are
   not thread-safe) and makes an `Arena` per request. Shared app state is
-  a module-level `var` behind a `std.sync.Mutex` (globals exist, spec
-  §4; there are no closures to carry it).
+  a module-level `var` behind a `std.sync.Mutex`, itself a global
+  (`var lock = Mutex.init()`, O1.21; globals exist, spec §4; there are
+  no closures to carry it).
 - **B. N threads, each with a kqueue/epoll loop and a `std.coro`
   coroutine per connection.** A read that would block yields to the
   loop. Handlers stay blocking-style code, because the coroutines are
@@ -318,8 +322,8 @@ macOS and Linux). **Recommendation: restart and poll**, as above.
 **Out of the framework's scope.** C libraries are first-class (design
 principle 4): SQLite through `@cimport("sqlite3.h")`, as O3.7 shows in
 `tests/ffi/`, with no framework API around it. The example app keeps its
-posts in a file it reads at start-up and its form submissions in memory
-behind a `Mutex`. A database layer is a later decision, if ever.
+posts in a file it reads on the first request that needs them and its
+form submissions in memory behind a global `Mutex`. A database layer is a later decision, if ever.
 
 ## 7. Testing
 
@@ -439,8 +443,8 @@ cargo test --test framework
 writes `.web/` as in section 1; the hello app's routes move to
 `app/page.aye`, `app/about/page.aye`, `app/not-found.aye`. The test runs
 `web gen`, then `aye build`, and checks `/`, `/about` and an unknown
-path. Symlinks are made with an `extern fn symlink` from libc until std
-has one (gap list below). `--web` goes away with O4.2.
+path. Symlinks are made with `std.fs.symlink` (and read back with
+`std.fs.readLink`, O1.27). `--web` goes away with O4.2.
 
 **F1.3 (needs F1.2, O3.1).** `app/api/items/[id]/route.aye` with
 `pub fn get`; the transcript checks `200`, `Content-Type:
@@ -469,7 +473,7 @@ meets them:
    take the port back at once. (O1.3, O1.4, F1.1, F3)
 5. **`Arena.reset`** keeping its first block, so a connection reuses one
    arena per request instead of mapping new memory each time. (F1.1, O1.7)
-6. **`std.fs.symlink`** (and `readLink`): not in O1.5's list. (F1.2)
+6. **`std.fs.symlink`** and **`readLink`**: done (O1.27). (F1.2)
 7. **Errors carry no payload.** A 400 that says which field was wrong
    goes through the response (`res.status`, a body), not the error;
    fine, but worth a `docs/practices/` entry when F2 writes forms.

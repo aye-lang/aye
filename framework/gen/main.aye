@@ -216,7 +216,6 @@ fn absolute(alloc: Allocator, p: []u8) ![]u8 {
     var buf = try alloc.alloc(0 as u8, 4096)
     let cwd = getcwd(buf.ptr, buf.len) orelse {
         die("cannot read the current directory", "", "")
-        return p
     }
     return path.join(alloc, cwd[0..strlen(cwd)], p)
 }
@@ -299,16 +298,13 @@ fn buildIsland(alloc: Allocator, island: []u8, wasm: []u8) bool {
     let argv = [7][]u8{bin, "build", "--target", "wasm32-freestanding", island, "-o", wasm}
     var child = process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Inherit, Stdio.Pipe) catch |err| {
         die("cannot run aye (set AYE to its path)", bin, "")
-        return false
     }
     let msg = child.stderr.?.readAll(alloc) catch |err| {
         die("cannot read the output of aye build", island, "")
-        return false
     }
     child.stderr.?.close()
     let status = child.wait() catch |err| {
         die("cannot wait for aye build", island, "")
-        return false
     }
     if status.success() {
         return true
@@ -317,7 +313,6 @@ fn buildIsland(alloc: Allocator, island: []u8, wasm: []u8) bool {
         return false
     }
     die("building the island failed", island, msg)
-    return false
 }
 
 fn put(alloc: Allocator, file: []u8, content: []u8) !void {
@@ -489,7 +484,6 @@ fn wrapped(alloc: Allocator, pages: []Page, i: usize, f: []u8, notFound: bool) b
     }
     let found = layouts(alloc, pages, pages[i].dir) catch |e| {
         die("out of memory", "", "")
-        return false
     }
     return found.len > 0
 }

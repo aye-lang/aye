@@ -21,7 +21,9 @@
 // wasm instructions in the runtime. Any other import is a function that
 // throws when called. The exit status is the result of `aye_main`
 // (nonzero when `main` returned an error); a trap (`exit`, after
-// flushing) exits 1.
+// flushing) exits 1. When V8 runs out of its own call stack (a RangeError,
+// before the program's stack is used up), the native stack overflow panic
+// message is printed and the exit status is 134.
 import { readFile } from 'node:fs/promises';
 import { writeSync } from 'node:fs';
 
@@ -97,6 +99,9 @@ try {
     process.exitCode = 134;
   } else if (e instanceof WebAssembly.RuntimeError && e.message === 'unreachable') {
     process.exitCode = 1;
+  } else if (e instanceof RangeError && e.message === 'Maximum call stack size exceeded') {
+    process.stderr.write('panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)\n');
+    process.exitCode = 134;
   } else {
     console.error(e);
     process.exitCode = 1;

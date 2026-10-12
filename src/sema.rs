@@ -167,6 +167,10 @@ pub enum Type {
     Bool,
     /// Result type of functions without a return type. Not nameable.
     Void,
+    /// `noreturn`: the result of a function type whose calls never come
+    /// back (`fn([]u8) noreturn`). Only a function type's result; a call
+    /// through such a value is `void`.
+    Never,
     Array(Box<Type>, u64),
     /// `simd[N]T`: `N` lanes (a power of two, 2 to 64) of a number or
     /// `bool` (a mask, from a comparison), a C vector.
@@ -295,6 +299,7 @@ impl fmt::Display for Type {
             Type::Float(FloatTy::F64) => f.write_str("f64"),
             Type::Bool => f.write_str("bool"),
             Type::Void => f.write_str("void"),
+            Type::Never => f.write_str("noreturn"),
             Type::Array(t, n) => write!(f, "[{n}]{t}"),
             Type::Simd(t, n) => write!(f, "simd[{n}]{t}"),
             Type::Slice(t, false) => write!(f, "[]{t}"),
@@ -440,6 +445,12 @@ pub struct StructDef {
     pub is_union: bool,
 }
 
+/// The enum of `@targetOs()`; the `@` keeps it from clashing with a
+/// program's names (it cannot be written as a type).
+pub const TARGET_OS_ENUM: &str = "@TargetOs";
+/// The variants of `TARGET_OS_ENUM`, by tag.
+pub const TARGET_OS: [&str; 4] = ["macos", "linux", "wasi", "freestanding"];
+
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
@@ -460,6 +471,8 @@ pub struct ExternFn {
     pub ret: Type,
     /// Ends with `...`.
     pub variadic: bool,
+    /// Declared `noreturn`.
+    pub noreturn: bool,
 }
 
 /// A function's name is `f`, `Struct.method` or `test#N`.
@@ -473,6 +486,8 @@ pub struct FnDef {
     pub is_main: bool,
     /// `pub extern fn` with a body: exported to C under its own name.
     pub export: bool,
+    /// Declared `noreturn`: the body never reaches its end or a `return`.
+    pub noreturn: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -606,6 +621,10 @@ pub enum TExprKind {
     /// `@hasLink("name")`: is the library linked? Known when the program
     /// is built, not when it is checked.
     HasLink(String),
+    /// `@targetOs()`: the OS of `--target`, a value of the enum
+    /// `TARGET_OS_ENUM`. Known when the program is built, not when it is
+    /// checked.
+    TargetOs,
     /// `@sizeOf(T)`: the size of `T` in bytes, as C lays it out.
     SizeOf(Type),
     /// `@zeroed(T)`: the all-zero value of the type `ty`.
@@ -826,6 +845,8 @@ struct FnSig {
     link: Option<String>,
     /// A C function whose parameters end with `...`.
     variadic: bool,
+    /// Declared `noreturn`: a call never comes back (its type is `void`).
+    noreturn: bool,
 }
 
 impl FnSig {
@@ -919,6 +940,11 @@ struct Checker<'a> {
     error_names: Vec<String>,
     /// Functions by name: `f`, `Struct.method` and `test#N`.
     fns: HashMap<String, FnSig>,
+    /// The functions declared `noreturn`, by the name a call uses
+    /// (`TExprKind::Call`): a call to one leaves the block.
+    noreturn: HashSet<String>,
+    /// The body being checked is a `noreturn` function's.
+    in_noreturn: bool,
     /// Each function's declaration and context.
     fn_decls: HashMap<String, FnCtx<'a>>,
     /// The receiver of each method (`Struct.method`).
@@ -1065,6 +1091,8 @@ fn run(
         sets: HashMap::from([(ALLOC_ERROR.to_string(), vec!["OutOfMemory".to_string()])]),
         error_names: vec!["OutOfMemory".to_string()],
         fns: HashMap::new(),
+        noreturn: HashSet::new(),
+        in_noreturn: false,
         fn_decls: HashMap::new(),
         recvs: HashMap::new(),
         ifaces: HashMap::new(),
@@ -1223,7 +1251,11 @@ fn expr_type(e: &ast::Expr) -> Option<ast::TypeExpr> {
         ExprKind::Type(t) => return Some(t.clone()),
         _ => return None,
     };
-    Some(ast::TypeExpr { kind, span: e.span })
+    Some(ast::TypeExpr {
+        kind,
+        span: e.span,
+        end: e.end,
+    })
 }
 
 /// Primitive and predeclared type names, for spelling suggestions.
@@ -1418,27 +1450,60 @@ fn match_is_stmt(arms: &[ast::MatchArm]) -> bool {
 
 /// Does every path through `stmts` end in `return` (or, with `or_jumps`,
 /// in `break` or `continue`)?
-fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
+fn block_returns(stmts: &[TStmt], or_jumps: bool, noreturn: &HashSet<String>) -> bool {
+    let leaves = |x: &TExpr| leaves(x, noreturn);
     stmts.iter().any(|s| match &s.kind {
-        TStmtKind::Return(_)
-        | TStmtKind::Expr(TExpr {
-            kind: TExprKind::Unreachable,
-            ..
-        }) => true,
+        TStmtKind::Return(_) => true,
+        TStmtKind::Expr(x) if leaves(x) => true,
         TStmtKind::Break | TStmtKind::Continue => or_jumps,
-        TStmtKind::Block(b) => block_returns(b, or_jumps),
+        TStmtKind::Block(b) => block_returns(b, or_jumps, noreturn),
         TStmtKind::If { then, els, .. } | TStmtKind::IfErr { then, els, .. } => {
-            block_returns(then, or_jumps) && block_returns(els, or_jumps)
+            block_returns(then, or_jumps, noreturn) && block_returns(els, or_jumps, noreturn)
         }
         TStmtKind::Expr(TExpr {
             kind: TExprKind::Match { arms, .. },
             ..
         }) => arms.iter().all(|a| match &a.body {
-            TArmBody::Block(b) => block_returns(b, or_jumps),
-            TArmBody::Expr(x) => matches!(x.kind, TExprKind::Unreachable),
+            TArmBody::Block(b) => block_returns(b, or_jumps, noreturn),
+            TArmBody::Expr(x) => leaves(x),
         }),
         _ => false,
     })
+}
+
+/// Does `x` never come back: `unreachable`, or a call to a `noreturn`
+/// function (by name or through a `fn(..) noreturn` value)?
+fn leaves(x: &TExpr, noreturn: &HashSet<String>) -> bool {
+    match &x.kind {
+        TExprKind::Unreachable => true,
+        TExprKind::Call { name, .. } => noreturn.contains(name),
+        TExprKind::CallValue { callee, .. } => {
+            matches!(&callee.ty, Type::Fn(_, r) if **r == Type::Never)
+        }
+        _ => false,
+    }
+}
+
+/// Is `e` a call (of a function, a method or a function value)?
+fn is_call(e: &ast::Expr) -> bool {
+    matches!(
+        strip_parens(e).kind,
+        ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::CallExpr { .. }
+    )
+}
+
+/// A call that never comes back, as an arm that gives no value: the block
+/// `{ die(..) }`, which leaves like `{ return }`.
+fn leaving_arm(x: TExpr) -> TArmBody {
+    TArmBody::Block(vec![TStmt {
+        span: x.span,
+        kind: TStmtKind::Expr(x),
+    }])
+}
+
+/// Is a function's return type `noreturn`?
+fn is_noreturn(ret: &Option<ast::TypeExpr>) -> bool {
+    matches!(ret, Some(ast::TypeExpr { kind: TypeExprKind::Named(n), .. }) if n == "noreturn")
 }
 
 /// Does block `b` end with an expression that can be a statement (a call,
@@ -1627,11 +1692,10 @@ impl<'a> Checker<'a> {
                 continue;
             }
             if self.top_spans.contains_key(name) {
-                self.report(Error::new(
-                    E0015,
-                    span,
-                    format!("`{name}` is defined more than once"),
-                ));
+                self.report(
+                    Error::new(E0015, span, format!("`{name}` is defined more than once"))
+                        .ending(span.right(name.chars().count() as u32)),
+                );
                 continue;
             }
             self.top_spans.insert(name.clone(), span);
@@ -1725,7 +1789,7 @@ impl<'a> Checker<'a> {
                                     f.name,
                                     s.name,
                                     self.c_hint(ty, true)
-                                )));
+                                )).ending(f.ty.end));
                             }
                         }
                     }
@@ -1737,7 +1801,7 @@ impl<'a> Checker<'a> {
                         self.report(Error::new(E0104, f.span, format!(
                             "a field of the union `{}` cannot have a default value: a literal sets exactly one field",
                             s.name
-                        )));
+                        )).ending(f.name_end));
                     } else if exprs.iter().any(Option::is_some) {
                         let module = module_of(&s.name).to_string();
                         self.default_decls.insert(
@@ -1812,23 +1876,29 @@ impl<'a> Checker<'a> {
                 ast::Item::Struct(s) => {
                     for m in &s.methods {
                         if s.fields.iter().any(|f| f.name == m.name) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!(
-                                    "`{}` is both a field and a method of struct `{}`",
-                                    m.name, s.name
-                                ),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!(
+                                        "`{}` is both a field and a method of struct `{}`",
+                                        m.name, s.name
+                                    ),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         let key = format!("{}.{}", s.name, m.name);
                         if decls.iter().any(|(k, ..)| *k == key) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!("duplicate method `{}` in struct `{}`", m.name, s.name),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!("duplicate method `{}` in struct `{}`", m.name, s.name),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         decls.push((key, m, Some(s.name.clone())));
@@ -1837,23 +1907,29 @@ impl<'a> Checker<'a> {
                 ast::Item::Enum(e) => {
                     for m in &e.methods {
                         if e.variants.iter().any(|v| v.name == m.name) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!(
-                                    "`{}` is both a variant and a method of enum `{}`",
-                                    m.name, e.name
-                                ),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!(
+                                        "`{}` is both a variant and a method of enum `{}`",
+                                        m.name, e.name
+                                    ),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         let key = format!("{}.{}", e.name, m.name);
                         if decls.iter().any(|(k, ..)| *k == key) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!("duplicate method `{}` in enum `{}`", m.name, e.name),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!("duplicate method `{}` in enum `{}`", m.name, e.name),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         decls.push((key, m, Some(e.name.clone())));
@@ -1881,7 +1957,7 @@ impl<'a> Checker<'a> {
                 };
                 for (p, ty) in f.params.iter().zip(&sig.params) {
                     if !self.c_compat(ty, false) {
-                        self.report(Error::new(E0052, p.ty.span, not_c(ty, self)));
+                        self.report(Error::new(E0052, p.ty.span, not_c(ty, self)).ending(p.ty.end));
                     }
                 }
                 if sig.ret != Type::Void && !self.c_compat(&sig.ret, false) {
@@ -1896,6 +1972,7 @@ impl<'a> Checker<'a> {
                         params,
                         ret,
                         variadic,
+                        noreturn: sig.noreturn,
                     });
                 }
                 // One C symbol, one C signature and at most one definition.
@@ -1910,13 +1987,13 @@ impl<'a> Checker<'a> {
                         let msg = format!(
                             "C function `{sym}` is declared twice with different signatures: `{first}` and `{ty}`"
                         );
-                        self.report(Error::new(E0096, f.span, msg));
+                        self.report(Error::new(E0096, f.span, msg).ending(f.name_end));
                     }
                     Some((.., true)) if defined => {
                         let msg = format!(
                             "C function `{sym}` is defined twice: each `pub extern fn` needs its own name"
                         );
-                        self.report(Error::new(E0096, f.span, msg));
+                        self.report(Error::new(E0096, f.span, msg).ending(f.name_end));
                     }
                     Some((.., d)) => *d |= defined,
                     None => {
@@ -2032,6 +2109,9 @@ impl<'a> Checker<'a> {
                 | ast::Item::Link(_)
                 | ast::Item::CImport(_) => {}
             }
+        }
+        if let Some(e) = self.enums.get(TARGET_OS_ENUM) {
+            enums.push(e.clone());
         }
         let globals = self
             .global_decls
@@ -2165,7 +2245,7 @@ impl<'a> Checker<'a> {
                 .and_then(|ty| self.expect(&decl.init, &ty)),
             None => self.value(&decl.init, None),
         }
-        .and_then(|t| Ok((self.fold(&t)?, t.ty)));
+        .and_then(|t| Ok((self.fold_init(&t)?, t.ty)));
         (
             self.vars,
             self.scopes,
@@ -2193,6 +2273,49 @@ impl<'a> Checker<'a> {
         };
         self.globals.insert(name.to_string(), info);
         Ok((ty, decl.mutable))
+    }
+
+    /// The value of a global's initializer `e`: a constant, or a call
+    /// without arguments to a function whose body is one `return` of a
+    /// constant (`Mutex.init()`, O1.21).
+    fn fold_init(&mut self, e: &TExpr) -> Result<ConstVal> {
+        if let TExprKind::Call {
+            name,
+            is_extern: false,
+            args,
+        } = &e.kind
+            && args.is_empty()
+            && let Some(ctx) = self.fn_decls.get(name)
+            && let Some(body) = &ctx.decl.body
+            && let [
+                ast::Stmt {
+                    kind: StmtKind::Return(Some(_)),
+                    ..
+                },
+            ] = body.stmts.as_slice()
+        {
+            let name = name.clone();
+            self.ensure_body(&name, e.span)?;
+            if let Some(Some(def)) = self.bodies.get(&name)
+                && let [
+                    TStmt {
+                        kind: TStmtKind::Return(Some(r)),
+                        ..
+                    },
+                ] = def.body.as_slice()
+            {
+                let r = r.clone();
+                return self.fold(&r).map_err(|x| match x.code {
+                    E0089 => Error::new(
+                        E0089,
+                        e.span,
+                        format!("`{name}` does not return a constant: a global's initializer can call only a function whose body is one `return` of a constant"),
+                    ),
+                    _ => x,
+                });
+            }
+        }
+        self.fold(e)
     }
 
     /// The value of `e`, a global's initializer, computed now.
@@ -2372,7 +2495,7 @@ impl<'a> Checker<'a> {
                 return err(
                     E0089,
                     span,
-                    "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, and array, struct and enum literals (no calls)",
+                    "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, array, struct and enum literals, and a call without arguments to a function that returns one (no other calls)",
                 );
             }
         })
@@ -2478,21 +2601,27 @@ impl<'a> Checker<'a> {
     fn generic_decl(&mut self, f: &'a ast::FnDecl) {
         let g = &f.name;
         if f.is_extern {
-            self.report(Error::new(
-                E0076,
-                f.span,
-                "an `extern fn` cannot have `comptime` parameters",
-            ));
+            self.report(
+                Error::new(
+                    E0076,
+                    f.span,
+                    "an `extern fn` cannot have `comptime` parameters",
+                )
+                .ending(f.name_end),
+            );
         }
         let mut seen: Vec<(&str, Span)> = Vec::new();
         for p in &f.params {
             if !p.comptime {
                 if is_type_fn(f) {
-                    self.report(Error::new(
-                        E0076,
-                        p.span,
-                        "a function that returns `type` can only have `comptime` parameters",
-                    ));
+                    self.report(
+                        Error::new(
+                            E0076,
+                            p.span,
+                            "a function that returns `type` can only have `comptime` parameters",
+                        )
+                        .ending(p.name_end),
+                    );
                 }
                 continue;
             }
@@ -2501,7 +2630,7 @@ impl<'a> Checker<'a> {
                     E0076,
                     p.ty.span,
                     "a `comptime` parameter must have type `type` (other compile-time values are not supported)",
-                ));
+                ).ending(p.ty.end));
             }
             // Other modules' top-level names are checked by module resolution.
             let top = if module_of(g).is_empty() {
@@ -2850,31 +2979,40 @@ impl<'a> Checker<'a> {
         let mut keys: Vec<String> = Vec::new();
         for m in &sdecl.methods {
             if sdecl.fields.iter().any(|f| f.name == m.name) {
-                self.report(Error::new(
-                    E0015,
-                    m.span,
-                    format!(
-                        "`{}` is both a field and a method of struct `{name}`",
-                        m.name
-                    ),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        m.span,
+                        format!(
+                            "`{}` is both a field and a method of struct `{name}`",
+                            m.name
+                        ),
+                    )
+                    .ending(m.name_end),
+                );
                 continue;
             }
             let key = format!("{name}.{}", m.name);
             if keys.contains(&key) {
-                self.report(Error::new(
-                    E0015,
-                    m.span,
-                    format!("duplicate method `{}` in struct `{name}`", m.name),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        m.span,
+                        format!("duplicate method `{}` in struct `{name}`", m.name),
+                    )
+                    .ending(m.name_end),
+                );
                 continue;
             }
             if let Some(p) = m.params.iter().find(|p| p.comptime) {
-                self.report(Error::new(
-                    E0076,
-                    p.span,
-                    "only a top-level function can have `comptime` parameters",
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        p.span,
+                        "only a top-level function can have `comptime` parameters",
+                    )
+                    .ending(p.name_end),
+                );
             }
             self.register(&key, m, Some(name.clone()), Some(g.to_string()));
             keys.push(key);
@@ -2943,7 +3081,9 @@ impl<'a> Checker<'a> {
             .filter(|p| !p.comptime)
             .map(|p| self.resolve_or_report(&p.ty))
             .collect();
+        let noreturn = is_noreturn(&f.ret);
         let ret = match &f.ret {
+            _ if noreturn => Type::Void,
             Some(
                 t @ ast::TypeExpr {
                     kind: TypeExprKind::ErrorUnion(None, payload),
@@ -2956,7 +3096,7 @@ impl<'a> Checker<'a> {
                 };
                 self.report(Error::new(E0076, t.span, format!(
                     "a generic function must spell out its error set: write `ErrorSet!{payload}`, not `!{payload}`"
-                )));
+                )).ending(t.end));
                 Type::Error
             }
             Some(t) => self.resolve_ret(key, f.is_pub, t),
@@ -2978,7 +3118,11 @@ impl<'a> Checker<'a> {
             is_extern: f.is_extern,
             link: f.link.clone(),
             variadic: f.variadic.is_some(),
+            noreturn,
         };
+        if noreturn {
+            self.noreturn.insert(sig.c_key(key));
+        }
         self.fns.insert(key.to_string(), sig.clone());
         if f.body.is_some() {
             self.fn_decls.insert(
@@ -3000,11 +3144,14 @@ impl<'a> Checker<'a> {
         let mut methods: Vec<IfaceMethod> = Vec::new();
         for m in &i.methods {
             if methods.iter().any(|x| x.name == m.name) {
-                self.report(Error::new(
-                    E0015,
-                    m.span,
-                    format!("duplicate method `{}` in interface `{}`", m.name, i.name),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        m.span,
+                        format!("duplicate method `{}` in interface `{}`", m.name, i.name),
+                    )
+                    .ending(m.name_end),
+                );
                 continue;
             }
             let mutable = match m.params.first().map(|p| &p.ty.kind) {
@@ -3020,11 +3167,14 @@ impl<'a> Checker<'a> {
                 }
             };
             if let Some(p) = m.params.iter().find(|p| p.comptime) {
-                self.report(Error::new(
-                    E0076,
-                    p.span,
-                    "only a top-level function can have `comptime` parameters",
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        p.span,
+                        "only a top-level function can have `comptime` parameters",
+                    )
+                    .ending(p.name_end),
+                );
                 continue;
             }
             let params = m.params[1..]
@@ -3206,11 +3356,14 @@ impl<'a> Checker<'a> {
         let mut fields: Vec<(String, Type)> = Vec::new();
         for f in decls {
             if fields.iter().any(|(n, _)| *n == f.name) {
-                self.report(Error::new(
-                    E0015,
-                    f.span,
-                    format!("duplicate field `{}` in {owner}", f.name),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        f.span,
+                        format!("duplicate field `{}` in {owner}", f.name),
+                    )
+                    .ending(f.name_end),
+                );
                 continue;
             }
             let ty = self.resolve_or_report(&f.ty);
@@ -3470,6 +3623,7 @@ impl<'a> Checker<'a> {
                             "a function type must spell out its error set (`E!T`)",
                         );
                     }
+                    Some(r) if is_noreturn(&Some(r.clone())) => Type::Never,
                     Some(r) => self.resolve_type(r)?,
                 };
                 Type::Fn(params, Box::new(ret))
@@ -3541,7 +3695,7 @@ impl<'a> Checker<'a> {
             .chain(self.enums.keys())
             .chain(self.sets.keys())
             .chain(self.alias_decls.keys());
-        let named = named.filter(|n| !n.contains(['(', ' ']));
+        let named = named.filter(|n| !n.contains(['(', ' ', '@']));
         TYPE_NAMES
             .iter()
             .copied()
@@ -3679,6 +3833,7 @@ impl<'a> Checker<'a> {
             self.in_test,
             std::mem::take(&mut self.env),
             std::mem::take(&mut self.module),
+            self.in_noreturn,
         );
         let def = self.fn_body(name);
         // A generic's own instance with errors: the generic has errors.
@@ -3699,6 +3854,7 @@ impl<'a> Checker<'a> {
             self.in_test,
             self.env,
             self.module,
+            self.in_noreturn,
         ) = saved;
         self.quiet = saved_quiet;
         self.bodies.insert(name.to_string(), Some(def));
@@ -3730,6 +3886,7 @@ impl<'a> Checker<'a> {
         self.vars.clear();
         self.scopes = vec![HashMap::new()];
         self.ret = sig.ret.clone();
+        self.in_noreturn = sig.noreturn;
         self.loop_depth = 0;
         self.in_defer = false;
         let failures = self.failures;
@@ -3739,13 +3896,29 @@ impl<'a> Checker<'a> {
         }
         let body = self.block(f.body.as_ref().unwrap());
         // A statement with an error may have been the `return`.
-        if self.failures == failures && needs_value(&sig.ret) && !block_returns(&body, false) {
+        if self.failures == failures
+            && needs_value(&sig.ret)
+            && !block_returns(&body, false, &self.noreturn)
+        {
+            self.report(
+                Error::new(
+                    E0050,
+                    f.span,
+                    format!(
+                        "function `{name}` must return a value of type `{}` on every path",
+                        sig.ret
+                    ),
+                )
+                .ending(f.name_end),
+            );
+        }
+        if self.failures == failures && sig.noreturn && !block_returns(&body, false, &self.noreturn)
+        {
             self.report(Error::new(
-                E0050,
+                E0125,
                 f.span,
                 format!(
-                    "function `{name}` must return a value of type `{}` on every path",
-                    sig.ret
+                    "function `{name}` is `noreturn` but can reach the end of its body: end every path with a call to a `noreturn` function (such as `std.os.exit`) or `unreachable`"
                 ),
             ));
         }
@@ -3758,6 +3931,7 @@ impl<'a> Checker<'a> {
             body,
             is_main: name == "main",
             export: f.is_extern,
+            noreturn: sig.noreturn,
         }
     }
 
@@ -3877,8 +4051,13 @@ impl<'a> Checker<'a> {
                 value,
             } if n == "_" && self.lookup(n).is_none() => TStmtKind::Expr(self.value(value, None)?),
             StmtKind::Assign { target, op, value } => {
-                let target = self.value(target, None)?;
-                self.check_mutable(&target, false)?;
+                let ast_target = target;
+                let target = self.value(ast_target, None)?;
+                self.check_mutable(&target, false)
+                    .map_err(|err| match err.end {
+                        None if err.span == ast_target.span => err.ending(ast_target.end),
+                        _ => err,
+                    })?;
                 let value = self.expect(value, &target.ty)?;
                 let op = match op {
                     AssignOp::Set => None,
@@ -3917,7 +4096,7 @@ impl<'a> Checker<'a> {
                         self.report(Error::new(E0102, *sp, format!(
                             "the condition has type `{}`: there is no value to capture (write `if f() {{ }} else |{ename}| {{ }}`)",
                             u.as_ref().map_or(Type::Error, |u| u.ty.clone())
-                        )));
+                        )).ending(sp.right(n.chars().count() as u32)));
                         self.declare_or_report(n, Type::Error, false, *sp);
                         Err(silent())
                     }
@@ -4145,6 +4324,13 @@ impl<'a> Checker<'a> {
             StmtKind::Return(value) => {
                 if self.in_defer {
                     return err(E0048, s.span, "`return` is not allowed inside `defer`");
+                }
+                if self.in_noreturn {
+                    return err(
+                        E0125,
+                        s.span,
+                        "`return` in a `noreturn` function: it must never come back to its caller",
+                    );
                 }
                 let ret = self.ret.clone();
                 match (value, &ret) {
@@ -4579,6 +4765,39 @@ impl<'a> Checker<'a> {
         })
     }
 
+    /// An arm where a `ty` value is expected (`orelse`, `catch`, a value
+    /// `match`): like `expect`, except that a call to a `noreturn` function
+    /// fits any type and gives no value (`x orelse die("..")`).
+    fn expect_arm(&mut self, e: &ast::Expr, ty: &Type) -> Result<TArmBody> {
+        if *ty == Type::Error || !is_call(e) {
+            return self.expect(e, ty).map(TArmBody::Expr);
+        }
+        match self.arm_value(e, Some(Self::hint(e, ty)))? {
+            TArmBody::Expr(t) => {
+                self.coerce(t, ty)
+                    .map(TArmBody::Expr)
+                    .map_err(|err| match err.end {
+                        None if err.span == e.span => err.ending(e.end),
+                        _ => err,
+                    })
+            }
+            leaving => Ok(leaving),
+        }
+    }
+
+    /// `value` for an arm: a call that never comes back is a block that
+    /// leaves (`leaving_arm`) rather than a `void` value.
+    fn arm_value(&mut self, e: &ast::Expr, expected: Option<&Type>) -> Result<TArmBody> {
+        if !is_call(e) {
+            return self.value(e, expected).map(TArmBody::Expr);
+        }
+        let t = self.expr(e, expected)?;
+        if leaves(&t, &self.noreturn) {
+            return Ok(leaving_arm(t));
+        }
+        self.value_of(t).map(TArmBody::Expr)
+    }
+
     /// The type to check `e` with when `ty` is expected: `T` for `?T`, so
     /// that the value is wrapped; `null` and `match` need `?T` itself.
     fn hint<'t>(e: &ast::Expr, ty: &'t Type) -> &'t Type {
@@ -4605,6 +4824,31 @@ impl<'a> Checker<'a> {
     fn coerce(&mut self, t: TExpr, ty: &Type) -> Result<TExpr> {
         if t.ty == *ty {
             return Ok(t);
+        }
+        // A `fn(A) noreturn` is a `fn(A)` that never comes back.
+        let never_fits = |have: &Type, want: &Type| {
+            matches!((have, want), (Type::Fn(hp, hr), Type::Fn(wp, wr))
+                if hp == wp && **hr == Type::Never && **wr == Type::Void)
+        };
+        if never_fits(&t.ty, ty) {
+            return Ok(TExpr {
+                ty: ty.clone(),
+                ..t
+            });
+        }
+        if let Type::Optional(inner) = ty
+            && never_fits(&t.ty, inner)
+        {
+            let t = TExpr {
+                ty: (**inner).clone(),
+                ..t
+            };
+            let span = t.span;
+            return Ok(TExpr {
+                kind: TExprKind::Some(Box::new(t)),
+                ty: ty.clone(),
+                span,
+            });
         }
         if let Type::Optional(inner) = ty {
             let wrap = |t: TExpr| {
@@ -4836,6 +5080,11 @@ impl<'a> Checker<'a> {
     /// not an unhandled error union).
     fn value(&mut self, e: &ast::Expr, expected: Option<&Type>) -> Result<TExpr> {
         let t = self.expr(e, expected)?;
+        self.value_of(t)
+    }
+
+    /// `t`, checked as a value: not `void`, its errors handled.
+    fn value_of(&mut self, t: TExpr) -> Result<TExpr> {
         if t.ty == Type::Error {
             return Err(silent());
         }
@@ -5132,7 +5381,8 @@ impl<'a> Checker<'a> {
                         name: sig.c_key(name),
                         is_extern: sig.is_extern,
                     };
-                    (kind, Type::Fn(sig.params, Box::new(sig.ret)))
+                    let ret = if sig.noreturn { Type::Never } else { sig.ret };
+                    (kind, Type::Fn(sig.params, Box::new(ret)))
                 }
                 None if self.generics.contains_key(name) => {
                     return err(
@@ -5427,6 +5677,28 @@ impl<'a> Checker<'a> {
                     );
                 }
                 (TExprKind::HasLink(lib), Type::Bool)
+            }
+            ExprKind::Builtin { name, args } if name == "targetOs" => {
+                if !args.is_empty() {
+                    return err(
+                        E0022,
+                        span,
+                        "`@targetOs` takes no arguments: `if @targetOs() is .linux { .. }`",
+                    );
+                }
+                self.enums
+                    .entry(TARGET_OS_ENUM.to_string())
+                    .or_insert_with(|| EnumDef {
+                        name: TARGET_OS_ENUM.to_string(),
+                        variants: TARGET_OS
+                            .iter()
+                            .map(|v| VariantDef {
+                                name: v.to_string(),
+                                fields: vec![],
+                            })
+                            .collect(),
+                    });
+                (TExprKind::TargetOs, Type::Enum(TARGET_OS_ENUM.to_string()))
             }
             ExprKind::Builtin { name, args }
                 if matches!(
@@ -5854,7 +6126,8 @@ impl<'a> Checker<'a> {
                         E0041,
                         *variant_span,
                         format!("enum `{ename}` has no variant `{variant}`"),
-                    );
+                    )
+                    .ending(variant_span.right(variant.chars().count() as u32));
                     return Err(suggest(
                         e,
                         variant,
@@ -5900,6 +6173,13 @@ impl<'a> Checker<'a> {
                         );
                     }
                 };
+                // Like `catch`: where the payload with `mut` dropped is
+                // expected (`let s: []u8 = ...` on a `?[]mut u8`), that is
+                // the type, so the fallback may be a read-only `[]u8`.
+                let payload = match expected {
+                    Some(want) if drops_mut(&payload, want) => want.clone(),
+                    _ => payload,
+                };
                 let failures = self.failures;
                 // A fallback that is itself a `?T` (`a orelse b orelse c`)
                 // makes the result a `?T`.
@@ -5908,7 +6188,7 @@ impl<'a> Checker<'a> {
                     ArmBody::Block(b) => {
                         let stmts = self.value_block(b, &payload);
                         if self.failures == failures
-                            && !block_returns(&stmts, true)
+                            && !block_returns(&stmts, true, &self.noreturn)
                             && !gives_value(&stmts)
                         {
                             Err(Error::new(
@@ -5917,7 +6197,7 @@ impl<'a> Checker<'a> {
                                 format!(
                                     "this `orelse` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
                                 ),
-                            ))
+                            ).ending(e.end))
                         } else {
                             Ok(TArmBody::Block(stmts))
                         }
@@ -5926,13 +6206,13 @@ impl<'a> Checker<'a> {
                         ty = t.ty.clone();
                         self.expect(x, &ty).map(TArmBody::Expr)
                     }
-                    ArmBody::Expr(x) => match self.value(x, Some(Self::hint(x, &payload))) {
-                        Ok(v) if v.ty == t.ty && v.ty != payload => {
+                    ArmBody::Expr(x) => match self.arm_value(x, Some(Self::hint(x, &payload))) {
+                        Ok(TArmBody::Expr(v)) if v.ty == t.ty && v.ty != payload => {
                             ty = t.ty.clone();
                             Ok(TArmBody::Expr(v))
                         }
-                        Ok(v) => self.coerce(v, &payload).map(TArmBody::Expr),
-                        Err(e) => Err(e),
+                        Ok(TArmBody::Expr(v)) => self.coerce(v, &payload).map(TArmBody::Expr),
+                        other => other,
                     },
                 };
                 (
@@ -6173,7 +6453,8 @@ impl<'a> Checker<'a> {
                     if self.global_decls.iter().any(|g| g.name == *name) {
                         return err(E0017, span, format!("`{name}` is a constant, not a struct"));
                     }
-                    let e = Error::new(E0017, span, format!("unknown struct `{name}`"));
+                    let e = Error::new(E0017, span, format!("unknown struct `{name}`"))
+                        .ending(span.right(name.chars().count() as u32));
                     let structs = self
                         .structs
                         .keys()
@@ -6761,6 +7042,8 @@ impl<'a> Checker<'a> {
     ) -> Result<TExpr> {
         let shown = what.map_or("this value".to_string(), |w| format!("`{w}`"));
         let (params, ret) = match &callee.ty {
+            // A `noreturn` call is `void`; `leaves` sees the callee's type.
+            Type::Fn(params, ret) if **ret == Type::Never => (params.clone(), Type::Void),
             Type::Fn(params, ret) => (params.clone(), (**ret).clone()),
             Type::Optional(inner) if matches!(**inner, Type::Fn(..)) => {
                 return err(
@@ -7684,17 +7967,22 @@ impl<'a> Checker<'a> {
         {
             let at = fields.get(1).map_or(span, |f| f.span);
             let first = def.first().map_or("field", |(n, _)| n.as_str());
-            return err(
+            let mut e = Error::new(
                 E0104,
                 at,
                 format!(
                     "a literal of the union `{s}` sets exactly one field: `{s} {{ {first}: ... }}`"
                 ),
             );
+            if let Some(f) = fields.get(1) {
+                e = e.ending(f.span.right(f.name.chars().count() as u32));
+            }
+            return Err(e);
         }
         for f in fields {
             let Some(index) = def.iter().position(|(n, _)| *n == f.name) else {
-                let e = Error::new(E0038, f.span, format!("{owner} has no field `{}`", f.name));
+                let e = Error::new(E0038, f.span, format!("{owner} has no field `{}`", f.name))
+                    .ending(f.span.right(f.name.chars().count() as u32));
                 return Err(suggest(
                     e,
                     &f.name,
@@ -7781,7 +8069,7 @@ impl<'a> Checker<'a> {
                 if payload != Type::Void
                     && !is_stmt
                     && self.failures == failures
-                    && !block_returns(&stmts, true)
+                    && !block_returns(&stmts, true, &self.noreturn)
                     && !gives_value(&stmts)
                 {
                     Err(Error::new(
@@ -7790,13 +8078,13 @@ impl<'a> Checker<'a> {
                         format!(
                             "this `catch` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
                         ),
-                    ))
+                    ).ending(e.end))
                 } else {
                     Ok(TArmBody::Block(stmts))
                 }
             }
             ArmBody::Expr(x) if payload == Type::Void => self.expr_stmt(x).map(TArmBody::Expr),
-            ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
+            ArmBody::Expr(x) => self.expect_arm(x, &payload),
         };
         self.scopes.pop();
         let capture = match capture {
@@ -8108,17 +8396,22 @@ impl<'a> Checker<'a> {
             }
             checked[i] = Some(arm);
         }
-        // Arms that all leave (`return`, `break`, `continue`) give no type.
-        let ty = if is_stmt {
-            Type::Void
-        } else {
-            want.unwrap_or(
-                if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))) {
-                    Type::Void
-                } else {
-                    Type::Error
-                },
-            )
+        // Arms that all leave (`return`, `break`, `continue`) give no value,
+        // so such a `match` cannot be used as one.
+        let ty = match want {
+            _ if is_stmt => Type::Void,
+            Some(t) => t,
+            None if checked
+                .iter()
+                .any(|a| matches!(a.as_ref().unwrap().body, TArmBody::Block(_))) =>
+            {
+                return err(
+                    E0124,
+                    e.span,
+                    "`match` used as a value, but every arm returns, breaks or continues: write it as a statement, or give an arm a value",
+                );
+            }
+            None => Type::Error,
         };
         let arms = checked.into_iter().map(Option::unwrap).collect();
         Ok(TExpr {
@@ -8238,7 +8531,7 @@ impl<'a> Checker<'a> {
                 );
             }
             ArmBody::Expr(x) if is_stmt => TArmBody::Expr(self.expr_stmt(x)?),
-            ArmBody::Expr(x) => TArmBody::Expr(match want {
+            ArmBody::Expr(x) => match want {
                 // The `match` is returned (`return match ...`): the arm is
                 // what `return` takes.
                 Some(t @ Type::ErrorUnion(set, payload)) => {
@@ -8247,11 +8540,15 @@ impl<'a> Checker<'a> {
                         _ => (**payload != Type::Void).then(|| Self::hint(x, payload)),
                     };
                     let v = self.expr(x, hint)?;
-                    self.return_union(v, set, payload)?
+                    if leaves(&v, &self.noreturn) {
+                        leaving_arm(v)
+                    } else {
+                        TArmBody::Expr(self.return_union(v, set, payload)?)
+                    }
                 }
-                Some(t) => self.expect(x, t)?,
-                None => self.value(x, None)?,
-            }),
+                Some(t) => self.expect_arm(x, t)?,
+                None => self.arm_value(x, None)?,
+            },
         };
         Ok(TArm {
             variants: variants.to_vec(),

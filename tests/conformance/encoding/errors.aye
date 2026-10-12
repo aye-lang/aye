@@ -75,4 +75,12 @@ pub fn main() {
     @println(hex(alloc, "0g"))
     @println(hex(alloc, "0x"))
     @println(hex(alloc, "ab c"))
+    // Non-zero trailing bits (RFC 4648 section 3.5).
+    @println(b64(alloc, "QQ=="))
+    @println(b64(alloc, "QR=="))
+    @println(b64(alloc, "QUI="))
+    @println(b64(alloc, "QUJ="))
+    @println(b64url(alloc, "QQ"))
+    @println(b64url(alloc, "QR"))
+    @println(b64url(alloc, "QUJ"))
 }

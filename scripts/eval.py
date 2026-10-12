@@ -42,7 +42,9 @@ SYSTEM_PROMPT = (
     "You are writing a program in Aye, a new compiled programming language "
     "that you have not seen before. Learn Aye only from the `aye` command: "
     "`aye spec` prints the language reference, `aye check <file>` reports "
-    "compile errors, and `aye explain <code>` explains an error code. Do not "
+    "compile errors, `aye explain <code>` explains an error code, and "
+    "`aye doc --signatures <module>` (for example `std.text`) prints the "
+    "public signatures of a standard-library module. Do not "
     "look for Aye sources, examples or docs anywhere else."
 )
 
@@ -218,6 +220,49 @@ def fmt_int(v):
     return "–" if v is None else f"{v:,}"
 
 
+def table_rows(text):
+    """The result rows of the table in `text`: (task, line) in order."""
+    rows = []
+    for line in text.split("\n"):
+        if line.startswith("| ") and not line.startswith("| Task |"):
+            rows.append((line.split("|")[1].strip(), line))
+    return rows
+
+
+def merge_doc(new, old):
+    """`new` (a full doc of the tasks that ran), with the rows of the tasks
+    it lacks kept from `old`, in `old`'s order; rows of tasks that ran are
+    replaced where they stood, new tasks go last."""
+    if old is None:
+        return new
+    fresh = {}
+    for task, line in table_rows(new):
+        fresh.setdefault(task, []).append(line)
+    merged, done = [], set()
+    for task, line in table_rows(old):
+        if task in fresh:
+            if task not in done:
+                merged += fresh[task]
+                done.add(task)
+        else:
+            merged.append(line)
+    for task, ls in fresh.items():
+        if task not in done:
+            merged += ls
+    out, placed = [], False
+    for line in new.split("\n"):
+        if line.startswith("| ") and not line.startswith("| Task |"):
+            if not placed:
+                out += merged
+                placed = True
+        else:
+            out.append(line)
+    text = "\n".join(out)
+    n = len(merged)
+    p = sum(1 for m in merged if m.split("|")[3].strip() == "yes")
+    return re.sub(r"Passed \d+ of \d+ runs\.", f"Passed {p} of {n} runs.", text)
+
+
 def write_doc(results, args, outdir):
     aye_real = os.path.realpath(args.aye)
     built = datetime.datetime.fromtimestamp(os.path.getmtime(aye_real))
@@ -250,14 +295,15 @@ def write_doc(results, args, outdir):
         )
     passed = sum(1 for r in results if r["passed"])
     lines += ["", f"Passed {passed} of {len(results)} runs.", ""]
+    old_doc = None
     findings = f"{FINDINGS}\n\n(Not written yet: read the transcripts.)\n"
     if os.path.exists(DOC):
-        old = open(DOC).read()
+        old = old_doc = open(DOC).read()
         i = old.find(FINDINGS)
         if i >= 0:
             findings = old[i:]
     with open(DOC, "w") as f:
-        f.write("\n".join(lines) + "\n" + findings)
+        f.write(merge_doc("\n".join(lines) + "\n" + findings, old_doc))
 
 
 def main():

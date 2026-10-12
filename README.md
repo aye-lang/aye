@@ -16,7 +16,7 @@ builds it with clang. It implements a first slice of the language (see
 
 Requirements: Rust (cargo), and `clang` on `PATH`. Developed on macOS arm64
 with Apple clang 17. Programs that `@link` a C library find it through
-`pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl and
+`pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl, SQLite (`@cimport("sqlite3.h")`; it ships with macOS, and the dev package on Ubuntu is `libsqlite3-dev`) and
 SDL2 (`brew install sdl2`) and are skipped when `pkg-config` lacks them.
 `@cimport` reads C headers with libclang, which the compiler loads only
 when it needs it (it comes with the Command Line Tools on macOS; on Linux,
@@ -58,6 +58,11 @@ false, so `aye build --no-link libcurl` makes a server without libcurl (its
 `build -c` compiles to an object file (`<name>.o`) without linking; for a
 Linux target on macOS, where clang has no Linux sysroot to link with, it
 needs none (`aye build --target x86_64-linux -c hello.aye`).
+To link a Linux executable on macOS in one step, set `AYE_SYSROOT` to a
+Linux sysroot of that architecture (clang gets `--sysroot` and links with
+lld, `brew install lld`); `scripts/linux-sysroot.sh amd64 <dir>` copies one
+out of an Ubuntu 24.04 container (`AYE_SYSROOT=<dir> aye build --target
+x86_64-linux hello.aye`).
 
 `aye fmt` works on tokens and keeps every comment and line break; it sets
 indentation (4 spaces) and spacing, keeps at most one blank line in a row and

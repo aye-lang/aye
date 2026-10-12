@@ -1,9 +1,16 @@
 // M9.7: in debug and safe mode, running out of stack panics with a message
 // instead of a bare segmentation fault.
+// O2.6a: the base case and the result used as an index keep clang -O2 (fast
+// mode) from turning the recursion into a loop: with no base case it proves
+// `down` never returns and spins forever; with `return down(n + 1) + 1` it
+// turns the recursion into a loop with an accumulator.
 fn down(n: u64) u64 {
     var pad = [16]u64{n, ..}
+    if n == 0xffffffffffffffff {
+        return 0
+    }
     pad[n % 16] = down(n + 1)
-    return pad[n % 16] + 1
+    return pad[pad[n % 16] % 16] + 1
 }
 
 pub fn main() {

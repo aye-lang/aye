@@ -54,6 +54,28 @@ pub fn main() !void {
     @println(killed.signal)
     @println(killed.success())
 
+    // killHard: SIGKILL (9).
+    var hard = try process.spawn(alloc, argv5[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit)
+    try hard.killHard()
+    @println((try hard.wait()).signal)
+
+    // A custom environment and working directory.
+    let argvEnv = [_][]u8{"/usr/bin/env"}
+    let envs = [_][]u8{"AYE_O16A=one"}
+    var envChild = try process.spawnWith(alloc, argvEnv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit, process.SpawnOptions { env: envs[..] })
+    let envOut = try envChild.stdout.?.readAll(alloc)
+    @print(envOut)
+    alloc.free(envOut)
+    envChild.stdout.?.close()
+    _ = try envChild.wait()
+    let argvPwd = [_][]u8{"/bin/pwd"}
+    var pwdChild = try process.spawnWith(alloc, argvPwd[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit, process.SpawnOptions { cwd: "/usr" })
+    let pwdOut = try pwdChild.stdout.?.readAll(alloc)
+    @print(pwdOut)
+    alloc.free(pwdOut)
+    pwdChild.stdout.?.close()
+    _ = try pwdChild.wait()
+
     // stderr piped: the shell writes to it.
     let argv6 = [_][]u8{"/bin/sh", "-c", "echo oops >&2"}
     var err = try process.spawn(alloc, argv6[..], Stdio.Inherit, Stdio.Inherit, Stdio.Pipe)
@@ -71,6 +93,12 @@ pub fn main() !void {
     let argv7 = [_][]u8{"/no/such/program"}
     _ = process.spawn(alloc, argv7[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit) catch |e| {
         @println(@tagName(e))
+        let argv8 = [_][]u8{"/bin/pwd"}
+        _ = process.spawnWith(alloc, argv8[..], Stdio.Inherit, Stdio.Inherit, Stdio.Inherit, process.SpawnOptions { cwd: "/no/such/dir" }) catch |e2| {
+            @println(@tagName(e2))
+            return
+        }
+        @println("unreachable")
         return
     }
     @println("unreachable")

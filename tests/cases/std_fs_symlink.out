@@ -3,6 +3,9 @@ symlink
 dir
 statFollow: not found
 hello
+sub/b.txt
+missing
+readLink: not a link
 symlink: exists
 symlink: not found
 false

@@ -1800,12 +1800,12 @@ E0088 = 88 {
 }
 E0089 = 89 {
     "global initializer is not a constant",
-    "A top-level `let` or `var` is initialized when the program is compiled, so its value is built from literals, other `let` constants, operators, `as` casts, and array, struct and enum literals. Calls and `var` globals cannot be used, the arithmetic must not overflow, and a constant cannot be defined in terms of itself. Set other values at run time, in a function.",
-    r#"fn start() i64 {
-    return 10
+    "A top-level `let` or `var` is initialized when the program is compiled, so its value is built from literals, other `let` constants, operators, `as` casts, array, struct and enum literals, and a call without arguments to a function whose body is one `return` of such a value (`Mutex.init()`). Other calls and `var` globals cannot be used, the arithmetic must not overflow, and a constant cannot be defined in terms of itself. Set other values at run time, in a function.",
+    r#"fn start(n: i64) i64 {
+    return n * 2
 }
 
-var counter: i64 = start()
+var counter: i64 = start(5)
 
 pub fn main() {
     @println(counter)
@@ -2688,6 +2688,63 @@ pub fn one() i64 {
 // file: main.aye
 pub fn main() {
     @println("hello")
+}
+"#,
+}
+E0124 = 124 {
+    "`match` value where every arm leaves",
+    "A `match` used as a value (such as `let v = match ...`) needs an arm that gives a value. When every arm is a block that ends in `return`, `break` or `continue`, the `match` never produces one. Write the `match` as a statement, or give an arm a value.",
+    r#"fn pick(n: i64) i64 {
+    let v = match n {
+        0 => {
+            return 1
+        }
+        _ => {
+            return 2
+        }
+    }
+    return v
+}
+
+pub fn main() {
+    @println(pick(0))
+}
+"#,
+    r#"fn pick(n: i64) i64 {
+    let v = match n {
+        0 => {
+            return 1
+        }
+        _ => 2,
+    }
+    return v
+}
+
+pub fn main() {
+    @println(pick(0))
+}
+"#,
+}
+E0125 = 125 {
+    "`noreturn` function that returns",
+    "A function declared `noreturn` never comes back to its caller, so a call to it ends a block like `return`. Its body must not reach its end or a `return`: end every path with a call to another `noreturn` function (such as `std.os.exit`) or `unreachable`.",
+    r#"fn die(msg: []u8) noreturn {
+    @println(msg)
+}
+
+pub fn main() {
+    die("bye")
+}
+"#,
+    r#"import std.os
+
+fn die(msg: []u8) noreturn {
+    @println(msg)
+    os.exit(1)
+}
+
+pub fn main() {
+    die("bye")
 }
 "#,
 }

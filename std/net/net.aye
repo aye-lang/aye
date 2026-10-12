@@ -1,34 +1,34 @@
 // std.net: TCP over IPv4 and IPv6. `listen` gives a `Listener`, whose
 // `accept` gives a `Conn`; `connect` gives a `Conn` too. A host is an IPv4
 // or IPv6 address (`127.0.0.1`, `::1`) or a name, resolved with
-// `getaddrinfo`.
+// `getaddrinfo`. `connectTimeout` is `connect` that gives up after a
+// number of milliseconds.
 //
 // The C constants that differ between macOS and Linux (the layout of
 // `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
-// or SO_NOSIGPIPE) are chosen at run time from `uname`, as
-// `browser/ui/socket.aye` in aye-lang/anyknown does. Writes never raise SIGPIPE: a closed peer
-// is an error.
+// or SO_NOSIGPIPE) are chosen by `@targetOs()` when the program is built.
+// Writes never raise SIGPIPE: a closed peer is an error.
 
 import std.text
 
 pub error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
 pub error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
 pub error AcceptError { AcceptFailed }
-pub error ReadError { TimedOut, ConnectionReset, ReadFailed }
+pub error ReadError { TimedOut, ConnectionReset, WouldBlock, ReadFailed }
 pub error WriteError { ConnectionClosed, WriteFailed }
 
 /// A socket that waits for connections.
 pub struct Listener {
-    fd: i32
+    sock: i32
     portNumber: u16
 
     /// Waits for the next connection.
     pub fn accept(self: Self) AcceptError!Conn {
         while true {
-            let fd = accept(self.fd, null, null)
+            let fd = accept(self.sock, null, null)
             if fd >= 0 {
                 noSigpipe(fd)
-                return Conn { fd: fd }
+                return Conn { sock: fd }
             }
             if aye_std_errno() != EINTR {
                 return AcceptError.AcceptFailed
@@ -37,26 +37,72 @@ pub struct Listener {
         unreachable
     }
 
+    /// The socket's file descriptor, for `poll` (O3.9b). It stays owned by
+    /// the listener: do not close it.
+    pub fn fd(self: Self) i32 {
+        return self.sock
+    }
+
     /// The port it listens on: the one the system picked for port 0.
     pub fn port(self: Self) u16 {
         return self.portNumber
     }
 
+    /// Another listener on the same address and port, for a listener from
+    /// `listenShared` on Linux, where the kernel spreads the new
+    /// connections over them (`SO_REUSEPORT`). Elsewhere (macOS does not
+    /// spread them), or for a listener from `listen`, it is ListenFailed or
+    /// AddressInUse.
+    pub fn again(self: Self) ListenError!Listener {
+        if @targetOs() is .macos {
+            return ListenError.ListenFailed
+        }
+        var addr = @zeroed([128]u8)
+        var len: u32 = 128
+        if getsockname(self.sock, addr[..].ptr, &mut len) != 0 {
+            return ListenError.ListenFailed
+        }
+        // Linux's sa_family is a u16 at byte 0.
+        let fd = socket(addr[0] as i32 | (addr[1] as i32) << 8, SOCK_STREAM, 0)
+        if fd < 0 {
+            return ListenError.ListenFailed
+        }
+        var one = [4]u8{1, 0, 0, 0}
+        _ = setsockopt(fd, solSocket(), 2, one[..].ptr, 4)
+        _ = setsockopt(fd, solSocket(), SO_REUSEPORT_LINUX, one[..].ptr, 4)
+        if bind(fd, addr[..].ptr, len) != 0 || cListen(fd, 128) != 0 {
+            let e = aye_std_errno()
+            _ = close(fd)
+            if e == eaddrinuse() {
+                return ListenError.AddressInUse
+            }
+            return ListenError.ListenFailed
+        }
+        return Listener { sock: fd, portNumber: self.portNumber }
+    }
+
     /// Stops listening and releases the port.
     pub fn close(self: Self) {
-        _ = close(self.fd)
+        _ = close(self.sock)
     }
 }
 
 /// A TCP connection.
 pub struct Conn {
-    fd: i32
+    sock: i32
+
+    /// The socket's file descriptor, for `poll` (O3.9b). It stays owned by
+    /// the connection: do not close it.
+    pub fn fd(self: Self) i32 {
+        return self.sock
+    }
 
     /// Waits for data and reads at most `buf.len` bytes: the number read, 0
-    /// when the peer has closed its side.
+    /// when the peer has closed its side. On a non-blocking connection
+    /// (`setNonBlocking`) with no data there, WouldBlock.
     pub fn read(self: Self, buf: []mut u8) ReadError!usize {
         while true {
-            let n = read(self.fd, buf.ptr, buf.len)
+            let n = read(self.sock, buf.ptr, buf.len)
             if n >= 0 {
                 return n as usize
             }
@@ -71,7 +117,7 @@ pub struct Conn {
     /// `read`, waiting at most `ms` milliseconds for data (`poll`):
     /// TimedOut when none came.
     pub fn readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize {
-        var fds = [1]PollFd{PollFd { fd: self.fd, events: POLLIN, revents: 0 }}
+        var fds = [1]PollFd{PollFd { fd: self.sock, events: POLLIN, revents: 0 }}
         while true {
             let r = poll(fds[..].ptr, 1, ms as i32)
             if r > 0 {
@@ -110,11 +156,11 @@ pub struct Conn {
             return 0
         }
         var flags: i32 = 0
-        if !isDarwin() {
+        if !(@targetOs() is .macos) {
             flags = MSG_NOSIGNAL_LINUX
         }
         while true {
-            let n = send(self.fd, bytes.ptr, bytes.len, flags)
+            let n = send(self.sock, bytes.ptr, bytes.len, flags)
             if n > 0 {
                 return n as usize
             }
@@ -133,16 +179,16 @@ pub struct Conn {
     }
 
     /// Makes the connection non-blocking (`O_NONBLOCK`): `writeSome` gives
-    /// 0 instead of waiting, and `read` gives ReadFailed when no data is
-    /// there, so wait with `poll` first. False when the system refused.
+    /// 0 instead of waiting, and `read` gives WouldBlock when no data is
+    /// there, so wait with `poll` (on `fd()`) first. False when the system refused.
     pub fn setNonBlocking(self: Self) bool {
-        let flags = fcntl(self.fd, F_GETFL)
-        return flags >= 0 && fcntl(self.fd, F_SETFL, flags | pick(0x4, 0x800)) == 0
+        let flags = fcntl(self.sock, F_GETFL)
+        return flags >= 0 && fcntl(self.sock, F_SETFL, flags | pick(0x4, 0x800)) == 0
     }
 
     /// Closes the connection.
     pub fn close(self: Self) {
-        _ = close(self.fd)
+        _ = close(self.sock)
     }
 }
 
@@ -153,6 +199,18 @@ pub struct Conn {
 /// that does not resolve is UnknownHost; an empty or over-long one is
 /// InvalidAddress.
 pub fn listen(host: []u8, port: u16) ListenError!Listener {
+    return listenOn(host, port, false)
+}
+
+/// `listen` that lets `Listener.again` open more listeners on the same
+/// address (O3.9c). On Linux it sets `SO_REUSEPORT`, so another
+/// `listenShared` of the same user on that port succeeds too and the kernel
+/// spreads the new connections over all of them; elsewhere it is `listen`.
+pub fn listenShared(host: []u8, port: u16) ListenError!Listener {
+    return listenOn(host, port, true)
+}
+
+fn listenOn(host: []u8, port: u16, shared: bool) ListenError!Listener {
     var head: ?*mut AddrInfo = null
     var name = host
     if text.eql(host, "localhost") {
@@ -172,10 +230,13 @@ pub fn listen(host: []u8, port: u16) ListenError!Listener {
         if fd >= 0 {
             var one = [4]u8{1, 0, 0, 0}
             var reuse: i32 = 2
-            if isDarwin() {
+            if @targetOs() is .macos {
                 reuse = 4
             }
             _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
+            if shared && !(@targetOs() is .macos) {
+                _ = setsockopt(fd, solSocket(), SO_REUSEPORT_LINUX, one[..].ptr, 4)
+            }
             if bind(fd, sockAddr(ai), ai.addrlen) == 0 && cListen(fd, 128) == 0 {
                 var addr = @zeroed([128]u8)
                 var len: u32 = 128
@@ -186,7 +247,7 @@ pub fn listen(host: []u8, port: u16) ListenError!Listener {
                 }
                 freeaddrinfo(head)
                 // sin_port and sin6_port are both at byte 2
-                return Listener { fd: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
+                return Listener { sock: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
             }
             e = aye_std_errno()
             _ = close(fd)
@@ -226,7 +287,7 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
             if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
                 freeaddrinfo(head)
                 noSigpipe(fd)
-                return Conn { fd: fd }
+                return Conn { sock: fd }
             }
             e = aye_std_errno()
             _ = close(fd)
@@ -236,6 +297,10 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
         cur = ai.next
     }
     freeaddrinfo(head)
+    return connectError(e)
+}
+
+fn connectError(e: i32) ConnectError {
     if e == econnrefused() {
         return ConnectError.ConnectionRefused
     }
@@ -246,6 +311,74 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
         return ConnectError.TimedOut
     }
     return ConnectError.ConnectFailed
+}
+
+/// `connect` that gives up after `ms` milliseconds (per address when a
+/// name has several): a non-blocking connect, `poll` for POLLOUT, then
+/// `SO_ERROR`. TimedOut when the peer did not answer in time; the other
+/// errors are `connect`'s. The returned `Conn` is blocking, as from `connect`.
+pub fn connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn {
+    var head: ?*mut AddrInfo = null
+    let rc = resolve(host, port, 0, &mut head)
+    if rc == RESOLVE_INVALID {
+        return ConnectError.InvalidAddress
+    }
+    if rc != 0 {
+        return ConnectError.UnknownHost
+    }
+    var e: i32 = 0
+    var cur = head
+    while cur |ai| {
+        let fd = socket(ai.family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            let flags = fcntl(fd, F_GETFL)
+            if flags < 0 || fcntl(fd, F_SETFL, flags | pick(0x4, 0x800)) != 0 {
+                e = aye_std_errno()
+                _ = close(fd)
+                cur = ai.next
+                continue
+            }
+            var pending = false
+            if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
+                e = 0
+            } else {
+                e = aye_std_errno()
+                pending = e == einprogress() || e == EINTR
+            }
+            if pending {
+                var fds = [1]PollFd{PollFd { fd: fd, events: POLLOUT, revents: 0 }}
+                var r = poll(fds[..].ptr, 1, ms as i32)
+                while r < 0 && aye_std_errno() == EINTR {
+                    r = poll(fds[..].ptr, 1, ms as i32)
+                }
+                if r == 0 {
+                    e = etimedout()
+                } else if r < 0 {
+                    e = aye_std_errno()
+                } else {
+                    var err = @zeroed([4]u8)
+                    var len: u32 = 4
+                    if getsockopt(fd, solSocket(), pick(0x1007, 4), err[..].ptr, &mut len) != 0 {
+                        e = aye_std_errno()
+                    } else {
+                        e = (err[0] as i32) | (err[1] as i32) << 8 | (err[2] as i32) << 16 | (err[3] as i32) << 24
+                    }
+                }
+            }
+            if e == 0 {
+                _ = fcntl(fd, F_SETFL, flags)
+                freeaddrinfo(head)
+                noSigpipe(fd)
+                return Conn { sock: fd }
+            }
+            _ = close(fd)
+        } else {
+            e = aye_std_errno()
+        }
+        cur = ai.next
+    }
+    freeaddrinfo(head)
+    return connectError(e)
 }
 
 // `struct addrinfo` as C lays it out on 64-bit macOS and Linux. The two
@@ -268,7 +401,7 @@ let RESOLVE_INVALID: i32 = -1
 // ai_addr of `ai`.
 fn sockAddr(ai: *mut AddrInfo) [*]u8 {
     var p = ai.first
-    if isDarwin() {
+    if @targetOs() is .macos {
         p = ai.second
     }
     if p |a| {
@@ -312,7 +445,7 @@ fn resolve(host: []u8, port: u16, flags: i32, head: *mut ?*mut AddrInfo) i32 {
     return getaddrinfo(name[..].ptr, service[..].ptr, &hints, head)
 }
 
-/// C's `struct pollfd`, for `poll` on `Listener.fd` and `Conn.fd`
+/// C's `struct pollfd`, for `poll` on `Listener.fd()` and `Conn.fd()`
 /// (`std.http.Server` uses it).
 pub extern struct PollFd {
     fd: i32
@@ -322,6 +455,7 @@ pub extern struct PollFd {
 
 let SOCK_STREAM: i32 = 1
 let POLLIN: i16 = 1
+let POLLOUT: i16 = 4
 let EINTR: i32 = 4
 let EACCES: i32 = 13
 let EPIPE: i32 = 32
@@ -331,37 +465,24 @@ let F_SETFL: i32 = 4
 let MSG_NOSIGNAL_LINUX: i32 = 0x4000
 let SO_NOSIGPIPE_DARWIN: i32 = 0x1022
 
-// 1: macOS, 0: another system (Linux), -1: not asked yet. Threads may ask
-// at once; they store the same answer.
-var darwin: i32 = -1
-
-fn isDarwin() bool {
-    var d = @atomicLoad(&darwin)
-    if d < 0 {
-        // `struct utsname` starts with the system's name on both; it is
-        // 390 bytes on Linux and 1280 on macOS.
-        var buf = @zeroed([2048]u8)
-        d = (uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin")) as i32
-        @atomicStore(&mut darwin, d)
-    }
-    return d == 1
-}
-
 // macOS's value, else Linux's.
 fn pick(mac: i32, linux: i32) i32 {
-    if isDarwin() {
+    if @targetOs() is .macos {
         return mac
     }
     return linux
 }
 
 fn solSocket() i32 { return pick(0xffff, 1) }
+// Linux's SO_REUSEPORT (`listenShared`).
+let SO_REUSEPORT_LINUX: i32 = 15
 fn econnrefused() i32 { return pick(61, 111) }
 fn econnreset() i32 { return pick(54, 104) }
 fn eaddrinuse() i32 { return pick(48, 98) }
 fn enetunreach() i32 { return pick(51, 101) }
 fn ehostunreach() i32 { return pick(65, 113) }
 fn etimedout() i32 { return pick(60, 110) }
+fn einprogress() i32 { return pick(36, 115) }
 fn eagain() i32 { return pick(35, 11) }
 
 fn readError(e: i32) ReadError {
@@ -371,12 +492,15 @@ fn readError(e: i32) ReadError {
     if e == etimedout() {
         return ReadError.TimedOut
     }
+    if e == eagain() {
+        return ReadError.WouldBlock
+    }
     return ReadError.ReadFailed
 }
 
 // No SIGPIPE for writes to `fd` on macOS (Linux: `write`'s flag).
 fn noSigpipe(fd: i32) {
-    if isDarwin() {
+    if @targetOs() is .macos {
         var one = [4]u8{1, 0, 0, 0}
         _ = setsockopt(fd, solSocket(), SO_NOSIGPIPE_DARWIN, one[..].ptr, 4)
     }
@@ -390,11 +514,11 @@ extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
 extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32
 extern fn getsockname(fd: i32, addr: [*]u8, len: *mut u32) i32
 extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
+extern fn getsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: *mut u32) i32
 extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
 extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
 extern fn getaddrinfo(node: [*]u8, service: [*]u8, hints: *AddrInfo, res: *mut ?*mut AddrInfo) i32
 extern fn freeaddrinfo(res: ?*mut AddrInfo)
-extern fn uname(buf: [*]u8) i32
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32
 extern fn fcntl(fd: i32, cmd: i32, ...) i32

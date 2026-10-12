@@ -363,7 +363,7 @@ The browser written in Aye (`browser/COMPILER_GAPS.md`, now in aye-lang/anyknown
 - **`std.thread.spawn(T, f, arg)` runs `f(arg)` with `f: fn(*mut T)`**, the same shape as a C thread function, so no closure or boxing is needed: the caller keeps `arg` alive until `join`. A small runtime hook (`aye_thread_spawn`, in the C prelude) carries `f` and `arg` to `pthread_create`; Aye hands it `f` as a `fn([*]u8)`, which needed `@ptrCast` between function types (also useful for C callbacks). `Thread` holds the `pthread_t` as a `u64` (8 bytes on macOS and Linux). Every program is built with `-pthread`.
 - **Stack size (M9.7):** `std.thread.spawnWithStack(T, f, arg, stack)` starts a thread with a stack of at least `stack` bytes (rounded up to a multiple of 64 KiB, at least 256 KiB, since macOS wants whole pages), and `spawn` asks for 8 MiB, so a thread gets the main thread's stack on every system (macOS gives other threads 512 KiB by default). Deep recursion runs on such a thread, rather than on a main thread with a bigger stack: a linker flag for the main thread's stack works on macOS (`-stack_size`) but not on Linux, where `ulimit -s` decides, and a build option that moved `main` onto a thread would change what `main` is. The browser's JavaScript engine had started a 1 GiB pthread itself, through `extern fn`s and `@ptrCast`.
 - **Stack overflow panics (M9.7)** in debug and safe mode: `main` installs a `SIGSEGV`/`SIGBUS` handler that runs on an alternate signal stack (each thread gets its own, 128 KiB), and each thread records the top of its stack and its size (the main thread's from `getrlimit`, 8 MiB when unlimited; a spawned thread's from `spawnWithStack`). A fault within 1 MiB of the end of the stack flushes stdout and writes `panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)`, then aborts (status 134, like a panic); any other fault restores the default action and crashes as before. There is no position: the handler cannot know which call overflowed without unwinding. The `sigaction`, `stack_t` and `siginfo_t` layouts are written out for macOS and Linux, as the prelude includes no libc headers. A check in every function's prologue was the alternative; it costs every call, and the guard page already catches the overflow. `fast` mode installs nothing.
-- **`Mutex` and the condition variables of `Channel` live on the C heap**, created by runtime hooks, and the Aye value is a handle: a `pthread_mutex_t` must not move once used and its size differs between systems, while Aye copies structs freely. `deinit` frees it; the memory is not counted by `General`'s leak report.
+- **`Mutex` and the condition variables of `Channel` live on the C heap**, created by runtime hooks, and the Aye value is a handle: a `pthread_mutex_t` must not move once used and its size differs between systems, while Aye copies structs freely. `deinit` frees it (since O1.21 a mutex's handle is made by its first `lock`, see below); the memory is not counted by `General`'s leak report.
 - **`Channel(T)`** is written in Aye: a ring buffer of `?T` slots (no zero value of an arbitrary `T` is needed), a mutex and two condition variables. `send` waits while full and fails with `ChannelError.Closed` after `close` (an error, not a panic as in Go); `recv` waits while empty and gives `null` once closed and drained, so `while ch.recv() |v| { }` is the consumer loop.
 - **Atomics are builtins** (`@atomicLoad`, `@atomicStore`, `@atomicAdd`, `@atomicSub`, `@atomicCas`) that cgen emits as C11 `__atomic` builtins, sequentially consistent, on a pointer to an integer (E0101 otherwise). A runtime hook per integer type would not work from a generic `Atomic(T)`; builtins type-check against `where T: Integer` like `as`. `std.sync.Atomic(T)` wraps them. Weaker orderings wait for a use.
 - **What is not thread-safe:** the allocators (`General`'s debug bookkeeping, `Arena`) are not locked; each thread gets its own, or allocates nothing (a channel's buffer is allocated before the threads start). The error return trace is thread-local. There is no data-race checking in the language; `--cflags -fsanitize=thread` builds with ThreadSanitizer, and the golden tests run the fan-out program under it where clang's ThreadSanitizer works (it is skipped otherwise: on the development machine (Darwin 25, Apple clang 17) every `-fsanitize=thread` program crashes at start-up, so the run there was not verified).
@@ -498,6 +498,7 @@ O2.3 (what the wasip1 branch does, and where it differs from the diagnosis):
 - **`ecvt` stops at 15 digits in wasi-libc**, so `std.json` numbers like 0.30000000000000004 lost their tail: `std.json` calls `aye_std_ecvt`, which is `snprintf("%.*e")` on wasm.
 - **Stack:** wasm-ld's stack is 64 KiB with no guard (`many_instances` overflowed it): wasm links use `-z stack-size=8388608`. A deeper recursion is a `memory access out of bounds` trap, not `panic: stack overflow` (`stack_overflow` is `X.native`).
 - **Runner:** `scripts/wasi-run.mjs` (embedded in the driver), `node --no-warnings --single-threaded-gc`: Node 22.22.2 segfaults (exit 139) in a GC thread once a wasm heap passes 32 MiB (plain C reproduces it; Node 25 does not). Preopens: `.`, the cwd by its path, `/tmp`. An `abort` trap exits 134 after the panic message; any other trap prints the error and exits 1.
+- **O2.6 (stack overflow on wasm):** in debug and safe mode a wasm stack overflow panics with the native text (`panic: stack overflow ...`, exit 134), by two routes. (1) `AYE_STACK_CHECK()` in every function prologue (wasm only; `src/cgen.rs`) compares `__stack_pointer` with the stack, linked first (`-Wl,--stack-first`, `src/driver.rs`; addresses 0 to `__global_base`), and reports the panic within 64 KiB of address 0 or after a wrap; this catches frames large enough to exhaust the 8 MiB shadow stack first. (2) With small frames V8 runs out of its own call stack first (about 10-15k frames) and throws `RangeError: Maximum call stack size exceeded`; the runners (`scripts/wasi-run.mjs`, `tests/wasm/loader.mjs`) map exactly that error to the same panic text and exit 134. It cannot be a program bug, unlike an OOB or `unreachable` trap, which keep their old handling. `stack_overflow` now runs on all three lanes (no `X.native`; `X.freestanding`). Fast-mode wasm builds have no check: a deep overflow of the shadow stack still corrupts memory or traps. Cost on `fib(40)`, wasip1 under Node: debug 1.17 s to 1.17 s; safe 0.51 s to about 0.55-0.85 s (noisy; the `__builtin_frame_address` variant measured 0.66 s). **O2.6a:** the fast-mode wasm run of `stack_overflow.aye` that ran past 120 s with no output (on native too) never overflowed. `down` had no base case, so clang -O2 inferred it never returns, the array store and everything after the call were dead, and the self call became an infinite `loop br 0`; `start` was never printed because stdout is flushed at exit. This is legal for C (recursion is not covered by the forward-progress rule, and the program has no other observable behavior), so it is the golden's problem, not a compiler bug, and fast mode needs no fix. The golden now has a base case (`n == 2^64-1`, which blocks the noreturn inference) and returns `pad[pad[n % 16] % 16] + 1` (the result used as an index, which blocks accumulator tail-recursion elimination: `stack_overflow_thread.aye`'s `pad[n % 16] + 1` runs as a loop in fast mode and prints 100000000). Fast mode now overflows within a second: wasm prints the panic text and exits 134 (V8's RangeError), native gets SIGSEGV (no check). The harness has no fast-mode expectation for `.panic` cases (they run in debug and safe only), so none was added.
 - **Goldens:** `tests/cases` and `tests/tests` also run on wasm32-wasip1 (a program that imports a lacked module is skipped by its E0118; `X.native` marks the rest: `c_union` (`c_long` is LP64 in Aye), `extern_struct` and `leak` (sizes with 32-bit pointers), `stack_overflow`). `usize` is 32 bits: Aye code that assumes 8 bytes is the risk.
 
 O2.4 (wasm32-freestanding; the prelude's `#ifdef AYE_FREESTANDING`, set by `aye build`; `-ffreestanding -nostdlib -Wl,--no-entry -Wl,--allow-undefined`):
@@ -658,3 +659,81 @@ Split build in debug mode, measured once: front end 0.5 s, then writing the file
 | user + sys, s | 14.2 / 14.4 / 14.0 | 12.5 / 13.2 / 12.9 (-9%) |
 
 `aye build browser` is unchanged: 26,457,152 bytes of C, 9.6-9.9 s user + sys before and after.
+
+## A stream is counted after its first chunk drains (O3.6e)
+
+Since O3.6d a streaming response writes its body right after the head and
+the worker calls `linkStream` only once that write has drained
+(`std/http/http.aye`, the `stream` branch of the response writer), so a
+`broadcast` never interleaves with the first chunk. The cost is that a
+client can read the first frame and ask `Server.streams()` before the
+worker has linked the stream. The `http_sse` golden printed
+`s.streams()` right after reading `first`, so it depended on the worker
+winning that race; on the 4-vCPU Ubuntu VM the second `/events` case
+lost it every time (`streams: 1`, expected 2). The library order stays;
+the test waits with `waitOpen` (as the `/big` case already did) before
+printing the count.
+
+## A slow handler's worker gives its other connections away (O3.9b)
+
+Since O3.9 each `std.http` worker runs its handlers inline, so a handler
+that sleeps or blocks held up every other connection of its worker. A
+pool of handler threads fixes that but costs a hand-off (a lock, a wake,
+a wake back) on every request, which the hello hot path would feel. O3.9b
+keeps handlers inline and moves the *other* connections instead: around
+each handler call the worker publishes `state` 1, `since` and `current`
+(two atomic stores and one compare-and-swap per request). Every other
+worker, at most every 10 ms on its loop (so within its 100 ms `poll` tick
+when idle), looks at the others; one whose handler has run for more than
+`SLOW_MS` (20 ms) is set to `state` 2, its connections except `current`
+move to the looking worker's list, and `state` goes back to 1. After the
+handler the owner waits for 1 (spins with `sched_yield` while a move
+is under way), so it never sees its list change except at that point,
+and when `moved` is set it starts its loop afresh. To let a connection
+change threads, each `Open` now has its own `General` (its arena and
+input buffer live on it), and the `Open` records come from one
+server-wide `General` under a mutex (once per connection, not per
+request). With `workers = 1` nothing moves. `ab -k -c 64`: within noise
+(docs/aye-bench.md, O3.9b). Golden `http_slow_handler`: eight
+connections, one handler sleeps 300 ms, the other seven are answered
+first; it fails on the O3.9a server.
+
+`std.net` also got `ReadError.WouldBlock` (a non-blocking `read` with no
+data; `readError` maps EAGAIN) and `Listener.fd()`/`Conn.fd()`; the field
+is `sock` now, since a struct cannot have a field and a method of one
+name (E0015).
+
+## One listener per `std.http` worker on Linux (O3.9c)
+
+Since O3.9 every worker `poll`s the one listener, so each new connection
+woke all of them and one accepted (O3.9b: without `-k`, 4 workers 9.4k
+req/s, 1 worker 16.1k). Two designs: (a) one listening socket per worker
+with `SO_REUSEPORT`, where Linux hands each connection to one socket, or
+(b) one acceptor thread that passes descriptors to the workers over a
+queue. (b) is portable but costs a hand-off per connection (a lock, a
+write to a wake pipe in each worker's `poll` set, a read), an extra
+thread on a 4-CPU machine, and its own slow-handler rule for the queue of
+a busy worker. (a) is smaller and chosen: `net.listenShared` sets
+`SO_REUSEPORT` on Linux (elsewhere it is `listen`), and
+`Listener.again()` binds another socket to the address `getsockname`
+gives (ListenFailed on macOS, where `SO_REUSEPORT` does not balance).
+`Server.run` gives each worker it spawns its own listener when `again`
+succeeds; worker 0 and any worker without one share `Server.listener`
+under `Server.accepting` as before, so macOS keeps the single listener
+(the check is `net`'s run-time `uname`, as for its other constants).
+Each listener has its own accept gate (one accepter at a time, after a
+`poll` that does not wait), because a slow handler's connections that
+wait on its own listener are taken by the worker that `rescue`s it
+(within its 10 ms look, or the 100 ms `poll` tick when idle, as for the
+other connections). Costs: with `SO_REUSEPORT` a second server of the
+same user on the same port does not fail with AddressInUse on Linux (the
+`Server` docs say so), and keep-alive connections are spread by hash, not
+by which worker is idle. Measured (docs/aye-bench.md, O3.9c): without
+`-k` 9138 → 12482 req/s (+37%), `ab -k -c 64` 103002 → 93543 (-9.2%,
+passes disagree in sign). `Server` is unchanged.
+
+## A global `Mutex` (O1.21)
+
+- **Option (a), with `Mutex.init()` made constant.** A global's initializer may call, without arguments, a function whose body is one `return` of a constant; sema checks that body and folds the returned value (`fold_init` in `src/sema.rs`), so cgen emits a static initializer as for any other constant and no code runs before `main`. Option (b), a `Mutex.INIT` constant, needs a constant inside a struct, which the language does not have (a module-level `MUTEX_INIT` would work but reads worse than the call every other user already writes). Both options need the same runtime change, since the old `init` called `aye_mutex_new`; (a) adds about 40 lines to sema and keeps one spelling for locals, fields and globals. Calls with arguments stay E0089: folding them means substituting parameters, which waits for a use.
+- **The handle is made by the first `lock`.** `Mutex.handle` is `?[*]u8`, `null` in `init`; the runtime's `aye_mutex_get` makes the `pthread_mutex_t` and installs it with a compare-and-swap, and the thread that loses the race frees its own. `unlock`, `deinit` and `Cond.wait` take the slot too (`deinit` of a never-locked mutex frees nothing). The cost: a copy made before the first `lock` is a different lock, so the spec now says to share a `Mutex` by pointer (copies after the first `lock` still share it). Every `Mutex` in std and the tests lives in a struct or global used in place.
+- **The framework examples lose their lazy gate** (`Atomic(u32)` 0/1/2 and a `?Mutex`): `guestbook` and `posts` hold `var lock = Mutex.init()`.

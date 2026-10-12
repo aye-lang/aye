@@ -1634,7 +1634,10 @@ fn posts_server(name: &str) -> App {
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
-    let exe = build_dir("posts", &web);
+    // One executable per test: the three posts tests run in parallel, and
+    // a shared `framework-posts` is rewritten by one test while another
+    // execs it (ETXTBSY on Linux, CI 2026-10-12).
+    let exe = build_dir(name, &web);
     let data = app.join("data/posts.json");
     start_with(&exe, &["--posts", data.to_str().unwrap()])
 }
@@ -1894,4 +1897,34 @@ fn posts_prod() {
         "",
     );
     assert_eq!(unhash(&scrub(&page)), want("comment_page.http"));
+}
+
+/// A `.aye` file beside `page.aye` that is not a route file belongs to no
+/// module; `web gen` fails and names it (F1.2b).
+#[test]
+fn gen_stray_route_file() {
+    let app = Path::new(env!("CARGO_TARGET_TMPDIR")).join("framework-gen-stray-app");
+    let _ = std::fs::remove_dir_all(&app);
+    copy_dir(&root().join("framework/examples/pages"), &app);
+    std::fs::write(app.join("app/about/helper.aye"), "pub fn help() {}\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(root())
+        .env("AYE", env!("CARGO_BIN_EXE_aye"))
+        .arg("run")
+        .arg(root().join("framework").join("gen"))
+        .arg("--")
+        .arg(&app)
+        .arg("--web")
+        .arg(root().join("framework").join("web"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "web gen accepted a stray file");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("stray .aye file"), "{err}");
+    assert!(err.contains("helper.aye"), "{err}");
+    assert!(
+        err.contains("page.aye, route.aye, layout.aye and not-found.aye"),
+        "{err}"
+    );
+    assert!(err.contains("outside app/"), "{err}");
 }

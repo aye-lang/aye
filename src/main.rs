@@ -13,6 +13,7 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
   (--cflags: more flags for clang, such as \"-fsanitize=thread\")
   (--no-link: treat the `@linkOptional(\"<lib>\")` library as not installed: not linked, `@hasLink` false; repeatable)
   (-c: compile to an object file, `<path>.o`, without linking; for any --target, no sysroot needed)
+  (AYE_SYSROOT=<dir>: a Linux sysroot, to link a Linux --target on macOS, with lld)
   (--target: aarch64-macos, x86_64-macos, aarch64-linux, x86_64-linux, wasm32-wasip1, wasm32-freestanding; default: this machine)
   aye fmt [--check] <path>      (<path>: a .aye file, or a directory searched recursively)
   aye doc --signatures <path>   (<path> may also be `std` or `std.<module>`)
@@ -380,7 +381,10 @@ fn lsp_cmd(args: Vec<String>) -> ExitCode {
         eprintln!("aye: `lsp` takes no arguments, found `{a}`\n{USAGE}");
         return ExitCode::from(2);
     }
-    let code = lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
+    let code = lsp::run(
+        std::io::BufReader::new(std::io::stdin()),
+        std::io::stdout().lock(),
+    );
     ExitCode::from(code as u8)
 }
 

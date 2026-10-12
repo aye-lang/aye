@@ -1,0 +1,7 @@
+fast answered: true
+stop requested before: false
+sent SIGTERM
+slow response whole: true
+idle connection closed: true
+run returned
+listener closed: true

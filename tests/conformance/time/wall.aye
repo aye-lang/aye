@@ -5,6 +5,8 @@ pub fn main() {
     time.sleep(20)
     let b = time.now()
     @println(a > 1700000000000)
-    @println(b >= a + 20)
+    // `now()` floors to a millisecond on each side and wasip1 timers are
+    // coarse, so a 20 ms sleep may show as 18 or 19.
+    @println(b >= a + 15)
     @println(b - a < 5000)
 }

@@ -65,6 +65,14 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
             }
         }
     }
+    for e in found.items {
+        if e.kind == fs.Kind.File && text.endsWith(e.name, ".aye") && !isRouteFile(e.name) {
+            let stray = path.join(alloc, here, e.name) catch |err| {
+                die("out of memory", "", "")
+            }
+            die("stray .aye file in a route directory (route files are page.aye, route.aye, layout.aye and not-found.aye; put helpers in a module outside app/, e.g. lib/, and import it)", stray, "")
+        }
+    }
     let layout = hasRole(alloc, here, found.items, "layout.aye", "layout")
     let notFound = hasRole(alloc, here, found.items, "not-found.aye", "notFound")
     if notFound && rel.len > 0 {
@@ -205,7 +213,7 @@ pub fn linkName(alloc: Allocator, index: usize, dir: []u8) AllocError![]u8 {
 }
 
 /// Prints `what: a, b` to standard error and ends the program with status 1.
-pub fn die(what: []u8, a: []u8, b: []u8) {
+pub fn die(what: []u8, a: []u8, b: []u8) noreturn {
     fs.stderr().write("web gen: ") catch |e| {}
     fs.stderr().write(what) catch |e| {}
     fs.stderr().write(": ") catch |e| {}
@@ -216,6 +224,11 @@ pub fn die(what: []u8, a: []u8, b: []u8) {
     }
     fs.stderr().write("\n") catch |e| {}
     os.exit(1)
+}
+
+// Is `name` one of the four file names a route directory may hold?
+fn isRouteFile(name: []u8) bool {
+    return text.eql(name, "page.aye") || text.eql(name, "route.aye") || text.eql(name, "layout.aye") || text.eql(name, "not-found.aye")
 }
 
 // The last segment of `dir` ("" for ""), the part after `parentOf`.
@@ -246,7 +259,6 @@ fn hasRole(alloc: Allocator, here: []u8, found: []fs.DirEntry, file: []u8, name:
         if e.kind == fs.Kind.File && text.eql(e.name, file) {
             let p = path.join(alloc, here, e.name) catch |err| {
                 die("out of memory", "", "")
-                return false
             }
             if !exports(alloc, signatures(alloc, p), name) {
                 die("the file has no pub fn of this name", p, name)
@@ -268,16 +280,13 @@ fn signatures(alloc: Allocator, file: []u8) []u8 {
     let argv = [4][]u8{bin, "doc", "--signatures", file}
     var child = process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit) catch |err| {
         die("cannot run aye (set AYE to its path)", bin, "")
-        return ""
     }
     let out = child.stdout.?.readAll(alloc) catch |err| {
         die("cannot read the output of aye doc", file, "")
-        return ""
     }
     child.stdout.?.close()
     let status = child.wait() catch |err| {
         die("cannot wait for aye doc", file, "")
-        return ""
     }
     if !status.success() {
         die("aye doc failed", file, "")

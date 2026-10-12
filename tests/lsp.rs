@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct Client {
     child: Child,
@@ -767,7 +767,311 @@ fn hover_and_definition_of_a_cimport_member() {
         .and_then(Json::as_i64)
         .unwrap() as usize;
     assert!(gen_src.lines().nth(line).unwrap().contains("tiny_add"));
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
 
+/// One error per source; the range of the diagnostic must end after the name,
+/// the offending expression or the type, not at the token fallback.
+fn range_of(name: &str, src: &str, code: &str) -> String {
+    let (dir, uri) = scratch(name, src);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, src));
+    let p = c.diagnostics();
+    let list = p.get("diagnostics").unwrap().as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0].get("code").and_then(Json::as_str), Some(code));
+    let r = list[0].get("range").unwrap().write();
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+    r
+}
+
+#[test]
+fn more_errors_have_real_ends() {
+    // Unknown field in a struct literal: the field name.
+    let src = "struct P {\n    x: i32,\n}\n\npub fn main() {\n    let p = P { widthy: 1 }\n    @println(p.x)\n}\n";
+    assert_eq!(
+        range_of("field", src, "E0038"),
+        r#"{"start":{"line":5,"character":16},"end":{"line":5,"character":22}}"#
+    );
+    // Unknown struct name.
+    let src = "pub fn main() {\n    let p = Missing { x: 1 }\n    @println(p.x)\n}\n";
+    assert_eq!(
+        range_of("struct", src, "E0017"),
+        r#"{"start":{"line":1,"character":12},"end":{"line":1,"character":19}}"#
+    );
+    // Assignment to an immutable name: the whole target.
+    let src = "pub fn main() {\n    let sum = 0\n    sum += 1\n    @println(sum)\n}\n";
+    let r = range_of("assign", src, "E0032");
+    assert_eq!(
+        r,
+        r#"{"start":{"line":2,"character":4},"end":{"line":2,"character":7}}"#
+    );
+}
+
+#[test]
+fn unknown_variant_ends_after_its_name() {
+    let src = "enum Color {\n    Red,\n    Blue,\n}\n\npub fn main() {\n    let c = Color.Red\n    if c is .Gren {\n        @println(1)\n    }\n}\n";
+    let r = range_of("variant", src, "E0041");
+    assert!(r.contains(r#""line":7"#), "{r}");
+    let (s, e) = (
+        r.split(r#""character":"#).nth(1).unwrap(),
+        r.split(r#""character":"#).nth(2).unwrap(),
+    );
+    let num = |t: &str| t.split(['}', ',']).next().unwrap().parse::<u32>().unwrap();
+    assert!(num(e) - num(s) >= 4, "{r}");
+}
+
+#[test]
+fn two_quick_changes_publish_once() {
+    let (dir, uri) = scratch("debounce", BAD);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, BAD));
+    c.diagnostics();
+    let change = |v: i64, text: &str| {
+        format!(
+            r#"{{"textDocument":{{"uri":{},"version":{v}}},"contentChanges":[{{"text":{}}}]}}"#,
+            aye::diag::json_str(&uri),
+            aye::diag::json_str(text)
+        )
+    };
+    let t = Instant::now();
+    c.notify("textDocument/didChange", &change(2, BAD));
+    std::thread::sleep(Duration::from_millis(20));
+    c.notify("textDocument/didChange", &change(3, GOOD));
+    let p = c.diagnostics();
+    assert!(
+        t.elapsed() >= Duration::from_millis(150),
+        "{:?}",
+        t.elapsed()
+    );
+    assert_eq!(p.get("version").and_then(Json::as_i64), Some(3));
+    assert_eq!(p.get("diagnostics"), Some(&Json::Arr(Vec::new())));
+    // No second publish: the next message is the reply.
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+const SIBLINGS: &str = "pub fn main() {
+    if true {
+        let x = 1
+        @println(x)
+    } else {
+        let x = 2
+        @println(x)
+    }
+    for i in 0..2 {
+        @println(i)
+    }
+    for i in 0..3 {
+        @println(i + 1)
+    }
+}
+";
+
+#[test]
+fn a_name_in_a_block_is_its_own_declaration() {
+    let (dir, uri) = scratch("blocks", SIBLINGS);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, SIBLINGS));
+    c.diagnostics();
+    let def_line = |d: &Json| {
+        d.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(Json::as_i64)
+    };
+    // Each block's `x` and each loop's `i`, from inside it and from just
+    // past its end.
+    for (id, line, character, decl, sig) in [
+        (2, 3, 17, 2, "let x = 1"),
+        (4, 3, 18, 2, "let x = 1"),
+        (6, 6, 17, 5, "let x = 2"),
+        (8, 6, 18, 5, "let x = 2"),
+        (10, 9, 17, 8, "for i in 0..2"),
+        (12, 12, 17, 11, "for i in 0..3"),
+        (14, 12, 18, 11, "for i in 0..3"),
+    ] {
+        let h = at(&mut c, id, "hover", &uri, line, character);
+        assert_eq!(
+            hover_text(&h),
+            format!("```aye\n{sig}\n```"),
+            "{line}:{character}"
+        );
+        let d = at(&mut c, id + 1, "definition", &uri, line, character);
+        assert_eq!(def_line(&d), Some(decl), "{line}:{character}: {d:?}");
+    }
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+const DOCUMENTED: &str = "/// A box of `T`.
+pub fn Box(comptime T: type) type {
+    return struct {
+        v: T
+
+        /// The value.
+        pub fn get(self: *Self) T {
+            return self.v
+        }
+    }
+}
+
+/// Two shapes.
+pub enum Shape {
+    circle,
+    square,
+
+    pub fn round(self: Shape) bool {
+        return self == Shape.circle
+    }
+}
+
+/// Two.
+pub let TWO = 1 +
+    1
+
+pub fn main() {
+    let b = Box(i64) { v: TWO }
+    @println(b.get())
+    @println(Shape.round(Shape.square))
+}
+";
+
+/// Hover shows a declaration as `aye doc --signatures` does: one renderer.
+#[test]
+fn hover_renders_declarations_like_aye_doc() {
+    let (dir, uri) = scratch("documented", DOCUMENTED);
+    let file = dir.join("main.aye");
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .args(["doc", "--signatures"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let signatures = String::from_utf8(out.stdout).unwrap();
+    // Line and character of the first `name` in the line containing `line`.
+    let pos = |line: &str, name: &str| {
+        let (l, text) = DOCUMENTED
+            .lines()
+            .enumerate()
+            .find(|(_, t)| t.contains(line))
+            .unwrap();
+        (l as u32, text.find(name).unwrap() as u32)
+    };
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, DOCUMENTED));
+    c.diagnostics();
+    for (id, line, name, doc) in [
+        (2, "let b = Box", "Box", "A box of `T`."),
+        (3, "Shape.round(", "Shape", "Two shapes."),
+    ] {
+        let (l, ch) = pos(line, name);
+        let h = at(&mut c, id, "hover", &uri, l, ch);
+        let text = hover_text(&h);
+        let sig = text
+            .strip_prefix("```aye\n")
+            .and_then(|t| t.strip_suffix(&format!("\n```\n\n{doc}")))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(sig.contains('\n'), "{sig}");
+        assert!(
+            signatures.contains(&format!("/// {doc}\n{sig}\n")),
+            "{sig}\n---\n{signatures}"
+        );
+    }
+    // A `let` over several lines: its first line (`aye doc` prints all).
+    let (l, ch) = pos("v: TWO", "TWO");
+    let h = at(&mut c, 4, "hover", &uri, l, ch);
+    assert_eq!(hover_text(&h), "```aye\npub let TWO = 1 + ...\n```\n\nTwo.");
+    assert!(signatures.contains("pub let TWO = 1 + 1\n"), "{signatures}");
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Declaration-level errors end after the declared name or the type.
+#[test]
+fn declaration_errors_end_after_the_name() {
+    let main = "\npub fn main() {\n    @println(1)\n}\n";
+    let cases: [(&str, String, &str); 5] = [
+        // Missing return: the function name.
+        (
+            "E0050",
+            format!("fn first() i32 {{\n}}\n{main}"),
+            r#"{"start":{"line":0,"character":3},"end":{"line":0,"character":8}}"#,
+        ),
+        // Not C-compatible in an `extern fn`: the whole type.
+        (
+            "E0052",
+            format!("extern fn puts(s: []u8) i32\n{main}"),
+            r#"{"start":{"line":0,"character":18},"end":{"line":0,"character":22}}"#,
+        ),
+        // Default value in a union: the field name.
+        (
+            "E0104",
+            format!("extern union U {{\n    a: i32 = 1,\n    b: i64,\n}}\n{main}"),
+            r#"{"start":{"line":1,"character":4},"end":{"line":1,"character":5}}"#,
+        ),
+        // Duplicate field: the second name.
+        (
+            "E0015",
+            format!("struct P {{\n    width: i32,\n    width: i32,\n}}\n{main}"),
+            r#"{"start":{"line":2,"character":4},"end":{"line":2,"character":9}}"#,
+        ),
+        // `comptime` parameter of an `extern fn`: the function name.
+        (
+            "E0076",
+            format!("extern fn pick(comptime T: type) void\n{main}"),
+            r#"{"start":{"line":0,"character":10},"end":{"line":0,"character":14}}"#,
+        ),
+    ];
+    for (code, src, want) in cases {
+        let (dir, uri) = scratch(&format!("decl_{code}"), &src);
+        let mut c = Client::start();
+        c.initialize();
+        c.notify("textDocument/didOpen", &open(&uri, &src));
+        let p = c.diagnostics();
+        let list = p.get("diagnostics").unwrap().as_array().unwrap();
+        let d = list
+            .iter()
+            .find(|d| d.get("code").and_then(Json::as_str) == Some(code))
+            .unwrap_or_else(|| panic!("{code} missing: {list:?}"));
+        assert_eq!(d.get("range").unwrap().write(), want, "{code}");
+        c.finish();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A hover during typing does not postpone the check of the last change.
+#[test]
+fn hover_does_not_restart_the_debounce() {
+    let (dir, uri) = scratch("debounce_hover", BAD);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, BAD));
+    c.diagnostics();
+    let change = |v: i64, text: &str| {
+        format!(
+            r#"{{"textDocument":{{"uri":{},"version":{v}}},"contentChanges":[{{"text":{}}}]}}"#,
+            aye::diag::json_str(&uri),
+            aye::diag::json_str(text)
+        )
+    };
+    c.notify("textDocument/didChange", &change(2, BAD));
+    c.notify("textDocument/didChange", &change(3, GOOD));
+    let t = Instant::now();
+    std::thread::sleep(Duration::from_millis(100));
+    at(&mut c, 7, "hover", &uri, 1, 8);
+    let p = c.diagnostics();
+    let e = t.elapsed();
+    assert_eq!(p.get("version").and_then(Json::as_i64), Some(3));
+    // 150 ms from the last change; a restart by the hover would be 250 ms.
+    assert!(e >= Duration::from_millis(150), "{e:?}");
+    assert!(e < Duration::from_millis(240), "{e:?}");
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }

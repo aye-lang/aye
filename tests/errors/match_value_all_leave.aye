@@ -1,0 +1,33 @@
+enum Color {
+    red
+    green
+}
+
+fn pick(c: Color) i64 {
+    let v = match c {
+        .red => {
+            return 1
+        }
+        .green => {
+            return 2
+        }
+    }
+    return v
+}
+
+pub fn main() {
+    var i = 0
+    while i < 3 {
+        i += 1
+        let v = match i {
+            1 => {
+                continue
+            }
+            _ => {
+                break
+            }
+        }
+        @println(v)
+    }
+    @println(pick(Color.red))
+}

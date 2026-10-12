@@ -1075,7 +1075,12 @@ AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
    stdout and stderr pipes (-1 where there is none). Returns 0 or the errno
    of the failure, including that of `execvp` in the child, which reports it
    through a close-on-exec pipe. Every pipe end is close-on-exec; `dup2`
-   clears the flag on the child's 0, 1 and 2. */
+   clears the flag on the child's 0, 1 and 2. `args` goes on with `envc`
+   NUL-terminated `NAME=value` strings (`envc` < 0: the child inherits this
+   process's environment) and, when `hascwd` is set, one more string, the
+   child's working directory. The first spawn sets SIGPIPE to ignored in
+   this process, so that a write to an exited child's stdin fails with
+   EPIPE; the child gets the default action back before `execvp`. */
 extern int aye_rt_pipe(int *) __asm__(AYE_SYM("pipe"));
 extern int aye_rt_close(int) __asm__(AYE_SYM("close"));
 extern int aye_rt_dup2(int, int) __asm__(AYE_SYM("dup2"));
@@ -1085,14 +1090,19 @@ extern long aye_rt_read_fd(int, void *, size_t) __asm__(AYE_SYM("read"));
 extern long aye_rt_write_fd(int, const void *, size_t) __asm__(AYE_SYM("write"));
 extern int aye_rt_waitpid(int, int *, int) __asm__(AYE_SYM("waitpid"));
 extern int aye_rt_fcntl(int, int, ...) __asm__(AYE_SYM("fcntl"));
+extern int aye_rt_chdir(const char *) __asm__(AYE_SYM("chdir"));
+extern void (*aye_rt_signal(int, void (*)(int)))(int) __asm__(AYE_SYM("signal"));
+extern char **aye_rt_environ __asm__(AYE_SYM("environ"));
 extern void aye_rt_exit_now(int) __asm__(AYE_SYM("_exit")) __attribute__((noreturn));
-AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t *out) {
+AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t envc, int32_t hascwd, int32_t modes, int32_t *out) {
     int pp[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int ep[2] = {-1, -1};
     int err = 0;
     int pid = -1;
-    char **argv = aye_rt_malloc(((size_t)argc + 1) * sizeof(char *));
+    int ne = envc < 0 ? 0 : envc;
+    char **argv = aye_rt_malloc(((size_t)argc + 1 + (size_t)ne + 1) * sizeof(char *));
     if (!argv) return 12;
+    char **envp = argv + argc + 1;
     char *a = (char *)args;
     for (int i = 0; i < argc; i++) {
         argv[i] = a;
@@ -1100,6 +1110,14 @@ AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t
         a++;
     }
     argv[argc] = 0;
+    for (int i = 0; i < ne; i++) {
+        envp[i] = a;
+        while (*a) a++;
+        a++;
+    }
+    envp[ne] = 0;
+    char *cwd = hascwd ? a : 0;
+    aye_rt_signal(13, (void (*)(int))1);
     for (int s = 0; s < 3; s++) {
         if (((modes >> (2 * s)) & 3) == 0) continue;
         if (aye_rt_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
@@ -1117,6 +1135,9 @@ AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t modes, int32_t
             if (pp[s][0] < 0) continue;
             if (aye_rt_dup2(s == 0 ? pp[s][0] : pp[s][1], s) < 0) goto child_fail;
         }
+        aye_rt_signal(13, (void (*)(int))0);
+        if (cwd && aye_rt_chdir(cwd) != 0) goto child_fail;
+        if (envc >= 0) aye_rt_environ = envp;
         aye_rt_execvp(argv[0], argv);
     child_fail:;
         int e = *aye_rt_errno_loc();
@@ -1354,6 +1375,56 @@ AYE_RT void aye_stack_guard_main(void) {
     aye_stack_guard(size);
 #endif
 }
+/* wasm32 has no guard page and no signals: running out of stack is a
+   memory trap. Instead each function's prologue (`AYE_STACK_CHECK`, debug
+   and safe mode) compares its frame address with the stack, which the link
+   puts first (`--stack-first`): it spans addresses 0 to `__global_base`. A
+   frame within 64 KiB of address 0, or one that wrapped below it, reports
+   the same panic as a native overflow. The stack pointer is reset first,
+   as the frame that overflowed may have wrapped it. */
+#ifdef __wasm32__
+extern char __global_base;
+#define AYE_STACK_MARGIN ((uintptr_t)64 << 10)
+AYE_RT __attribute__((noinline, noreturn, cold)) void aye_stack_overflow_report(void) {
+    static const char msg[] =
+        "panic: stack overflow (deep recursion: run it on a thread with a larger stack, std.thread.spawnWithStack)\n";
+    aye_rt_fflush(0);
+    aye_rt_dprintf(2, "%s", msg);
+    aye_rt_abort();
+}
+AYE_RT __attribute__((noinline, noreturn, cold)) void aye_stack_overflow(void) {
+    __asm__ volatile("local.get %0\n\tglobal.set __stack_pointer" ::"r"(&__global_base));
+    aye_stack_overflow_report();
+}
+AYE_RT __attribute__((always_inline)) uintptr_t aye_stack_pointer(void) {
+    uintptr_t sp;
+    __asm__ volatile("global.get __stack_pointer\n\tlocal.set %0" : "=r"(sp));
+    return sp;
+}
+#define AYE_STACK_CHECK()                                                                         \
+    do {                                                                                          \
+        if (AYE_CHECKS && AYE_UNLIKELY(aye_stack_pointer() - AYE_STACK_MARGIN >                   \
+                                       (uintptr_t)&__global_base - AYE_STACK_MARGIN))             \
+            aye_stack_overflow();                                                                 \
+    } while (0)
+#else
+#define AYE_STACK_CHECK() ((void)0)
+#endif
+
+/* std.os.onStop: SIGINT and SIGTERM set a flag that `std.os.stopRequested`
+   reads; the handler does nothing else. Without SA_RESTART, so a thread
+   blocked in `poll` or `accept` when the signal comes returns EINTR. */
+AYE_DATA volatile int aye_stop_flag;
+static __attribute__((unused)) void aye_on_stop(int sig) { (void)sig; aye_stop_flag = 1; }
+AYE_RT void aye_std_on_stop(void) {
+#ifndef __wasm32__
+    aye_sigaction_t sa = {0};
+    sa.action = (void *)aye_on_stop;
+    aye_rt_sigaction(2, &sa, 0);
+    aye_rt_sigaction(15, &sa, 0);
+#endif
+}
+AYE_RT bool aye_std_stop_requested(void) { return __atomic_load_n(&aye_stop_flag, __ATOMIC_RELAXED) != 0; }
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds
@@ -1406,17 +1477,27 @@ AYE_RT __attribute__((noreturn, cold)) void aye_sync_oom(void) {
     aye_rt_dprintf(2, "panic: out of memory for a mutex or condition variable\n");
     aye_rt_abort();
 }
-AYE_RT uint8_t *aye_mutex_new(void) {
-    void *m = aye_rt_malloc(128);
-    if (!m) aye_sync_oom();
-    aye_rt_pthread_mutex_init(m, 0);
+/* A `Mutex` holds `*slot`, null until the first lock makes it: two threads
+   may both make one, and the loser of the compare-and-swap frees its own.
+   So `Mutex.init()` is a constant (O1.21). */
+static uint8_t *aye_mutex_get(uint8_t **slot) {
+    uint8_t *m = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+    if (m) return m;
+    uint8_t *n = aye_rt_malloc(128);
+    if (!n) aye_sync_oom();
+    aye_rt_pthread_mutex_init(n, 0);
+    if (__atomic_compare_exchange_n(slot, &m, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return n;
+    aye_rt_pthread_mutex_destroy(n);
+    aye_rt_free(n);
     return m;
 }
-AYE_RT void aye_mutex_lock(uint8_t *m) { aye_rt_pthread_mutex_lock(m); }
-AYE_RT void aye_mutex_unlock(uint8_t *m) { aye_rt_pthread_mutex_unlock(m); }
-AYE_RT void aye_mutex_free(uint8_t *m) {
-    aye_rt_pthread_mutex_destroy(m);
-    aye_rt_free(m);
+AYE_RT void aye_mutex_lock(uint8_t **m) { aye_rt_pthread_mutex_lock(aye_mutex_get(m)); }
+AYE_RT void aye_mutex_unlock(uint8_t **m) { aye_rt_pthread_mutex_unlock(aye_mutex_get(m)); }
+AYE_RT void aye_mutex_free(uint8_t **m) {
+    uint8_t *h = *m;
+    if (!h) return;
+    aye_rt_pthread_mutex_destroy(h);
+    aye_rt_free(h);
 }
 AYE_RT uint8_t *aye_cond_new(void) {
     void *c = aye_rt_malloc(128);
@@ -1424,7 +1505,7 @@ AYE_RT uint8_t *aye_cond_new(void) {
     aye_rt_pthread_cond_init(c, 0);
     return c;
 }
-AYE_RT void aye_cond_wait(uint8_t *c, uint8_t *m) { aye_rt_pthread_cond_wait(c, m); }
+AYE_RT void aye_cond_wait(uint8_t *c, uint8_t **m) { aye_rt_pthread_cond_wait(c, aye_mutex_get(m)); }
 AYE_RT void aye_cond_signal(uint8_t *c) { aye_rt_pthread_cond_signal(c); }
 AYE_RT void aye_cond_broadcast(uint8_t *c) { aye_rt_pthread_cond_broadcast(c); }
 AYE_RT void aye_cond_free(uint8_t *c) {
@@ -1921,7 +2002,7 @@ fn mangle(t: &Type) -> String {
         Type::Float(FloatTy::F32) => "f32".into(),
         Type::Float(FloatTy::F64) => "f64".into(),
         Type::Bool => "bool".into(),
-        Type::Void => "void".into(),
+        Type::Void | Type::Never => "void".into(),
         Type::Array(e, n) => format!("A{n}_{}", mangle(e)),
         Type::Simd(e, n) => format!("V{n}_{}", mangle(e)),
         // `[]T` and `[]mut T` share one C type.
@@ -1959,7 +2040,7 @@ fn c_type(t: &Type) -> String {
         Type::Float(FloatTy::F32) => "float".into(),
         Type::Float(FloatTy::F64) => "double".into(),
         Type::Bool => "bool".into(),
-        Type::Void => "void".into(),
+        Type::Void | Type::Never => "void".into(),
         Type::ErrorSet(_) => "uint16_t".into(),
         Type::CPtr(e) | Type::Ptr(e, _) => format!("{}*", c_type(e)),
         Type::Optional(e) if is_ptr_optional(t) => c_type(e),
@@ -2140,9 +2221,14 @@ impl Gen {
                 params.join(", ")
             };
             let decl = format!(
-                "extern {} {}({params});",
+                "extern {} {}({params}){};",
                 c_type(&e.ret),
-                extern_symbol(&e.name)
+                extern_symbol(&e.name),
+                if e.noreturn {
+                    " __attribute__((noreturn))"
+                } else {
+                    ""
+                }
             );
             if declared.insert(decl.clone()) {
                 self.line(0, &decl);
@@ -2469,11 +2555,24 @@ impl Gen {
         } else {
             params.join(", ")
         };
+        // A `noreturn` function: the C compiler knows a call never returns.
+        let nr = if f.noreturn {
+            "__attribute__((noreturn)) "
+        } else {
+            ""
+        };
         if f.export {
             let name = extern_symbol(&f.name);
-            return format!("AYE_EXPORT(\"{name}\") {} {name}({params})", c_type(&f.ret));
+            return format!(
+                "AYE_EXPORT(\"{name}\") {nr}{} {name}({params})",
+                c_type(&f.ret)
+            );
         }
-        format!("AYE_FN {} {}({params})", c_type(&f.ret), fn_name(&f.name))
+        format!(
+            "AYE_FN {nr}{} {}({params})",
+            c_type(&f.ret),
+            fn_name(&f.name)
+        )
     }
 
     fn func(&mut self, f: &Func) {
@@ -2485,6 +2584,7 @@ impl Gen {
                 self.line(1, &s);
             }
         }
+        self.line(1, "AYE_STACK_CHECK();");
         self.block(f, &f.body, 1);
         self.out.push_str("}\n");
     }

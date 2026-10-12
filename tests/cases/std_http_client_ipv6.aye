@@ -1,0 +1,58 @@
+// std.http client against a std.http server on [::1] (O3.4c). Needs an
+// IPv6 loopback (`std_http_client_ipv6.needs`).
+
+import std.heap.Arena
+import std.heap.General
+import std.http
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.mem.Allocator
+import std.sync.Atomic
+import std.text.Builder
+import std.thread
+
+struct App {
+    hits: Atomic(u32)
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    _ = app.hits.add(1)
+    res.body = "hello over ipv6"
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    let a = arena.allocator()
+
+    var app = App { hits: Atomic(u32).init(0) }
+    var s = try http.listen(App, "::1", 0, &mut app, handle)
+    let port = s.port()
+    let t = try thread.spawn(Server, run, &mut s)
+
+    var b = Builder.init(a)
+    try b.append("http://[::1]:")
+    try b.appendUint(port as u64)
+    try b.append("/hello")
+    let r = try http.get(a, b.bytes())
+    @print("status: ")
+    @println(r.status)
+    @print("body: ")
+    @println(r.body)
+
+    s.stop()
+    t.join()
+    @print("handled ")
+    @println(app.hits.load())
+}

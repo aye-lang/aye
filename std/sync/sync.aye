@@ -3,29 +3,32 @@
 import std.mem.AllocError
 import std.mem.Allocator
 
-/// A lock: one thread at a time holds it. Copies of a `Mutex` are the same
-/// lock; `deinit` it once, when no thread uses it.
+/// A lock: one thread at a time holds it. Share it by pointer: copies made
+/// after the first `lock` are the same lock, a copy made before is another.
+/// `deinit` it once, when no thread uses it.
 pub struct Mutex {
-    handle: [*]u8
+    // Made by the first `lock` (a compare-and-swap in the runtime), so that
+    // `init` is a constant and a global can start as `Mutex.init()`.
+    handle: ?[*]u8
 
-    /// A new lock. Copies of a `Mutex` are the same lock.
+    /// A new lock; a constant, so a global `var` can hold it.
     pub fn init() Mutex {
-        return Mutex { handle: aye_mutex_new() }
+        return Mutex { handle: null }
     }
 
     /// Waits until no other thread holds the lock, and takes it.
     pub fn lock(self: *Self) {
-        aye_mutex_lock(self.handle)
+        aye_mutex_lock(&self.handle)
     }
 
     /// Releases the lock.
     pub fn unlock(self: *Self) {
-        aye_mutex_unlock(self.handle)
+        aye_mutex_unlock(&self.handle)
     }
 
     /// Frees the lock, once, when no thread uses it.
     pub fn deinit(self: *Self) {
-        aye_mutex_free(self.handle)
+        aye_mutex_free(&self.handle)
     }
 }
 
@@ -39,7 +42,7 @@ struct Cond {
     }
 
     fn wait(self: *Self, m: *Mutex) {
-        aye_cond_wait(self.handle, m.handle)
+        aye_cond_wait(self.handle, &m.handle)
     }
 
     fn signal(self: *Self) {
@@ -185,12 +188,11 @@ pub fn Atomic(comptime T: type) type where T: Integer {
     }
 }
 
-extern fn aye_mutex_new() [*]u8
-extern fn aye_mutex_lock(m: [*]u8)
-extern fn aye_mutex_unlock(m: [*]u8)
-extern fn aye_mutex_free(m: [*]u8)
+extern fn aye_mutex_lock(m: *?[*]u8)
+extern fn aye_mutex_unlock(m: *?[*]u8)
+extern fn aye_mutex_free(m: *?[*]u8)
 extern fn aye_cond_new() [*]u8
-extern fn aye_cond_wait(c: [*]u8, m: [*]u8)
+extern fn aye_cond_wait(c: [*]u8, m: *?[*]u8)
 extern fn aye_cond_signal(c: [*]u8)
 extern fn aye_cond_broadcast(c: [*]u8)
 extern fn aye_cond_free(c: [*]u8)

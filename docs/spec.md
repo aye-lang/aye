@@ -61,7 +61,7 @@ aye run <path> [--mode debug|safe|fast] [-- args...]  build to a temp file and r
 aye build <path> [-o out] [--mode m]                  build an executable (default name: the file or directory name)
     [--cflags "flags"]                                (build, run, test) more clang flags: --cflags -fsanitize=thread
     [--no-link lib]                                   (build, run, test; repeatable) treat the `@linkOptional("lib")` library as not installed: not linked, `@hasLink` false (`std.http` then has no libcurl: https is `HttpsUnsupported`); a name no `@linkOptional` declares is E0100
-    [-c]                                              (build) compile to an object file `<name>.o` without linking; any --target, no sysroot needed (a Linux target on macOS links only with a Linux sysroot)
+    [-c]                                              (build) compile to an object file `<name>.o` without linking; any --target, no sysroot needed (a Linux target on macOS links only with a Linux sysroot: `AYE_SYSROOT=<dir>`, linked with lld)
     [--target t]                                      (build, run, test, emit-c, check) t: aarch64-macos x86_64-macos aarch64-linux x86_64-linux wasm32-wasip1 wasm32-freestanding; unknown E0117, std module the target lacks E0118; wasm32-wasip1 programs run under Node's `node:wasi`; wasm32-freestanding has no libc and no `main` is needed: `pub extern fn` is exported to JS, `main` is exported as `aye_main`, output and abort are the imports `env.aye_write(fd, ptr, len)` and `env.aye_abort()`; std also imports `env.aye_clock(id)`, `env.aye_fmt_double(ptr, cap, x, n)`, `strtod` and libm's `sin cos tan asin acos atan atan2 exp log log2 log10 pow fmod hypot` by name (`tests/wasm/loader.mjs` provides them)
 aye check <path> [--json]                             report all compile errors; no C, no clang
 aye fix <path>                                        apply the fix-its of `aye check` in place, repeat (at most 10 rounds)
@@ -140,7 +140,7 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`,
   `@embedFile`, `@link`,
-  `@linkOptional`, `@cimport`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
+  `@linkOptional`, `@cimport`, `@hasLink`, `@targetOs`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
   `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`,
   `@tagName(x)` (the tag name of an error, enum or tagged-union value, a `[]u8`).
@@ -230,13 +230,24 @@ pub fn main() {
   must `return` a value on every path. In a function that returns nothing
   (or `E!void`), `return f()` of a call that returns nothing calls it and
   returns.
+- The return type `noreturn` declares a function that never comes back:
+  a call to it ends a block like `return`, so `fn check(n: i64) bool`
+  may end with `die("negative")` and no `return` after it. Its body must
+  end every path with a call to a `noreturn` function (`std.os.exit` is
+  one) or `unreachable`, and has no `return` (E0125). Where a value is
+  expected, such a call gives none and fits any type: `x orelse
+  die("..")`, `x catch die("..")` and `_ => die("..")` in a `match` that
+  produces a value.
 - No overloading, default arguments, variadic Aye functions or closures.
 - Functions may call each other in any order, and recurse.
 - A top-level function that is not generic is a value of type `fn(A, B) R`
   (`fn(A)` without a result). Store it in a variable, field, array, global
   or optional (`?fn(A) R`, nullable), pass it, return it and call it:
   `f(x)`, `s.field(x)` (when `s` has no method of that name), `get()(x)`.
-  Methods and generic functions are not values.
+  Methods and generic functions are not values. A function type may say
+  `noreturn` (`fn([]u8) noreturn`, the type of a `noreturn` function, which
+  is also a `fn([]u8)`): a call through such a value ends a block like a
+  direct call.
 
 ```aye
 struct Button {
@@ -293,9 +304,11 @@ pub fn main() {
 
 - `let NAME = value` at the top level is a constant, `var name = value` a
   global variable. The value is computed by the compiler: literals, other
-  `let` constants, operators, `as`, and array, struct and enum literals. No
-  calls and no `var` globals; overflow there is a compile error. A global
-  is initialized before `main` runs, in any declaration order.
+  `let` constants, operators, `as`, array, struct and enum literals, and a
+  call without arguments to a function whose body is one `return` of such
+  a value (`var lock = Mutex.init()`). No other calls and no `var`
+  globals; overflow there is a compile error. A global is initialized
+  before `main` runs, in any declaration order.
 - As for a local `let`, an untyped integer gives `i64`: write `let N:
   usize = 4` for an index bound.
 - `let Name = Type` (a type name, `Pool(Node)`, `[]u8`, `*Node`, ...) is a
@@ -911,6 +924,9 @@ optional type (`var m: ?i64 = null`).
   `catch` takes the same.
   When `d` is a `?T` itself, the result is a `?T`, so `orelse` chains:
   `alt(i) orelse title(i) orelse ""` is a `[]u8`.
+  Like `catch`, where a `[]T` is expected an `orelse` on a `?[]mut T`
+  is a `[]T`, so the fallback may be one: `let s: []u8 = opt orelse
+  "none"`.
 - `x.?` is the value of `x`; a `null` panics (`unwrap of null`). It is a
   place when `x` is: `opt.?.count += 1`.
 - `unreachable` panics (`reached unreachable code`); it can stand for a
@@ -933,7 +949,8 @@ Arms are separated by newlines or `,`.
   have the same type. An arm may also be `return [value]`, `break` or
   `continue`: it leaves, so it has no value and takes the type of the
   other arms (`let n = match o { .Some { n } => n, .None => return
-  error.Missing }`).
+  error.Missing }`). At least one arm must give a value: a `match` used
+  as a value whose arms all leave is E0124 (write it as a statement).
 - As a statement, each arm is a block, `return [value]`, `break`,
   `continue` or an expression statement: a call (or builtin), `try`,
   `catch`, `match` or `unreachable` (`.A => try self.f()`). Assignments
@@ -1563,6 +1580,37 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`, `@cimport("header.h")`:
   section 4.
+- `@targetOs()`: the OS of `--target` (default: this machine), a value of
+  a built-in enum with the variants `.macos`, `.linux`, `.wasi`
+  (`wasm32-wasip1`) and `.freestanding` (`wasm32-freestanding`). The enum
+  has no name to write; test it with `is` (`@targetOs() is .linux`), take
+  `@tagName` of it or `match` on it. Like `@hasLink` (section 4), in
+  `if @targetOs() is .macos { ... } else { ... }` (also with `!`, `&&`,
+  `||`, and `@hasLink`) both branches are checked, but only the one for
+  the target is built, and a function that only the other branch calls is
+  left out of the program; so the per-OS C constants and calls of a
+  library can live in Aye:
+
+```aye
+extern fn sysconf(name: i32) i64
+
+fn cpus() i64 {
+    // _SC_NPROCESSORS_ONLN
+    if @targetOs() is .macos {
+        return sysconf(58)
+    }
+    return sysconf(84)
+}
+
+pub fn main() {
+    if @targetOs() is .wasi || @targetOs() is .freestanding {
+        @println(1)
+    } else {
+        @println(cpus() > 0)
+    }
+}
+```
+
 - `@hash(x)`: section 11 (`where T: Hash`).
 - `@downcast(*S, d)`: section 10.
 - `@embedFile("path")`: the bytes of the file at `path` as a `[]u8`
@@ -1603,8 +1651,8 @@ std.coro      coroutines: create, resume, yield                              bel
 std.testing   the leak-checked allocator of a test                           below
 std.log       err/info: "error: "/"info: " lines to stderr; line: no prefix  below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
-std.os        args, getenv, exit, cpuCount                                   below
-std.process   child processes: spawn (piped or inherited streams), wait, kill  aye doc --signatures std.process
+std.os        args, getenv, exit, cpuCount, onStop/stopRequested (signals)  below
+std.process   child processes: spawn/spawnWith (env, cwd), wait, kill, killHard   aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
@@ -1621,7 +1669,9 @@ port, ctx, handler)` gives a `Server`; `s.run(alloc)` serves on
 that lives until the response is written (a `HEAD` response omits the
 body, not its `Content-Length`; `res.stream()` keeps the connection open
 as an event stream that `s.broadcast(alloc, event, data)` writes to, after
-`res.body` if it is not empty: the first chunk, as is). `req.query(alloc, name)` and
+`res.body` if it is not empty: the first chunk, as is). `s.stop()`
+(any thread) is graceful: answered responses are written whole, other
+connections close, `run` returns; after `std.os.onStop()`, so does SIGTERM. `req.query(alloc, name)` and
 `req.form(alloc, name)` give the first value of a query or urlencoded form
 field, percent-decoded (`+` is a space) in `alloc`, and `req.cookie(name)`
 a cookie as sent; each gives null when missing. The client is `http.get(arena,
@@ -1694,6 +1744,7 @@ error WriteError { WriteFailed }
 error ReadFileError = OpenError || ReadError
 error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathFailed }
 error ReadDirError = PathError || AllocError
+error ReadLinkError = PathError || AllocError
 enum Kind { File, Dir, Symlink, Other }
 struct Stat { size: u64, mtime: i64, kind: Kind }
 struct DirEntry { name: []u8, kind: Kind }
@@ -1711,6 +1762,7 @@ std.fs.mkdir(path: []u8) PathError!void                  create a directory (the
 std.fs.remove(path: []u8) PathError!void                 delete a file, symlink or empty directory
 std.fs.rename(from: []u8, to: []u8) PathError!void       rename or move; replaces an existing "to"
 std.fs.symlink(target: []u8, link: []u8) PathError!void  create a symlink at link holding target
+std.fs.readLink(alloc: Allocator, path: []u8) ReadLinkError![]mut u8   the target a symlink holds, unresolved; free with alloc.free
 std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File
@@ -1873,6 +1925,7 @@ Builder.appendChar(self: *mut Self, code: u32) AllocError!void    UTF-8 encoded
 Builder.appendInt(self: *mut Self, v: i64) AllocError!void
 Builder.appendUint(self: *mut Self, v: u64) AllocError!void
 Builder.appendFloat(self: *mut Self, v: f64) AllocError!void      the text of @print (%g)
+Builder.appendFloatExact(self: *mut Self, v: f64) AllocError!void shortest digits that read back (JSON.stringify layout; nan, inf, -inf)
 Builder.toOwned(self: *mut Self) AllocError![]mut u8              exact-size copy; free with alloc.free; builder empty after
 ```
 
@@ -1948,8 +2001,8 @@ pub fn main() {
 ### std.sync
 
 ```
-std.sync.Mutex                             a lock; copies are the same lock
-Mutex.init() Mutex
+std.sync.Mutex                             a lock; share it by pointer
+Mutex.init() Mutex                         a constant: a global may hold it
 Mutex.lock(self: *Self)                    wait for the lock and take it
 Mutex.unlock(self: *Self)
 Mutex.deinit(self: *Self)                  once, when no thread uses it
@@ -2200,6 +2253,8 @@ std.os.args(alloc: Allocator) AllocError![][]u8   the arguments; [0] is the prog
 std.os.getenv(name: []u8) ?[]u8                   the variable's value (points into the environment; do not free); null if unset
 std.os.cpuCount() u32                             the number of CPUs online (at least 1)
 std.os.exit(code: i32)                            exit now with this status (flushes @print output; deferred statements do not run)
+std.os.onStop()                                   SIGINT and SIGTERM set a flag instead of ending the program (call once, early)
+std.os.stopRequested() bool                       has SIGINT or SIGTERM come since onStop? (std.http's Server.run checks it)
 ```
 
 To exit with a status and still free everything, do the work in a function
@@ -2241,20 +2296,25 @@ binds 127.0.0.1. Writes never raise SIGPIPE.
 
 ```
 std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system picks one
+std.net.listenShared(host: []u8, port: u16) ListenError!Listener   listen; on Linux SO_REUSEPORT, for Listener.again
 std.net.connect(host: []u8, port: u16) ConnectError!Conn
+std.net.connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn   connect, TimedOut after ms (per address)
 Listener.accept(self: Self) AcceptError!Conn   waits for the next connection
 Listener.port(self: Self) u16                  the port it listens on
+Listener.fd(self: Self) i32                    its file descriptor, for poll (do not close it)
+Listener.again(self: Self) ListenError!Listener   another listener on its address (Linux, listenShared: the kernel spreads connections)
 Listener.close(self: Self)
 Conn.read(self: Self, buf: []mut u8) ReadError!usize   waits; at most buf.len bytes; 0 when the peer closed
 Conn.readTimeout(self: Self, buf: []mut u8, ms: u32) ReadError!usize   read, waiting at most ms (poll)
 Conn.write(self: Self, bytes: []u8) WriteError!void    write everything
 Conn.writeSome(self: Self, bytes: []u8) WriteError!usize   what the socket takes now; 0: buffer full
-Conn.setNonBlocking(self: Self) bool   O_NONBLOCK: writeSome and read do not wait (poll first)
+Conn.setNonBlocking(self: Self) bool   O_NONBLOCK: writeSome gives 0 and read WouldBlock instead of waiting (poll first)
+Conn.fd(self: Self) i32                its file descriptor, for poll (do not close it)
 Conn.close(self: Self)
 error ListenError { InvalidAddress, AddressInUse, AccessDenied, UnknownHost, ListenFailed }
 error ConnectError { InvalidAddress, UnknownHost, ConnectionRefused, Unreachable, TimedOut, ConnectFailed }
 error AcceptError { AcceptFailed }
-error ReadError { TimedOut, ConnectionReset, ReadFailed }
+error ReadError { TimedOut, ConnectionReset, WouldBlock, ReadFailed }
 error WriteError { ConnectionClosed, WriteFailed }
 ```
 
