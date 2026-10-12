@@ -611,6 +611,15 @@ pub fn reason(status: u16) []u8 {
     }
 }
 
+/// A `Date` header for `at`, as IMF-fixdate (`Date: Sat, 10 Oct 2026
+/// 07:20:00 GMT`), its value in new memory from `alloc` (free it with
+/// `alloc.free`). `dateHeader(alloc, time.now())` stamps a response; the
+/// server does not add one itself.
+pub fn dateHeader(alloc: Allocator, at: i64) AllocError!Header {
+    let v = try time.fromUnixMs(at).formatHttp(alloc)
+    return Header { name: "Date", value: v }
+}
+
 /// Appends the response to `out`: the status line with its reason phrase,
 /// the headers of `res`, `Content-Length` and the body.
 pub fn writeResponse(out: *mut Builder, res: Response) AllocError!void {
