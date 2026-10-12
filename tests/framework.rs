@@ -1634,7 +1634,10 @@ fn posts_server(name: &str) -> App {
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
-    let exe = build_dir("posts", &web);
+    // One executable per test: the three posts tests run in parallel, and
+    // a shared `framework-posts` is rewritten by one test while another
+    // execs it (ETXTBSY on Linux, CI 2026-10-12).
+    let exe = build_dir(name, &web);
     let data = app.join("data/posts.json");
     start_with(&exe, &["--posts", data.to_str().unwrap()])
 }
