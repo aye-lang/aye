@@ -2,7 +2,8 @@ test "base64 vectors, both ways" ... ok (N ms)
 test "base64 keeps all byte values" ... ok (N ms)
 test "base64 url alphabet and padding" ... ok (N ms)
 test "base64 rejects bad characters and lengths" ... ok (N ms)
+test "base64 rejects non-zero trailing bits" ... ok (N ms)
 test "hex lowercase out, both cases in" ... ok (N ms)
 test "hex rejects odd length and non-hex" ... ok (N ms)
 
-6 passed; 0 failed; 1 modules; N ms
+7 passed; 0 failed; 1 modules; N ms
