@@ -1,0 +1,42 @@
+// A function type may say `noreturn`: a call through such a value never
+// comes back, so it ends a block like a direct call. A `noreturn` function
+// is also a value of the plain type (`fn([]u8)`).
+
+import std.os
+
+fn die(msg: []u8) noreturn {
+    @println(msg)
+    os.exit(0)
+}
+
+fn warn(msg: []u8) {
+    @println(msg)
+}
+
+fn check(n: i32, fail: fn([]u8) noreturn) bool {
+    if n >= 0 {
+        return n > 0
+    }
+    fail("check: negative")
+}
+
+fn first(xs: []i32, fail: fn([]u8) noreturn) i32 {
+    if xs.len > 0 {
+        return xs[0]
+    }
+    let v: ?i32 = null
+    return v orelse fail("first: empty")
+}
+
+pub fn main() {
+    let report: fn([]u8) = die
+    let w: fn([]u8) = warn
+    w("warned")
+    let f = die
+    @println(check(1, f))
+    @println(check(0, die))
+    let xs = [2]i32{3, 4}
+    @println(first(xs[..], f))
+    @println(check(-1, f))
+    report("not reached")
+}

@@ -92,7 +92,6 @@ pub fn main() !void {
 
     let st = fs.stat(exe) catch |err| {
         die("cannot read", exe)
-        unreachable
     }
     var line = Builder.init(tmp)
     try line.append("web build: ")
@@ -139,7 +138,6 @@ fn absolute(alloc: Allocator, p: []u8) ![]u8 {
     var buf = try alloc.alloc(0 as u8, 4096)
     let cwd = getcwd(buf.ptr, buf.len) orelse {
         die("cannot read the current directory", "")
-        return p
     }
     return path.join(alloc, cwd[0..strlen(cwd)], p)
 }
@@ -150,7 +148,6 @@ fn absolute(alloc: Allocator, p: []u8) ![]u8 {
 fn run(tmp: Allocator, argv: [][]u8, what: []u8) {
     var child = process.spawn(tmp, argv, Stdio.Inherit, Stdio.Inherit, Stdio.Pipe) catch |err| {
         die("cannot run", argv[0])
-        unreachable
     }
     var err: []u8 = ""
     if child.stderr |f| {
@@ -162,14 +159,13 @@ fn run(tmp: Allocator, argv: [][]u8, what: []u8) {
     fs.stderr().write(err) catch |e| {}
     let status = child.wait() catch |e| {
         die("cannot wait for", what)
-        unreachable
     }
     if !status.success() {
         die("failed", what)
     }
 }
 
-fn die(what: []u8, a: []u8) {
+fn die(what: []u8, a: []u8) noreturn {
     fs.stderr().write("web build: ") catch |e| {}
     if text.eql(what, "failed") {
         fs.stderr().write(a) catch |e| {}
