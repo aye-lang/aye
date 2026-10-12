@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod nav;
 
@@ -638,6 +638,9 @@ struct Server<W: Write> {
     /// Documents changed since their last check, waiting for `DEBOUNCE`
     /// of quiet.
     pending: Vec<String>,
+    /// When a `didOpen` or `didChange` last came: only these restart the
+    /// quiet time, so a hover during typing does not delay the check.
+    last_change: Option<Instant>,
     shutdown: bool,
 }
 
@@ -772,6 +775,7 @@ impl<W: Write> Server<W> {
                         version,
                     };
                     self.docs.insert(uri.to_string(), doc);
+                    self.last_change = Some(Instant::now());
                     self.publish(uri)?;
                 }
             }
@@ -793,6 +797,7 @@ impl<W: Write> Server<W> {
                         version,
                     };
                     self.docs.insert(uri.clone(), doc);
+                    self.last_change = Some(Instant::now());
                     if !self.pending.contains(&uri) {
                         self.pending.push(uri);
                     }
@@ -821,9 +826,14 @@ impl<W: Write> Server<W> {
 }
 
 /// What the main loop does next: wait for a message with this timeout
-/// (`None`: forever), given the documents waiting for a check.
-fn wait_for(pending: bool) -> Option<Duration> {
-    pending.then_some(DEBOUNCE)
+/// (`None`: forever), given the documents waiting for a check and when the
+/// last `didChange` or `didOpen` came. `Some(ZERO)`: the quiet time is over.
+fn wait_for(pending: bool, last_change: Option<Instant>, now: Instant) -> Option<Duration> {
+    if !pending {
+        return None;
+    }
+    let quiet = last_change.map_or(Duration::ZERO, |t| now.saturating_duration_since(t));
+    Some(DEBOUNCE.saturating_sub(quiet))
 }
 
 /// Serve the client on `input` and `output` until `exit` or the end of the
@@ -843,10 +853,16 @@ pub fn run(mut input: impl BufRead + Send + 'static, output: impl Write) -> i32 
         out: output,
         docs: HashMap::new(),
         pending: Vec::new(),
+        last_change: None,
         shutdown: false,
     };
     loop {
-        let body = match wait_for(!server.pending.is_empty()) {
+        let wait = wait_for(
+            !server.pending.is_empty(),
+            server.last_change,
+            Instant::now(),
+        );
+        let body = match wait {
             None => rx.recv().map_err(|_| ()),
             Some(t) => match rx.recv_timeout(t) {
                 Ok(b) => Ok(b),
@@ -900,8 +916,22 @@ mod tests {
 
     #[test]
     fn debounce_waits_only_with_pending_changes() {
-        assert_eq!(wait_for(false), None);
-        assert_eq!(wait_for(true), Some(DEBOUNCE));
+        let now = Instant::now();
+        assert_eq!(wait_for(false, None, now), None);
+        assert_eq!(wait_for(true, Some(now), now), Some(DEBOUNCE));
+        assert_eq!(wait_for(true, None, now), Some(DEBOUNCE));
+    }
+
+    #[test]
+    fn debounce_counts_from_the_last_change() {
+        let now = Instant::now();
+        let t = now - Duration::from_millis(100);
+        assert_eq!(
+            wait_for(true, Some(t), now),
+            Some(Duration::from_millis(50))
+        );
+        let old = now - Duration::from_millis(400);
+        assert_eq!(wait_for(true, Some(old), now), Some(Duration::ZERO));
     }
 
     #[test]

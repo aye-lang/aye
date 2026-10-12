@@ -1236,7 +1236,11 @@ fn expr_type(e: &ast::Expr) -> Option<ast::TypeExpr> {
         ExprKind::Type(t) => return Some(t.clone()),
         _ => return None,
     };
-    Some(ast::TypeExpr { kind, span: e.span })
+    Some(ast::TypeExpr {
+        kind,
+        span: e.span,
+        end: e.end,
+    })
 }
 
 /// Primitive and predeclared type names, for spelling suggestions.
@@ -1647,11 +1651,10 @@ impl<'a> Checker<'a> {
                 continue;
             }
             if self.top_spans.contains_key(name) {
-                self.report(Error::new(
-                    E0015,
-                    span,
-                    format!("`{name}` is defined more than once"),
-                ));
+                self.report(
+                    Error::new(E0015, span, format!("`{name}` is defined more than once"))
+                        .ending(span.right(name.chars().count() as u32)),
+                );
                 continue;
             }
             self.top_spans.insert(name.clone(), span);
@@ -1745,7 +1748,7 @@ impl<'a> Checker<'a> {
                                     f.name,
                                     s.name,
                                     self.c_hint(ty, true)
-                                )));
+                                )).ending(f.ty.end));
                             }
                         }
                     }
@@ -1757,7 +1760,7 @@ impl<'a> Checker<'a> {
                         self.report(Error::new(E0104, f.span, format!(
                             "a field of the union `{}` cannot have a default value: a literal sets exactly one field",
                             s.name
-                        )));
+                        )).ending(f.name_end));
                     } else if exprs.iter().any(Option::is_some) {
                         let module = module_of(&s.name).to_string();
                         self.default_decls.insert(
@@ -1832,23 +1835,29 @@ impl<'a> Checker<'a> {
                 ast::Item::Struct(s) => {
                     for m in &s.methods {
                         if s.fields.iter().any(|f| f.name == m.name) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!(
-                                    "`{}` is both a field and a method of struct `{}`",
-                                    m.name, s.name
-                                ),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!(
+                                        "`{}` is both a field and a method of struct `{}`",
+                                        m.name, s.name
+                                    ),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         let key = format!("{}.{}", s.name, m.name);
                         if decls.iter().any(|(k, ..)| *k == key) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!("duplicate method `{}` in struct `{}`", m.name, s.name),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!("duplicate method `{}` in struct `{}`", m.name, s.name),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         decls.push((key, m, Some(s.name.clone())));
@@ -1857,23 +1866,29 @@ impl<'a> Checker<'a> {
                 ast::Item::Enum(e) => {
                     for m in &e.methods {
                         if e.variants.iter().any(|v| v.name == m.name) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!(
-                                    "`{}` is both a variant and a method of enum `{}`",
-                                    m.name, e.name
-                                ),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!(
+                                        "`{}` is both a variant and a method of enum `{}`",
+                                        m.name, e.name
+                                    ),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         let key = format!("{}.{}", e.name, m.name);
                         if decls.iter().any(|(k, ..)| *k == key) {
-                            self.report(Error::new(
-                                E0015,
-                                m.span,
-                                format!("duplicate method `{}` in enum `{}`", m.name, e.name),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    m.span,
+                                    format!("duplicate method `{}` in enum `{}`", m.name, e.name),
+                                )
+                                .ending(m.name_end),
+                            );
                             continue;
                         }
                         decls.push((key, m, Some(e.name.clone())));
@@ -1901,7 +1916,7 @@ impl<'a> Checker<'a> {
                 };
                 for (p, ty) in f.params.iter().zip(&sig.params) {
                     if !self.c_compat(ty, false) {
-                        self.report(Error::new(E0052, p.ty.span, not_c(ty, self)));
+                        self.report(Error::new(E0052, p.ty.span, not_c(ty, self)).ending(p.ty.end));
                     }
                 }
                 if sig.ret != Type::Void && !self.c_compat(&sig.ret, false) {
@@ -1931,13 +1946,13 @@ impl<'a> Checker<'a> {
                         let msg = format!(
                             "C function `{sym}` is declared twice with different signatures: `{first}` and `{ty}`"
                         );
-                        self.report(Error::new(E0096, f.span, msg));
+                        self.report(Error::new(E0096, f.span, msg).ending(f.name_end));
                     }
                     Some((.., true)) if defined => {
                         let msg = format!(
                             "C function `{sym}` is defined twice: each `pub extern fn` needs its own name"
                         );
-                        self.report(Error::new(E0096, f.span, msg));
+                        self.report(Error::new(E0096, f.span, msg).ending(f.name_end));
                     }
                     Some((.., d)) => *d |= defined,
                     None => {
@@ -2542,21 +2557,27 @@ impl<'a> Checker<'a> {
     fn generic_decl(&mut self, f: &'a ast::FnDecl) {
         let g = &f.name;
         if f.is_extern {
-            self.report(Error::new(
-                E0076,
-                f.span,
-                "an `extern fn` cannot have `comptime` parameters",
-            ));
+            self.report(
+                Error::new(
+                    E0076,
+                    f.span,
+                    "an `extern fn` cannot have `comptime` parameters",
+                )
+                .ending(f.name_end),
+            );
         }
         let mut seen: Vec<(&str, Span)> = Vec::new();
         for p in &f.params {
             if !p.comptime {
                 if is_type_fn(f) {
-                    self.report(Error::new(
-                        E0076,
-                        p.span,
-                        "a function that returns `type` can only have `comptime` parameters",
-                    ));
+                    self.report(
+                        Error::new(
+                            E0076,
+                            p.span,
+                            "a function that returns `type` can only have `comptime` parameters",
+                        )
+                        .ending(p.name_end),
+                    );
                 }
                 continue;
             }
@@ -2565,7 +2586,7 @@ impl<'a> Checker<'a> {
                     E0076,
                     p.ty.span,
                     "a `comptime` parameter must have type `type` (other compile-time values are not supported)",
-                ));
+                ).ending(p.ty.end));
             }
             // Other modules' top-level names are checked by module resolution.
             let top = if module_of(g).is_empty() {
@@ -2914,31 +2935,40 @@ impl<'a> Checker<'a> {
         let mut keys: Vec<String> = Vec::new();
         for m in &sdecl.methods {
             if sdecl.fields.iter().any(|f| f.name == m.name) {
-                self.report(Error::new(
-                    E0015,
-                    m.span,
-                    format!(
-                        "`{}` is both a field and a method of struct `{name}`",
-                        m.name
-                    ),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        m.span,
+                        format!(
+                            "`{}` is both a field and a method of struct `{name}`",
+                            m.name
+                        ),
+                    )
+                    .ending(m.name_end),
+                );
                 continue;
             }
             let key = format!("{name}.{}", m.name);
             if keys.contains(&key) {
-                self.report(Error::new(
-                    E0015,
-                    m.span,
-                    format!("duplicate method `{}` in struct `{name}`", m.name),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        m.span,
+                        format!("duplicate method `{}` in struct `{name}`", m.name),
+                    )
+                    .ending(m.name_end),
+                );
                 continue;
             }
             if let Some(p) = m.params.iter().find(|p| p.comptime) {
-                self.report(Error::new(
-                    E0076,
-                    p.span,
-                    "only a top-level function can have `comptime` parameters",
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        p.span,
+                        "only a top-level function can have `comptime` parameters",
+                    )
+                    .ending(p.name_end),
+                );
             }
             self.register(&key, m, Some(name.clone()), Some(g.to_string()));
             keys.push(key);
@@ -3022,7 +3052,7 @@ impl<'a> Checker<'a> {
                 };
                 self.report(Error::new(E0076, t.span, format!(
                     "a generic function must spell out its error set: write `ErrorSet!{payload}`, not `!{payload}`"
-                )));
+                )).ending(t.end));
                 Type::Error
             }
             Some(t) => self.resolve_ret(key, f.is_pub, t),
@@ -3070,11 +3100,14 @@ impl<'a> Checker<'a> {
         let mut methods: Vec<IfaceMethod> = Vec::new();
         for m in &i.methods {
             if methods.iter().any(|x| x.name == m.name) {
-                self.report(Error::new(
-                    E0015,
-                    m.span,
-                    format!("duplicate method `{}` in interface `{}`", m.name, i.name),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        m.span,
+                        format!("duplicate method `{}` in interface `{}`", m.name, i.name),
+                    )
+                    .ending(m.name_end),
+                );
                 continue;
             }
             let mutable = match m.params.first().map(|p| &p.ty.kind) {
@@ -3090,11 +3123,14 @@ impl<'a> Checker<'a> {
                 }
             };
             if let Some(p) = m.params.iter().find(|p| p.comptime) {
-                self.report(Error::new(
-                    E0076,
-                    p.span,
-                    "only a top-level function can have `comptime` parameters",
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        p.span,
+                        "only a top-level function can have `comptime` parameters",
+                    )
+                    .ending(p.name_end),
+                );
                 continue;
             }
             let params = m.params[1..]
@@ -3276,11 +3312,14 @@ impl<'a> Checker<'a> {
         let mut fields: Vec<(String, Type)> = Vec::new();
         for f in decls {
             if fields.iter().any(|(n, _)| *n == f.name) {
-                self.report(Error::new(
-                    E0015,
-                    f.span,
-                    format!("duplicate field `{}` in {owner}", f.name),
-                ));
+                self.report(
+                    Error::new(
+                        E0015,
+                        f.span,
+                        format!("duplicate field `{}` in {owner}", f.name),
+                    )
+                    .ending(f.name_end),
+                );
                 continue;
             }
             let ty = self.resolve_or_report(&f.ty);
@@ -3816,14 +3855,17 @@ impl<'a> Checker<'a> {
             && needs_value(&sig.ret)
             && !block_returns(&body, false, &self.noreturn)
         {
-            self.report(Error::new(
-                E0050,
-                f.span,
-                format!(
-                    "function `{name}` must return a value of type `{}` on every path",
-                    sig.ret
-                ),
-            ));
+            self.report(
+                Error::new(
+                    E0050,
+                    f.span,
+                    format!(
+                        "function `{name}` must return a value of type `{}` on every path",
+                        sig.ret
+                    ),
+                )
+                .ending(f.name_end),
+            );
         }
         if self.failures == failures && sig.noreturn && !block_returns(&body, false, &self.noreturn)
         {
@@ -4009,7 +4051,7 @@ impl<'a> Checker<'a> {
                         self.report(Error::new(E0102, *sp, format!(
                             "the condition has type `{}`: there is no value to capture (write `if f() {{ }} else |{ename}| {{ }}`)",
                             u.as_ref().map_or(Type::Error, |u| u.ty.clone())
-                        )));
+                        )).ending(sp.right(n.chars().count() as u32)));
                         self.declare_or_report(n, Type::Error, false, *sp);
                         Err(silent())
                     }
@@ -6024,7 +6066,7 @@ impl<'a> Checker<'a> {
                                 format!(
                                     "this `orelse` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
                                 ),
-                            ))
+                            ).ending(e.end))
                         } else {
                             Ok(TArmBody::Block(stmts))
                         }
@@ -7792,13 +7834,17 @@ impl<'a> Checker<'a> {
         {
             let at = fields.get(1).map_or(span, |f| f.span);
             let first = def.first().map_or("field", |(n, _)| n.as_str());
-            return err(
+            let mut e = Error::new(
                 E0104,
                 at,
                 format!(
                     "a literal of the union `{s}` sets exactly one field: `{s} {{ {first}: ... }}`"
                 ),
             );
+            if let Some(f) = fields.get(1) {
+                e = e.ending(f.span.right(f.name.chars().count() as u32));
+            }
+            return Err(e);
         }
         for f in fields {
             let Some(index) = def.iter().position(|(n, _)| *n == f.name) else {
@@ -7899,7 +7945,7 @@ impl<'a> Checker<'a> {
                         format!(
                             "this `catch` block must end with a `{payload}` value or leave with `return`, `break`, `continue` or `unreachable`"
                         ),
-                    ))
+                    ).ending(e.end))
                 } else {
                     Ok(TArmBody::Block(stmts))
                 }
