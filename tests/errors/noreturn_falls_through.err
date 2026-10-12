@@ -1,0 +1,3 @@
+noreturn_falls_through.aye:4:4: error[E0125]: function `die` is `noreturn` but can reach the end of its body: end every path with a call to a `noreturn` function (such as `std.os.exit`) or `unreachable`
+noreturn_falls_through.aye:8:4: error[E0125]: function `half` is `noreturn` but can reach the end of its body: end every path with a call to a `noreturn` function (such as `std.os.exit`) or `unreachable`
+noreturn_falls_through.aye:16:9: error[E0125]: `return` in a `noreturn` function: it must never come back to its caller

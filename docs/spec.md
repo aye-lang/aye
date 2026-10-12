@@ -230,6 +230,11 @@ pub fn main() {
   must `return` a value on every path. In a function that returns nothing
   (or `E!void`), `return f()` of a call that returns nothing calls it and
   returns.
+- The return type `noreturn` declares a function that never comes back:
+  a call to it ends a block like `return`, so `fn check(n: i64) bool`
+  may end with `die("negative")` and no `return` after it. Its body must
+  end every path with a call to a `noreturn` function (`std.os.exit` is
+  one) or `unreachable`, and has no `return` (E0125).
 - No overloading, default arguments, variadic Aye functions or closures.
 - Functions may call each other in any order, and recurse.
 - A top-level function that is not generic is a value of type `fn(A, B) R`
@@ -911,6 +916,9 @@ optional type (`var m: ?i64 = null`).
   `catch` takes the same.
   When `d` is a `?T` itself, the result is a `?T`, so `orelse` chains:
   `alt(i) orelse title(i) orelse ""` is a `[]u8`.
+  Like `catch`, where a `[]T` is expected an `orelse` on a `?[]mut T`
+  is a `[]T`, so the fallback may be one: `let s: []u8 = opt orelse
+  "none"`.
 - `x.?` is the value of `x`; a `null` panics (`unwrap of null`). It is a
   place when `x` is: `opt.?.count += 1`.
 - `unreachable` panics (`reached unreachable code`); it can stand for a

@@ -1,0 +1,40 @@
+// A `noreturn` function never comes back, so a call to it ends a block
+// like `return`: `check` needs no `return` after `die`, and neither does
+// the `catch` block that gives a value.
+
+import std.os
+
+error Bad { Negative }
+
+fn die(msg: []u8) noreturn {
+    @println(msg)
+    os.exit(0)
+}
+
+fn check(n: i32) bool {
+    if n > 0 {
+        return true
+    }
+    if n == 0 {
+        return false
+    }
+    die("check: negative")
+}
+
+fn parse(n: i32) Bad!i32 {
+    if n < 0 {
+        return Bad.Negative
+    }
+    return n * 2
+}
+
+pub fn main() {
+    @println(check(1))
+    @println(check(0))
+    let v = parse(21) catch |e| {
+        die("parse failed")
+    }
+    @println(v)
+    @println(check(-1))
+    @println("not reached")
+}

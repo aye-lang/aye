@@ -65,7 +65,7 @@ pub fn stopRequested() bool {
 
 /// End the program with the exit status `code`, after flushing `@print`
 /// output. Deferred statements do not run.
-pub extern fn exit(code: i32)
+pub extern fn exit(code: i32) noreturn
 
 extern fn aye_std_argc() i32
 extern fn aye_std_argv(i: i32) [*]u8

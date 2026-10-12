@@ -460,6 +460,8 @@ pub struct ExternFn {
     pub ret: Type,
     /// Ends with `...`.
     pub variadic: bool,
+    /// Declared `noreturn`.
+    pub noreturn: bool,
 }
 
 /// A function's name is `f`, `Struct.method` or `test#N`.
@@ -473,6 +475,8 @@ pub struct FnDef {
     pub is_main: bool,
     /// `pub extern fn` with a body: exported to C under its own name.
     pub export: bool,
+    /// Declared `noreturn`: the body never reaches its end or a `return`.
+    pub noreturn: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -826,6 +830,8 @@ struct FnSig {
     link: Option<String>,
     /// A C function whose parameters end with `...`.
     variadic: bool,
+    /// Declared `noreturn`: a call never comes back (its type is `void`).
+    noreturn: bool,
 }
 
 impl FnSig {
@@ -919,6 +925,11 @@ struct Checker<'a> {
     error_names: Vec<String>,
     /// Functions by name: `f`, `Struct.method` and `test#N`.
     fns: HashMap<String, FnSig>,
+    /// The functions declared `noreturn`, by the name a call uses
+    /// (`TExprKind::Call`): a call to one leaves the block.
+    noreturn: HashSet<String>,
+    /// The body being checked is a `noreturn` function's.
+    in_noreturn: bool,
     /// Each function's declaration and context.
     fn_decls: HashMap<String, FnCtx<'a>>,
     /// The receiver of each method (`Struct.method`).
@@ -1065,6 +1076,8 @@ fn run(
         sets: HashMap::from([(ALLOC_ERROR.to_string(), vec!["OutOfMemory".to_string()])]),
         error_names: vec!["OutOfMemory".to_string()],
         fns: HashMap::new(),
+        noreturn: HashSet::new(),
+        in_noreturn: false,
         fn_decls: HashMap::new(),
         recvs: HashMap::new(),
         ifaces: HashMap::new(),
@@ -1418,27 +1431,34 @@ fn match_is_stmt(arms: &[ast::MatchArm]) -> bool {
 
 /// Does every path through `stmts` end in `return` (or, with `or_jumps`,
 /// in `break` or `continue`)?
-fn block_returns(stmts: &[TStmt], or_jumps: bool) -> bool {
+fn block_returns(stmts: &[TStmt], or_jumps: bool, noreturn: &HashSet<String>) -> bool {
+    let leaves = |x: &TExpr| match &x.kind {
+        TExprKind::Unreachable => true,
+        TExprKind::Call { name, .. } => noreturn.contains(name),
+        _ => false,
+    };
     stmts.iter().any(|s| match &s.kind {
-        TStmtKind::Return(_)
-        | TStmtKind::Expr(TExpr {
-            kind: TExprKind::Unreachable,
-            ..
-        }) => true,
+        TStmtKind::Return(_) => true,
+        TStmtKind::Expr(x) if leaves(x) => true,
         TStmtKind::Break | TStmtKind::Continue => or_jumps,
-        TStmtKind::Block(b) => block_returns(b, or_jumps),
+        TStmtKind::Block(b) => block_returns(b, or_jumps, noreturn),
         TStmtKind::If { then, els, .. } | TStmtKind::IfErr { then, els, .. } => {
-            block_returns(then, or_jumps) && block_returns(els, or_jumps)
+            block_returns(then, or_jumps, noreturn) && block_returns(els, or_jumps, noreturn)
         }
         TStmtKind::Expr(TExpr {
             kind: TExprKind::Match { arms, .. },
             ..
         }) => arms.iter().all(|a| match &a.body {
-            TArmBody::Block(b) => block_returns(b, or_jumps),
-            TArmBody::Expr(x) => matches!(x.kind, TExprKind::Unreachable),
+            TArmBody::Block(b) => block_returns(b, or_jumps, noreturn),
+            TArmBody::Expr(x) => leaves(x),
         }),
         _ => false,
     })
+}
+
+/// Is a function's return type `noreturn`?
+fn is_noreturn(ret: &Option<ast::TypeExpr>) -> bool {
+    matches!(ret, Some(ast::TypeExpr { kind: TypeExprKind::Named(n), .. }) if n == "noreturn")
 }
 
 /// Does block `b` end with an expression that can be a statement (a call,
@@ -1896,6 +1916,7 @@ impl<'a> Checker<'a> {
                         params,
                         ret,
                         variadic,
+                        noreturn: sig.noreturn,
                     });
                 }
                 // One C symbol, one C signature and at most one definition.
@@ -2943,7 +2964,9 @@ impl<'a> Checker<'a> {
             .filter(|p| !p.comptime)
             .map(|p| self.resolve_or_report(&p.ty))
             .collect();
+        let noreturn = is_noreturn(&f.ret);
         let ret = match &f.ret {
+            _ if noreturn => Type::Void,
             Some(
                 t @ ast::TypeExpr {
                     kind: TypeExprKind::ErrorUnion(None, payload),
@@ -2978,7 +3001,11 @@ impl<'a> Checker<'a> {
             is_extern: f.is_extern,
             link: f.link.clone(),
             variadic: f.variadic.is_some(),
+            noreturn,
         };
+        if noreturn {
+            self.noreturn.insert(sig.c_key(key));
+        }
         self.fns.insert(key.to_string(), sig.clone());
         if f.body.is_some() {
             self.fn_decls.insert(
@@ -3679,6 +3706,7 @@ impl<'a> Checker<'a> {
             self.in_test,
             std::mem::take(&mut self.env),
             std::mem::take(&mut self.module),
+            self.in_noreturn,
         );
         let def = self.fn_body(name);
         // A generic's own instance with errors: the generic has errors.
@@ -3699,6 +3727,7 @@ impl<'a> Checker<'a> {
             self.in_test,
             self.env,
             self.module,
+            self.in_noreturn,
         ) = saved;
         self.quiet = saved_quiet;
         self.bodies.insert(name.to_string(), Some(def));
@@ -3730,6 +3759,7 @@ impl<'a> Checker<'a> {
         self.vars.clear();
         self.scopes = vec![HashMap::new()];
         self.ret = sig.ret.clone();
+        self.in_noreturn = sig.noreturn;
         self.loop_depth = 0;
         self.in_defer = false;
         let failures = self.failures;
@@ -3739,13 +3769,26 @@ impl<'a> Checker<'a> {
         }
         let body = self.block(f.body.as_ref().unwrap());
         // A statement with an error may have been the `return`.
-        if self.failures == failures && needs_value(&sig.ret) && !block_returns(&body, false) {
+        if self.failures == failures
+            && needs_value(&sig.ret)
+            && !block_returns(&body, false, &self.noreturn)
+        {
             self.report(Error::new(
                 E0050,
                 f.span,
                 format!(
                     "function `{name}` must return a value of type `{}` on every path",
                     sig.ret
+                ),
+            ));
+        }
+        if self.failures == failures && sig.noreturn && !block_returns(&body, false, &self.noreturn)
+        {
+            self.report(Error::new(
+                E0125,
+                f.span,
+                format!(
+                    "function `{name}` is `noreturn` but can reach the end of its body: end every path with a call to a `noreturn` function (such as `std.os.exit`) or `unreachable`"
                 ),
             ));
         }
@@ -3758,6 +3801,7 @@ impl<'a> Checker<'a> {
             body,
             is_main: name == "main",
             export: f.is_extern,
+            noreturn: sig.noreturn,
         }
     }
 
@@ -4150,6 +4194,13 @@ impl<'a> Checker<'a> {
             StmtKind::Return(value) => {
                 if self.in_defer {
                     return err(E0048, s.span, "`return` is not allowed inside `defer`");
+                }
+                if self.in_noreturn {
+                    return err(
+                        E0125,
+                        s.span,
+                        "`return` in a `noreturn` function: it must never come back to its caller",
+                    );
                 }
                 let ret = self.ret.clone();
                 match (value, &ret) {
@@ -5906,6 +5957,13 @@ impl<'a> Checker<'a> {
                         );
                     }
                 };
+                // Like `catch`: where the payload with `mut` dropped is
+                // expected (`let s: []u8 = ...` on a `?[]mut u8`), that is
+                // the type, so the fallback may be a read-only `[]u8`.
+                let payload = match expected {
+                    Some(want) if drops_mut(&payload, want) => want.clone(),
+                    _ => payload,
+                };
                 let failures = self.failures;
                 // A fallback that is itself a `?T` (`a orelse b orelse c`)
                 // makes the result a `?T`.
@@ -5914,7 +5972,7 @@ impl<'a> Checker<'a> {
                     ArmBody::Block(b) => {
                         let stmts = self.value_block(b, &payload);
                         if self.failures == failures
-                            && !block_returns(&stmts, true)
+                            && !block_returns(&stmts, true, &self.noreturn)
                             && !gives_value(&stmts)
                         {
                             Err(Error::new(
@@ -7789,7 +7847,7 @@ impl<'a> Checker<'a> {
                 if payload != Type::Void
                     && !is_stmt
                     && self.failures == failures
-                    && !block_returns(&stmts, true)
+                    && !block_returns(&stmts, true, &self.noreturn)
                     && !gives_value(&stmts)
                 {
                     Err(Error::new(
