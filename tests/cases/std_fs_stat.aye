@@ -1,0 +1,70 @@
+// O2.5e: std.fs.stat reads the mode and mtime out of `struct stat` at
+// per-OS offsets (macOS, x86_64 and aarch64 Linux); this prints the kind
+// of a file, a directory and a symbolic link, and that each mtime is set.
+// The output is the same on every OS and on wasm32-wasip1 (no /dev there).
+// Runs in a directory under /tmp named after the process id (removed at
+// the end).
+
+import std
+import std.heap.General
+import std.text.Builder
+
+extern fn getpid() i32
+
+fn kindName(k: std.fs.Kind) []u8 {
+    return match k {
+        .File => "file"
+        .Dir => "dir"
+        .Symlink => "symlink"
+        .Other => "other"
+    }
+}
+
+// `dir/name` in `b`.
+fn at(b: *mut Builder, dir: []u8, name: []u8) []u8 {
+    b.clear()
+    b.append(dir) catch unreachable
+    b.append("/") catch unreachable
+    b.append(name) catch unreachable
+    return b.bytes()
+}
+
+fn show(label: []u8, s: std.fs.Stat) {
+    @print(label)
+    @print(" ")
+    @print(kindName(s.kind))
+    @print(" ")
+    @println(s.mtime > 1600000000000000000)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var d = Builder.init(alloc)
+    defer d.deinit()
+    try d.append("/tmp/aye-std-fs-stat-")
+    try d.appendInt(getpid() as i64)
+    let dir = d.bytes()
+    var p = Builder.init(alloc)
+    defer p.deinit()
+
+    try std.fs.mkdir(dir)
+    try std.fs.mkdir(at(&mut p, dir, "sub"))
+    let f = try std.fs.create(at(&mut p, dir, "file"))
+    try f.write("abc")
+    f.close()
+    try std.fs.symlink("file", at(&mut p, dir, "link"))
+
+    show("file", try std.fs.stat(at(&mut p, dir, "file")))
+    show("dir", try std.fs.stat(at(&mut p, dir, "sub")))
+    show("link", try std.fs.stat(at(&mut p, dir, "link")))
+    show("followed", try std.fs.statFollow(at(&mut p, dir, "link")))
+
+    for name in [3][]u8{"link", "file", "sub"} {
+        try std.fs.remove(at(&mut p, dir, name))
+    }
+    try std.fs.remove(dir)
+    @println(std.fs.exists(dir))
+}
