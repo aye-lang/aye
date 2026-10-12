@@ -8,44 +8,47 @@ is the language's biggest integration test, run as the downstream check. The fra
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-11 night)
+## Resume here (handoff 2026-10-12)
 
-A new session starts in `~/Documents/ayelang/aye`. The full suite was
-green on main at dcd1f6b-era commits (see the last "Plan:" commit on
-main for the exact hash); every criterion O6–O13 holds (2026-10-11,
-`plans/done.md`). The state is this file's lane table,
-[`plans/done.md`](plans/done.md), the lane files and `git worktree list`.
-Branches to merge first, then the rest in order:
+A new session starts in `~/Documents/ayelang/aye`. Cloud is the
+integrator since 2026-10-12 (rule 7): each step runs as a one-time cloud
+routine (`RemoteTrigger`, environment `env_01CZsU4Eo82wo62Hpf2skA2q`,
+Ubuntu 24.04 x86_64) that merges `main` in, runs the Linux suite in
+foreground chunks, and fast-forwards `main`; GitHub CI
+(`.github/workflows/ci.yml`, Linux and macOS, the repo is public) is the
+full-suite gate. The local Mac pulls, does macOS-only work and
+housekeeping, and opens a PR when a change needs CI before it lands.
+Main was green on both CI jobs at baa9db4; ca6576e (O1.27) was in CI at
+handoff. Merged on 2026-10-12: F1.2b, O3.6c, O2.8a (PR #6), F3.8 (PR #7),
+O3.6e (PR #8), O2.5e (PR #9), O1.11b, O1.11c, O1.19a, O2.5a, O2.6, O1.27
+(`plans/done.md`).
 
-1. **O3.6d** (std.http streaming initial frame; dev-server heartbeat
-   threads removed) was merged as 29b1770
-   (b0843f8, main merged, all targeted tests green, downstream not run).
-   Merge it, run the full suite and `scripts/downstream.sh`, fill the
-   `O36D` placeholder in `plans/done.md` and `plans/aye.md`, push.
-2. **O2.6** (stack overflow on wasm) is WIP on
-   `worktree-agent-a8d4905904c125e6d` (388a235): the prelude check and
-   `--stack-first` are in; the V8 `RangeError` mapping in the two runners
-   and the marker changes are left. The card in `plans/aye.md` has the
-   exact list. Continue on that branch.
-3. **O2.5a** (std casts audit, cimport `int64_t` mapping) was started
-   with no commit; the card in `plans/aye.md` records the partial audit
-   and the cimport bug to fix. Start fresh from main.
-4. **F5.9** (framework hello req/s) ran as a cloud routine on
-   2026-10-11 16:05 UTC; look for its PR (`cloud/f59-bench`) and merge it.
-   **F5.8** is merged (PR #4). F5 then has only the Chrome checks left
-   (dev reload, island) and F1.2b (stray `.aye` in a route dir).
-5. Then the backlog in `plans/aye.md` (O2.5e, O2.8a, O6.x leftovers,
-   O3.6c, O7.5) and `plans/framework.md`.
+Cloud-prompt rules that matter (learned today): the session ends when
+its turn ends, so every long command runs in the foreground with a 10
+minute timeout, split into chunks (no `run_in_background`, no
+`Monitor`); source `/etc/profile.d/aye-wasi.sh` so the wasip1 golden
+lane is not skipped; `cargo fmt` before committing; `scripts/downstream.sh`
+cannot reach the private anyknown repo from the VM (skipped, say so).
 
-Notes: `web dev` needs `aye` on `PATH` (or `AYE=`); dev CLI relative
-app paths work since F3.1a. The macOS first-exec stall (O1.17b) is
-unchanged; heavy verification goes to cloud Linux (rule 7).
+Next, from the backlog in `plans/aye.md`, in this order: O3.9b (worker
+follow-ups; `O7.5` needs an 8-core box, skip), O6.2a, O6.1a, O6.3a,
+O1.22a, O1.24, O1.6a, O3.4b, O3.5a, the rest. Framework
+(`plans/framework.md`): the Chrome manual checks (dev reload, island)
+need the user; otherwise F5 is done. Open points: fast-mode wasm
+`stack_overflow.aye` hangs instead of trapping (O2.6 report; card it as
+O2.6a if it matters); the anyknown browser test
+`window_relayout_after_image_load` looked flaky under load on macOS
+(O2.5a downstream run), which is the user's repo.
+
+Notes: `web dev` needs `aye` on `PATH` (or `AYE=`); the macOS first-exec
+stall (O1.17b) is unchanged; a worktree is created per local step and
+removed after the merge.
 
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O3.9a, O2.6, O2.8a next; site deploy needs `site/build.sh` first | local; cloud routines for Linux |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O3.9b, O6.2a, O6.1a next; site deploy needs `site/build.sh` first | local; cloud routines for Linux |
 | Browser ([`plans/anyknown.md`](plans/anyknown.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/anyknown` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the anyknown repo | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F3 (dev server) done 2026-10-11; F4 islands next (F4.1 spike first) | local or cloud |
 
