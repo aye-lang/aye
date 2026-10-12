@@ -65,10 +65,10 @@ Steps not tied to one lane, in this order. Their cards are in
    passes on Ubuntu 24.04 arm64 and amd64 through `scripts/linux.sh`.
 2. **X2 rename Ore → Aye.** Done 2026-10-08 (3042d53, `scripts/rename-aye.py`).
 3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
-4. **X4 go public** (aye-lang/aye and aye-lang/anyknown together):
-   decided 2026-10-12, go public now. The pre-public check passed
-   (`plans/project.md` X4); X4.1 adds the license files to anyknown;
-   then the visibility switch of both repos (a repo admin setting).
+4. **X4 go public** (aye-lang/aye only): decided 2026-10-12, go
+   public now. The pre-public check passed (`plans/project.md` X4); left
+   is the visibility switch (a repo admin setting). aye-lang/anyknown
+   stays private: it is the user's product.
 
 ## Execution rules
 
@@ -191,17 +191,22 @@ goes to the backlog or to `done.md` as dropped.
 ## Standing decisions
 
 - **Who decides (user, 2026-10-12):** the AI develops this language on
-  its own and makes every decision in this repo and in aye-lang/anyknown,
-  going public included. Do not ask the user; decide, write the decision
-  down (here, in a lane plan or in `decisions.md`) and go on. The user
-  only stops work when their token budget runs out. Rule 7's cloud
-  limits still hold (a cloud session pushes a branch; main merges).
+  its own and makes every decision in this repo (aye-lang/aye), going
+  public included. Do not ask the user; decide, write the decision down
+  (here, in a lane plan or in `decisions.md`) and go on. The user only
+  stops work when their token budget runs out. Rule 7's cloud limits
+  still hold (a cloud session pushes a branch; main merges).
+- **anyknown is the user's (user, 2026-10-12):** aye-lang/anyknown is
+  the user's product and outside the AI's decisions: it stays private,
+  its license, visibility and product choices are the user's. From
+  here it is read only (`scripts/downstream.sh`); a change it needs is
+  proposed to the user, not pushed.
 - **Lanes and priority (2026-10-08):** language first; browser frozen
   until O6–O9, then split into its own repo (git filter-repo) and
   resumed; framework does F1 only. Lane decisions are in each lane plan.
 - **Name and repo:** Ore → Aye (`aye`, `.aye`, "ayelang"); repo
-  github.com/aye-lang/aye, going public together with the browser
-  (X4, decided 2026-10-12); license MIT OR Apache-2.0 (`LICENSE-MIT`,
+  github.com/aye-lang/aye, going public on its own (X4, decided
+  2026-10-12; aye-lang/anyknown stays private); license MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`); site ayelang.dev (Cloudflare Workers, `site/`).
 - **Platforms:** macOS (local) and Ubuntu 24.04 (Apple `container`
   locally via `scripts/linux.sh`, after X1; the user's cloud).

@@ -67,27 +67,21 @@ O6.3, when it exists).
 
 ## X4: go public
 
-Make github.com/aye-lang/aye public together with aye-lang/anyknown
-(this repo's history holds `browser/` up to P8.3, so one cannot go
-public without the other). Decided 2026-10-12 under the "Who decides"
-rule in `docs/plan.md`: go public now; the language does not need to be
-finished first.
+Make github.com/aye-lang/aye public. Decided 2026-10-12 under the
+"Who decides" rule in `docs/plan.md`: go public now; the language does
+not need to be finished first. aye-lang/anyknown stays private (the
+user's product). This repo's history holds `browser/` up to P8.3; the
+user said that old browser code may be public (2026-10-12).
 
-Pre-public check, 2026-10-12 (cloud session, full history of both
-repos, aye main da7ec99 with 1325 commits, anyknown main 3c01043 with
-628): no GitHub, Anthropic, AWS, Google or Slack token and no private
-key in any commit (`git log -p --all -G` over those patterns); no
-`.env`-like file ever committed; `site/wrangler.toml` holds no account
-id; the captured site archives live in untracked `target/sites/`.
-Only personal data: author emails and one `/Users/solemnis/...` path in
-`docs/aye-eval.md`, both kept.
+Pre-public check, 2026-10-12 (cloud session, full history of aye main
+da7ec99, 1325 commits): no GitHub, Anthropic, AWS, Google or Slack token
+and no private key in any commit (`git log -p --all -G` over those
+patterns); no `.env`-like file ever committed; `site/wrangler.toml`
+holds no account id. Only personal data: author emails and one
+`/Users/solemnis/...` path in `docs/aye-eval.md`, both kept. Links to
+aye-lang/anyknown (README, `scripts/downstream.sh`) stay; they need a
+login, as they do today.
 
-#### X4.1: license files in anyknown
-- lane: project
-- goal: aye-lang/anyknown has `LICENSE-MIT` and `LICENSE-APACHE` (same text as this repo) and `license = "MIT OR Apache-2.0"` in its `Cargo.toml`.
-- verify: `ls LICENSE-MIT LICENSE-APACHE` in an anyknown checkout → exit 0
-- where: cloud or local (docs only)
-
-#### X4.2: switch both repos to public
-- goal: Settings → General → Danger Zone → Change visibility, aye-lang/anyknown first, then aye-lang/aye, after X4.1 is on anyknown main.
+#### X4.1: switch aye-lang/aye to public
+- goal: Settings → General → Danger Zone → Change visibility on aye-lang/aye.
 - notes: needs a repo admin; the cloud session has no API for repo settings, so this one step is the user's click.
