@@ -2,7 +2,8 @@
 //
 // Case functions and `trim` know ASCII only. Floats are formatted with C's
 // `ecvt` (6 significant digits, laid out as printf's `%g`, the same text
-// as `@print`) and parsed with C's `strtod` after Aye checks the syntax.
+// as `@print`; `appendFloatExact` writes the shortest digits that read
+// back, from `aye_std_ecvt`) and parsed with C's `strtod` after Aye checks the syntax.
 
 import std.mem
 import std.mem.AllocError
@@ -406,6 +407,80 @@ pub struct Builder {
         return self.append(digits[whole..])
     }
 
+    /// Appends `v` with the shortest digits that read back as the same
+    /// `f64`, laid out as `JSON.stringify` does: a whole number below 2^53
+    /// in size has no fraction or exponent (`-0` stays `-0`); sizes from
+    /// 1e-6 up to below 1e21 are plain decimal (`0.1`, `123456.789`, `1e20`
+    /// as 100000000000000000000); the rest are digits with an exponent
+    /// (`1e+21`, `5e-324`, `-1.5e-10`). NaN and the infinities are written
+    /// as `nan`, `inf` and `-inf`.
+    pub fn appendFloatExact(self: *mut Self, v: f64) AllocError!void {
+        if v != v {
+            return self.append("nan")
+        }
+        if v > 1.7976931348623157e308 {
+            return self.append("inf")
+        }
+        if v < -1.7976931348623157e308 {
+            return self.append("-inf")
+        }
+        if copysign(1.0, v) < 0.0 {
+            try self.appendByte('-')
+        }
+        let a = fabs(v)
+        if a == 0.0 {
+            return self.appendByte('0')
+        }
+        if a < 9007199254740992.0 {
+            let n = a as u64
+            if n as f64 == a {
+                return self.appendUint(n)
+            }
+        }
+        var digits = [17]u8{0, ..}
+        let d = shortest(a, digits[..])
+        let ds = digits[..d.count]
+        let n = d.point as i64
+        let k = d.count as i64
+        if k <= n && n <= 21 {
+            try self.append(ds)
+            var z = n - k
+            while z > 0 {
+                try self.appendByte('0')
+                z -= 1
+            }
+            return
+        }
+        if 0 < n && n <= 21 {
+            try self.append(ds[..n as usize])
+            try self.appendByte('.')
+            return self.append(ds[n as usize..])
+        }
+        if -6 < n && n <= 0 {
+            try self.append("0.")
+            var z = -n
+            while z > 0 {
+                try self.appendByte('0')
+                z -= 1
+            }
+            return self.append(ds)
+        }
+        try self.appendByte(ds[0])
+        if d.count > 1 {
+            try self.appendByte('.')
+            try self.append(ds[1..])
+        }
+        try self.appendByte('e')
+        var e = n - 1
+        if e < 0 {
+            try self.appendByte('-')
+            e = -e
+        } else {
+            try self.appendByte('+')
+        }
+        return self.appendInt(e)
+    }
+
     /// The bytes in new memory of exactly their length, from the builder's
     /// allocator (free them with `alloc.free`). The builder is empty after.
     pub fn toOwned(self: *mut Self) AllocError![]mut u8 {
@@ -457,8 +532,69 @@ fn skipDigits(s: []u8, from: usize) usize {
     return i
 }
 
+// The decimal digits of a positive float and where the point goes: the
+// value is 0.DIGITS x 10^point.
+struct Digits {
+    count: usize
+    point: i32
+}
+
+// Writes the shortest digits that `strtod` reads back as exactly `a` (1 to
+// 17 of them; 17 always do) to the start of `out`. `ecvt` rounds `a`
+// correctly to `p` digits, so the first `p` that reads back is the
+// shortest.
+fn shortest(a: f64, out: []mut u8) Digits {
+    var cand = [48]u8{0, ..}
+    var pt = [1]i32{0}
+    var sg = [1]i32{0}
+    var p: usize = 1
+    var point: i32 = 0
+    while true {
+        let raw = aye_std_ecvt(a, p as i32, pt[..].ptr, sg[..].ptr)
+        point = pt[0]
+        cand[0] = '0'
+        cand[1] = '.'
+        var i: usize = 0
+        while i < p {
+            out[i] = raw[i]
+            cand[2 + i] = raw[i]
+            i += 1
+        }
+        cand[2 + p] = 'e'
+        let end = putInt(cand[..], 3 + p, point)
+        cand[end] = 0
+        if p == 17 || strtod(cand[..].ptr, []u8{}.ptr) == a {
+            break
+        }
+        p += 1
+    }
+    return Digits { count: p, point: point }
+}
+
+// Writes the decimal `v` (|v| < 1000) to `buf` from `at`; returns the end.
+fn putInt(buf: []mut u8, at: usize, v: i32) usize {
+    var i = at
+    var x = v
+    if x < 0 {
+        buf[i] = '-'
+        i += 1
+        x = -x
+    }
+    if x >= 100 {
+        buf[i] = '0' + (x / 100) as u8
+        i += 1
+    }
+    if x >= 10 {
+        buf[i] = '0' + ((x / 10) % 10) as u8
+        i += 1
+    }
+    buf[i] = '0' + (x % 10) as u8
+    return i + 1
+}
+
 // `end` is a `char **` in C; std passes null.
 extern fn strtod(s: [*]u8, end: [*]u8) f64
+extern fn aye_std_ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
 extern fn ecvt(x: f64, digits: i32, point: [*]i32, sign: [*]i32) [*]u8
 extern fn copysign(x: f64, y: f64) f64
 extern fn fabs(x: f64) f64
