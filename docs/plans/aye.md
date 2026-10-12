@@ -120,7 +120,7 @@ brackets.
 - O3.5a `std.net` exports `poll`/`PollFd` or a `Conn` wait method so the TLS transport can wait on `CURLINFO_ACTIVESOCKET` instead of a sleep backoff; a `std.log.debug` level or `std.http` `lastError` instead of `AYE_HTTP_DEBUG` (O3.5 report).
 - ~~O3.4b `std.net.connect` timeout and the IPv6 http client golden~~ done 2026-10-12 as O3.4c (`net.connectTimeout`, `net_connect_timeout`, `std_http_client_ipv6`).
 - ~~O3.3b `std.encoding` strict base64 and `hexEncode` in the crypto conformance programs~~ done 2026-10-12 (`QQ==` ok, `QR==` `InvalidCharacter`).
-- O3.1c `std.text.Builder.appendFloatExact` (shortest round-trip float formatting, lifted from `std.json.writeNumber`); `tests/conformance/json/valid.aye` prints through `json.write` instead of its private `render` (O3.1a report). Verify: `cargo test --release --test conformance`.
+- ~~O3.1c `std.text.Builder.appendFloatExact`~~ done 2026-10-12 (`done.md`).
 - O3.2a `std.time.parseHttp` lenient forms (RFC 850, asctime) if the HTTP client needs them; a `Date` header helper in `std.http` from `now()` (O3.2 report).
 - O3.1b `std.json.Value.asInt() ?i64` for exact integers above 2^53, if O6/O13 need it (O3.1 report).
 - O1.6a `std.process`: suppress SIGPIPE on a write to an exited child's stdin (a `WriteError`, as `std.net` does per socket); `Child.killHard` (SIGKILL), custom environment and working directory when a caller needs them (O1.6 report). Verify: a golden that writes to an exited child. (done 2026-10-12, e7f0004)
