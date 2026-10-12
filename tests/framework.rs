@@ -1919,6 +1919,9 @@ fn gen_stray_route_file() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("stray .aye file"), "{err}");
     assert!(err.contains("helper.aye"), "{err}");
-    assert!(err.contains("page.aye, route.aye, layout.aye and not-found.aye"), "{err}");
+    assert!(
+        err.contains("page.aye, route.aye, layout.aye and not-found.aye"),
+        "{err}"
+    );
     assert!(err.contains("outside app/"), "{err}");
 }
