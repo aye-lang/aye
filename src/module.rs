@@ -1930,6 +1930,7 @@ impl Loader<'_> {
                         let ty = ast::TypeExpr {
                             kind: TypeExprKind::Named(c),
                             span,
+                            end: e.end,
                         };
                         e.kind = ExprKind::StructLit {
                             ty,

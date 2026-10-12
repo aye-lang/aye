@@ -547,6 +547,7 @@ impl Parser {
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
             params.push(Param {
+                name_end: pspan.right(pname.chars().count() as u32),
                 name: pname,
                 span: pspan,
                 ty,
@@ -579,6 +580,7 @@ impl Parser {
             }
         }
         Ok(FnDecl {
+            name_end: span.right(name.chars().count() as u32),
             name,
             span,
             is_pub,
@@ -633,6 +635,7 @@ impl Parser {
                 None
             };
             fields.push(FieldDecl {
+                name_end: fspan.right(fname.chars().count() as u32),
                 name: fname,
                 span: fspan,
                 ty,
@@ -647,6 +650,7 @@ impl Parser {
             }
         }
         Ok(StructDecl {
+            name_end: span.right(name.chars().count() as u32),
             name,
             span,
             is_pub,
@@ -710,14 +714,19 @@ impl Parser {
         let void = TypeExpr {
             kind: TypeExprKind::Named("void".to_string()),
             span,
+            end: span,
         };
         let ret = Some(TypeExpr {
             kind: TypeExprKind::ErrorUnion(None, Box::new(void)),
             span,
+            end: span,
         });
         let name = format!("test#{}", self.tests);
         self.tests += 1;
         let func = FnDecl {
+            // A test has no name to end at: the diagnostic falls back to
+            // the `test` token.
+            name_end: span,
             name,
             span,
             is_pub: false,
@@ -844,6 +853,7 @@ impl Parser {
             self.expect(&Tok::Colon)?;
             let ty = self.type_expr()?;
             fields.push(FieldDecl {
+                name_end: fspan.right(fname.chars().count() as u32),
                 name: fname,
                 span: fspan,
                 ty,
@@ -987,7 +997,11 @@ impl Parser {
             }
             _ => return Err(self.unexpected("type")),
         };
-        Ok(TypeExpr { kind, span })
+        Ok(TypeExpr {
+            kind,
+            span,
+            end: self.prev_end(),
+        })
     }
 
     // ----------------------------------------------------------- statements
@@ -1806,6 +1820,7 @@ impl Parser {
                         let ty = TypeExpr {
                             kind: TypeExprKind::Named(name),
                             span,
+                            end: self.prev_end(),
                         };
                         ExprKind::StructLit {
                             ty,
@@ -1851,6 +1866,7 @@ impl Parser {
                 let ty = TypeExpr {
                     kind: TypeExprKind::Array(ArrayLen::Lit(elems.len() as u64), Box::new(elem)),
                     span,
+                    end: self.prev_end(),
                 };
                 ExprKind::ArrayLit { ty, elems }
             }
@@ -2139,7 +2155,11 @@ fn expr_to_type(e: &Expr) -> Result<TypeExpr> {
         ExprKind::Type(t) => return Ok(t.clone()),
         _ => return Err(Error::new(E0006, e.span, "expected a type")),
     };
-    Ok(TypeExpr { kind, span: e.span })
+    Ok(TypeExpr {
+        kind,
+        span: e.span,
+        end: e.end,
+    })
 }
 
 #[cfg(test)]

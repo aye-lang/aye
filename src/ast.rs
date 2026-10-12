@@ -72,6 +72,8 @@ pub struct GlobalDecl {
 pub struct FnDecl {
     pub name: String,
     pub span: Span,
+    /// The position just after the declared name.
+    pub name_end: Span,
     pub is_pub: bool,
     /// `extern fn`: a C function without a body, or with a body an Aye
     /// function exported to C under its own name.
@@ -92,6 +94,8 @@ pub struct FnDecl {
 pub struct Param {
     pub name: String,
     pub span: Span,
+    /// The position just after the parameter name.
+    pub name_end: Span,
     pub ty: TypeExpr,
     /// `comptime T: type`
     pub comptime: bool,
@@ -111,6 +115,8 @@ pub struct Bound {
 pub struct StructDecl {
     pub name: String,
     pub span: Span,
+    /// The position just after the declared name.
+    pub name_end: Span,
     pub is_pub: bool,
     /// `extern struct`: C layout, C-compatible fields.
     pub is_extern: bool,
@@ -180,6 +186,8 @@ pub struct VariantDecl {
 pub struct FieldDecl {
     pub name: String,
     pub span: Span,
+    /// The position just after the field name.
+    pub name_end: Span,
     pub ty: TypeExpr,
     /// `name: T = value`: the value a struct literal that leaves the field
     /// out gives it (a constant). Only struct fields have one.
@@ -190,6 +198,8 @@ pub struct FieldDecl {
 pub struct TypeExpr {
     pub kind: TypeExprKind,
     pub span: Span,
+    /// The position just after the type.
+    pub end: Span,
 }
 
 /// A name in a type, a `where` constraint or an error set merge can be a

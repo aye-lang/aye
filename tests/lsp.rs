@@ -942,3 +942,86 @@ fn hover_renders_declarations_like_aye_doc() {
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Declaration-level errors end after the declared name or the type.
+#[test]
+fn declaration_errors_end_after_the_name() {
+    let main = "\npub fn main() {\n    @println(1)\n}\n";
+    let cases: [(&str, String, &str); 5] = [
+        // Missing return: the function name.
+        (
+            "E0050",
+            format!("fn first() i32 {{\n}}\n{main}"),
+            r#"{"start":{"line":0,"character":3},"end":{"line":0,"character":8}}"#,
+        ),
+        // Not C-compatible in an `extern fn`: the whole type.
+        (
+            "E0052",
+            format!("extern fn puts(s: []u8) i32\n{main}"),
+            r#"{"start":{"line":0,"character":18},"end":{"line":0,"character":22}}"#,
+        ),
+        // Default value in a union: the field name.
+        (
+            "E0104",
+            format!("extern union U {{\n    a: i32 = 1,\n    b: i64,\n}}\n{main}"),
+            r#"{"start":{"line":1,"character":4},"end":{"line":1,"character":5}}"#,
+        ),
+        // Duplicate field: the second name.
+        (
+            "E0015",
+            format!("struct P {{\n    width: i32,\n    width: i32,\n}}\n{main}"),
+            r#"{"start":{"line":2,"character":4},"end":{"line":2,"character":9}}"#,
+        ),
+        // `comptime` parameter of an `extern fn`: the function name.
+        (
+            "E0076",
+            format!("extern fn pick(comptime T: type) void\n{main}"),
+            r#"{"start":{"line":0,"character":10},"end":{"line":0,"character":14}}"#,
+        ),
+    ];
+    for (code, src, want) in cases {
+        let (dir, uri) = scratch(&format!("decl_{code}"), &src);
+        let mut c = Client::start();
+        c.initialize();
+        c.notify("textDocument/didOpen", &open(&uri, &src));
+        let p = c.diagnostics();
+        let list = p.get("diagnostics").unwrap().as_array().unwrap();
+        let d = list
+            .iter()
+            .find(|d| d.get("code").and_then(Json::as_str) == Some(code))
+            .unwrap_or_else(|| panic!("{code} missing: {list:?}"));
+        assert_eq!(d.get("range").unwrap().write(), want, "{code}");
+        c.finish();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A hover during typing does not postpone the check of the last change.
+#[test]
+fn hover_does_not_restart_the_debounce() {
+    let (dir, uri) = scratch("debounce_hover", BAD);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, BAD));
+    c.diagnostics();
+    let change = |v: i64, text: &str| {
+        format!(
+            r#"{{"textDocument":{{"uri":{},"version":{v}}},"contentChanges":[{{"text":{}}}]}}"#,
+            aye::diag::json_str(&uri),
+            aye::diag::json_str(text)
+        )
+    };
+    c.notify("textDocument/didChange", &change(2, BAD));
+    c.notify("textDocument/didChange", &change(3, GOOD));
+    let t = Instant::now();
+    std::thread::sleep(Duration::from_millis(100));
+    at(&mut c, 7, "hover", &uri, 1, 8);
+    let p = c.diagnostics();
+    let e = t.elapsed();
+    assert_eq!(p.get("version").and_then(Json::as_i64), Some(3));
+    // 150 ms from the last change; a restart by the hover would be 250 ms.
+    assert!(e >= Duration::from_millis(150), "{e:?}");
+    assert!(e < Duration::from_millis(240), "{e:?}");
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
