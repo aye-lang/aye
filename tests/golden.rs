@@ -224,11 +224,7 @@ fn run_case_for(path: &Path, work: &Path, target: &'static Target) -> Result<(),
         .ok_or("missing .out file")?;
     let expected_panic = read(&path.with_extension("panic"));
     let expected_error = read(&path.with_extension("stderr"));
-    let modes: &[Mode] = if expected_panic.is_some() {
-        &[Mode::Debug, Mode::Safe]
-    } else {
-        &[Mode::Debug, Mode::Safe, Mode::Fast]
-    };
+    let modes: &[Mode] = &[Mode::Debug, Mode::Safe, Mode::Fast];
     for &mode in modes {
         // `@embedFile` reads a file next to the source: keep the directory.
         let shown = if src.contains("@embedFile") {
@@ -245,6 +241,10 @@ fn run_case_for(path: &Path, work: &Path, target: &'static Target) -> Result<(),
             target.name
         ));
         driver::cc(&c, &exe, mode)?;
+        if mode == Mode::Fast && expected_panic.is_some() {
+            fast_panic_ends(target.run_command(&exe).env("SDL_VIDEODRIVER", "dummy"))?;
+            continue;
+        }
         let out = target
             .run_command(&exe)
             .env("SDL_VIDEODRIVER", "dummy")
@@ -1346,11 +1346,7 @@ fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Resul
         .ok_or("missing golden")?;
     let expected_panic = read(&path.with_extension("panic")).filter(|_| args.is_empty());
     let expected_error = read(&path.with_extension("stderr")).filter(|_| args.is_empty());
-    let modes: &[Mode] = if expected_panic.is_some() {
-        &[Mode::Debug, Mode::Safe]
-    } else {
-        &[Mode::Debug, Mode::Safe, Mode::Fast]
-    };
+    let modes: &[Mode] = &[Mode::Debug, Mode::Safe, Mode::Fast];
     for &mode in modes {
         let mut root = Root::single(&name(path), &src);
         root.target = target;
@@ -1361,6 +1357,10 @@ fn freestanding_case(path: &Path, work: &Path, target: &'static Target) -> Resul
             target.name
         ));
         driver::cc(&c, &exe, mode)?;
+        if mode == Mode::Fast && expected_panic.is_some() {
+            fast_panic_ends(target.run_command(&exe).args(&args))?;
+            continue;
+        }
         let out = target
             .run_command(&exe)
             .args(&args)
@@ -1469,6 +1469,19 @@ fn cli_target_freestanding(work: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Seconds a `.panic` program may run in fast mode.
+const FAST_PANIC_SECS: u64 = 10;
+
+/// Fast mode has no checks, so a `.panic` program need not panic there: it
+/// passes when the process ends within `FAST_PANIC_SECS` (any status, any
+/// output) and fails when it spins.
+fn fast_panic_ends(cmd: &mut Command) -> Result<(), String> {
+    match output_within(cmd, FAST_PANIC_SECS) {
+        Some(_) => Ok(()),
+        None => Err(format!("[Fast] did not end within {FAST_PANIC_SECS} s")),
+    }
 }
 
 /// Run `cmd` and wait at most `secs` seconds for it (`None` on a timeout:
