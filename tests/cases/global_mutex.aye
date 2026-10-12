@@ -1,0 +1,32 @@
+// A module-level `Mutex` (O1.21): `Mutex.init()` returns a constant, so a
+// global can start with it. Two threads take it to add 1000 each to a
+// global counter.
+
+import std.sync.Mutex
+import std.thread
+
+var lock = Mutex.init()
+var count: u32 = 0
+
+struct Job {
+    times: u32
+}
+
+fn work(j: *mut Job) {
+    for _ in 0..j.times {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+}
+
+pub fn main() !void {
+    var a = Job { times: 1000 }
+    var b = Job { times: 1000 }
+    let ta = try thread.spawn(Job, work, &mut a)
+    let tb = try thread.spawn(Job, work, &mut b)
+    ta.join()
+    tb.join()
+    @println(count)
+    lock.deinit()
+}

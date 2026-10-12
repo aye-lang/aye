@@ -298,9 +298,11 @@ pub fn main() {
 
 - `let NAME = value` at the top level is a constant, `var name = value` a
   global variable. The value is computed by the compiler: literals, other
-  `let` constants, operators, `as`, and array, struct and enum literals. No
-  calls and no `var` globals; overflow there is a compile error. A global
-  is initialized before `main` runs, in any declaration order.
+  `let` constants, operators, `as`, array, struct and enum literals, and a
+  call without arguments to a function whose body is one `return` of such
+  a value (`var lock = Mutex.init()`). No other calls and no `var`
+  globals; overflow there is a compile error. A global is initialized
+  before `main` runs, in any declaration order.
 - As for a local `let`, an untyped integer gives `i64`: write `let N:
   usize = 4` for an index bound.
 - `let Name = Type` (a type name, `Pool(Node)`, `[]u8`, `*Node`, ...) is a
@@ -1962,8 +1964,8 @@ pub fn main() {
 ### std.sync
 
 ```
-std.sync.Mutex                             a lock; copies are the same lock
-Mutex.init() Mutex
+std.sync.Mutex                             a lock; share it by pointer
+Mutex.init() Mutex                         a constant: a global may hold it
 Mutex.lock(self: *Self)                    wait for the lock and take it
 Mutex.unlock(self: *Self)
 Mutex.deinit(self: *Self)                  once, when no thread uses it
