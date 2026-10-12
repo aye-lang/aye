@@ -183,57 +183,94 @@ fn file_doc(scan: &Scan, out: &mut String) {
         }
         out.push('\n');
         doc(d[0].line, "", out);
-        let kw = d
-            .iter()
-            .skip(1)
-            .find(|it| it.tok != Tok::Kw(Kw::Extern))
-            .map(|it| &it.tok);
-        let body = body(d);
-        match (kw, body) {
-            (Some(Tok::Kw(Kw::Fn)), Some(b)) => {
-                out.push_str(&flat(&d[..b.0]));
-                // A type function: `return struct { ... }`.
-                let inner: Vec<usize> = (b.0 + 1..b.1)
-                    .filter(|&i| d[i].role != Role::Semi)
-                    .collect();
-                if let [r, s, o, ..] = inner[..]
-                    && d[r].tok == Tok::Kw(Kw::Return)
-                    && d[s].tok == Tok::Kw(Kw::Struct)
-                    && d[o].role == Role::Open(Br::Brace)
-                {
-                    let close = matching(d, o);
-                    out.push_str(" {\n    return struct {\n");
-                    let found = members(scan, &has_code, d, o + 1, close);
-                    render_members(&found, false, "        ", out);
-                    out.push_str("    }\n}");
-                }
-                out.push('\n');
-            }
-            (Some(Tok::Kw(Kw::Struct | Kw::Enum | Kw::Interface)), Some(b))
-                if d[0].line != d[d.len() - 1].line =>
-            {
-                out.push_str(&flat(&d[..b.0]));
-                out.push_str(" {\n");
-                let all_methods = kw == Some(&Tok::Kw(Kw::Interface));
-                let found = members(scan, &has_code, d, b.0 + 1, b.1);
-                render_members(&found, all_methods, "    ", out);
-                out.push_str("}\n");
-            }
-            // `pub extern union Name { ... }`
-            (Some(Tok::Ident(u)), Some(b)) if u == "union" && d[0].line != d[d.len() - 1].line => {
-                out.push_str(&flat(&d[..b.0]));
-                out.push_str(" {\n");
-                let all_methods = kw == Some(&Tok::Kw(Kw::Interface));
-                let found = members(scan, &has_code, d, b.0 + 1, b.1);
-                render_members(&found, all_methods, "    ", out);
-                out.push_str("}\n");
-            }
-            _ => {
-                out.push_str(&flat(d));
-                out.push('\n');
-            }
+        out.push_str(&render_decl(scan, &has_code, d, false));
+        out.push('\n');
+    }
+}
+
+/// The declaration `d` (its tokens) as `aye doc --signatures` and hover
+/// show it, without its doc comment: a function's signature (for a type
+/// function also its struct's fields and pub methods); a multi-line
+/// struct, enum, union or interface with its members (`render_members`);
+/// anything else on one line, or, if `short_values` and it is a `let` or
+/// `var` over several lines, its first line and `...`.
+pub(crate) fn render_decl(
+    scan: &Scan,
+    has_code: &[bool],
+    d: &[Item],
+    short_values: bool,
+) -> String {
+    let mut k = 0;
+    while k < d.len() && matches!(d[k].tok, Tok::Kw(Kw::Pub | Kw::Extern)) {
+        k += 1;
+        // `extern("name") fn`
+        if d[k - 1].tok == Tok::Kw(Kw::Extern)
+            && d.get(k).is_some_and(|it| it.role == Role::Open(Br::Call))
+        {
+            k = matching(d, k) + 1;
         }
     }
+    let kw = d.get(k).map(|it| &it.tok);
+    let multi_line = d[0].line != d[d.len() - 1].line;
+    let mut out = String::new();
+    match (kw, body(d)) {
+        (Some(Tok::Kw(Kw::Fn)), Some(b)) => {
+            out.push_str(&flat(&d[..b.0]));
+            // A type function: `return struct { ... }`.
+            let inner: Vec<usize> = (b.0 + 1..b.1)
+                .filter(|&i| d[i].role != Role::Semi)
+                .collect();
+            if let [r, s, o, ..] = inner[..]
+                && d[r].tok == Tok::Kw(Kw::Return)
+                && d[s].tok == Tok::Kw(Kw::Struct)
+                && d[o].role == Role::Open(Br::Brace)
+            {
+                let close = matching(d, o);
+                out.push_str(" {\n    return struct {\n");
+                let found = members(scan, has_code, d, o + 1, close);
+                render_members(&found, false, "        ", &mut out);
+                out.push_str("    }\n}");
+            }
+        }
+        (Some(Tok::Kw(Kw::Struct | Kw::Enum | Kw::Interface)), Some(b)) if multi_line => {
+            render_type(
+                scan,
+                has_code,
+                d,
+                b,
+                kw == Some(&Tok::Kw(Kw::Interface)),
+                &mut out,
+            )
+        }
+        // `pub extern union Name { ... }`
+        (Some(Tok::Ident(u)), Some(b)) if u == "union" && multi_line => {
+            render_type(scan, has_code, d, b, false, &mut out)
+        }
+        (Some(Tok::Kw(Kw::Let | Kw::Var)), _) if short_values && multi_line => {
+            let first: Vec<&Item> = d.iter().take_while(|it| it.line == d[0].line).collect();
+            out.push_str(&fmt::join(first));
+            out.push_str(" ...");
+        }
+        _ => out.push_str(&flat(d)),
+    }
+    out
+}
+
+/// A struct, enum, union or interface `d` whose body is `d[b.0..=b.1]`,
+/// with its members on their own lines.
+fn render_type(
+    scan: &Scan,
+    has_code: &[bool],
+    d: &[Item],
+    b: (usize, usize),
+    all_methods: bool,
+    out: &mut String,
+) {
+    out.push_str(&flat(&d[..b.0]));
+    out.push_str(" {\n");
+    let found = members(scan, has_code, d, b.0 + 1, b.1);
+    render_members(&found, all_methods, "    ", out);
+    out.push('}');
 }
 
 /// The `///` comment lines right above `line`, in order.
