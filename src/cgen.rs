@@ -2211,9 +2211,14 @@ impl Gen {
                 params.join(", ")
             };
             let decl = format!(
-                "extern {} {}({params});",
+                "extern {} {}({params}){};",
                 c_type(&e.ret),
-                extern_symbol(&e.name)
+                extern_symbol(&e.name),
+                if e.noreturn {
+                    " __attribute__((noreturn))"
+                } else {
+                    ""
+                }
             );
             if declared.insert(decl.clone()) {
                 self.line(0, &decl);
@@ -2540,11 +2545,24 @@ impl Gen {
         } else {
             params.join(", ")
         };
+        // A `noreturn` function: the C compiler knows a call never returns.
+        let nr = if f.noreturn {
+            "__attribute__((noreturn)) "
+        } else {
+            ""
+        };
         if f.export {
             let name = extern_symbol(&f.name);
-            return format!("AYE_EXPORT(\"{name}\") {} {name}({params})", c_type(&f.ret));
+            return format!(
+                "AYE_EXPORT(\"{name}\") {nr}{} {name}({params})",
+                c_type(&f.ret)
+            );
         }
-        format!("AYE_FN {} {}({params})", c_type(&f.ret), fn_name(&f.name))
+        format!(
+            "AYE_FN {nr}{} {}({params})",
+            c_type(&f.ret),
+            fn_name(&f.name)
+        )
     }
 
     fn func(&mut self, f: &Func) {

@@ -1,0 +1,3 @@
+local: connected
+error: TimedOut-or-fast-failure
+under 2s: true

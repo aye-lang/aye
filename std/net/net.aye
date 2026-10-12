@@ -1,7 +1,8 @@
 // std.net: TCP over IPv4 and IPv6. `listen` gives a `Listener`, whose
 // `accept` gives a `Conn`; `connect` gives a `Conn` too. A host is an IPv4
 // or IPv6 address (`127.0.0.1`, `::1`) or a name, resolved with
-// `getaddrinfo`.
+// `getaddrinfo`. `connectTimeout` is `connect` that gives up after a
+// number of milliseconds.
 //
 // The C constants that differ between macOS and Linux (the layout of
 // `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
@@ -249,6 +250,10 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
         cur = ai.next
     }
     freeaddrinfo(head)
+    return connectError(e)
+}
+
+fn connectError(e: i32) ConnectError {
     if e == econnrefused() {
         return ConnectError.ConnectionRefused
     }
@@ -259,6 +264,74 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
         return ConnectError.TimedOut
     }
     return ConnectError.ConnectFailed
+}
+
+/// `connect` that gives up after `ms` milliseconds (per address when a
+/// name has several): a non-blocking connect, `poll` for POLLOUT, then
+/// `SO_ERROR`. TimedOut when the peer did not answer in time; the other
+/// errors are `connect`'s. The returned `Conn` is blocking, as from `connect`.
+pub fn connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn {
+    var head: ?*mut AddrInfo = null
+    let rc = resolve(host, port, 0, &mut head)
+    if rc == RESOLVE_INVALID {
+        return ConnectError.InvalidAddress
+    }
+    if rc != 0 {
+        return ConnectError.UnknownHost
+    }
+    var e: i32 = 0
+    var cur = head
+    while cur |ai| {
+        let fd = socket(ai.family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            let flags = fcntl(fd, F_GETFL)
+            if flags < 0 || fcntl(fd, F_SETFL, flags | pick(0x4, 0x800)) != 0 {
+                e = aye_std_errno()
+                _ = close(fd)
+                cur = ai.next
+                continue
+            }
+            var pending = false
+            if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
+                e = 0
+            } else {
+                e = aye_std_errno()
+                pending = e == einprogress() || e == EINTR
+            }
+            if pending {
+                var fds = [1]PollFd{PollFd { fd: fd, events: POLLOUT, revents: 0 }}
+                var r = poll(fds[..].ptr, 1, ms as i32)
+                while r < 0 && aye_std_errno() == EINTR {
+                    r = poll(fds[..].ptr, 1, ms as i32)
+                }
+                if r == 0 {
+                    e = etimedout()
+                } else if r < 0 {
+                    e = aye_std_errno()
+                } else {
+                    var err = @zeroed([4]u8)
+                    var len: u32 = 4
+                    if getsockopt(fd, solSocket(), pick(0x1007, 4), err[..].ptr, &mut len) != 0 {
+                        e = aye_std_errno()
+                    } else {
+                        e = (err[0] as i32) | (err[1] as i32) << 8 | (err[2] as i32) << 16 | (err[3] as i32) << 24
+                    }
+                }
+            }
+            if e == 0 {
+                _ = fcntl(fd, F_SETFL, flags)
+                freeaddrinfo(head)
+                noSigpipe(fd)
+                return Conn { sock: fd }
+            }
+            _ = close(fd)
+        } else {
+            e = aye_std_errno()
+        }
+        cur = ai.next
+    }
+    freeaddrinfo(head)
+    return connectError(e)
 }
 
 // `struct addrinfo` as C lays it out on 64-bit macOS and Linux. The two
@@ -335,6 +408,7 @@ pub extern struct PollFd {
 
 let SOCK_STREAM: i32 = 1
 let POLLIN: i16 = 1
+let POLLOUT: i16 = 4
 let EINTR: i32 = 4
 let EACCES: i32 = 13
 let EPIPE: i32 = 32
@@ -375,6 +449,7 @@ fn eaddrinuse() i32 { return pick(48, 98) }
 fn enetunreach() i32 { return pick(51, 101) }
 fn ehostunreach() i32 { return pick(65, 113) }
 fn etimedout() i32 { return pick(60, 110) }
+fn einprogress() i32 { return pick(36, 115) }
 fn eagain() i32 { return pick(35, 11) }
 
 fn readError(e: i32) ReadError {
@@ -406,6 +481,7 @@ extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
 extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32
 extern fn getsockname(fd: i32, addr: [*]u8, len: *mut u32) i32
 extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
+extern fn getsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: *mut u32) i32
 extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
 extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
 extern fn getaddrinfo(node: [*]u8, service: [*]u8, hints: *AddrInfo, res: *mut ?*mut AddrInfo) i32

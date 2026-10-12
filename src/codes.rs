@@ -2725,6 +2725,29 @@ pub fn main() {
 }
 "#,
 }
+E0125 = 125 {
+    "`noreturn` function that returns",
+    "A function declared `noreturn` never comes back to its caller, so a call to it ends a block like `return`. Its body must not reach its end or a `return`: end every path with a call to another `noreturn` function (such as `std.os.exit`) or `unreachable`.",
+    r#"fn die(msg: []u8) noreturn {
+    @println(msg)
+}
+
+pub fn main() {
+    die("bye")
+}
+"#,
+    r#"import std.os
+
+fn die(msg: []u8) noreturn {
+    @println(msg)
+    os.exit(1)
+}
+
+pub fn main() {
+    die("bye")
+}
+"#,
+}
 }
 
 #[cfg(test)]

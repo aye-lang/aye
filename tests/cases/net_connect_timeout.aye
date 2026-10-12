@@ -1,0 +1,33 @@
+// std.net.connectTimeout (O3.4c): an unroutable address with a 300 ms
+// timeout gives TimedOut. A network that rejects at once (no route) gives
+// Unreachable or ConnectFailed instead; those are printed as the same
+// line, and the call must return in under 2 s either way. A listener
+// still connects.
+
+import std.net
+import std.text
+import std.time
+
+pub fn main() !void {
+    let l = try net.listen("127.0.0.1", 0)
+    defer l.close()
+    let ok = try net.connectTimeout("127.0.0.1", l.port(), 300)
+    ok.close()
+    @println("local: connected")
+
+    let t0 = time.monotonicMs()
+    if net.connectTimeout("10.255.255.1", 9, 300) |c| {
+        c.close()
+        @println("unexpected connect")
+    } else |e| {
+        @print("error: ")
+        let t = @tagName(e)
+        if text.eql(t, "TimedOut") || text.eql(t, "Unreachable") || text.eql(t, "ConnectFailed") {
+            @println("TimedOut-or-fast-failure")
+        } else {
+            @println(t)
+        }
+    }
+    @print("under 2s: ")
+    @println(time.monotonicMs() - t0 < 2000)
+}
