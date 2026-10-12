@@ -1800,9 +1800,13 @@ E0088 = 88 {
 }
 E0089 = 89 {
     "global initializer is not a constant",
-    "A top-level `let` or `var` is initialized when the program is compiled, so its value is built from literals, other `let` constants, operators, `as` casts, array, struct and enum literals, and a call without arguments to a function whose body is one `return` of such a value (`Mutex.init()`). Other calls and `var` globals cannot be used, the arithmetic must not overflow, and a constant cannot be defined in terms of itself. Set other values at run time, in a function.",
+    "A top-level `let` or `var` is initialized when the program is compiled, so its value is built from literals, other `let` constants, operators, `as` casts, array, struct and enum literals, and a call with such arguments to a function whose body is one `return` of such a value built from its parameters (`Mutex.init()`, `Buffer.init(16)`); calls nest at most 16 deep. Other calls (a function with a loop, a `var` or more than one statement) and `var` globals cannot be used, the arithmetic must not overflow, and a constant cannot be defined in terms of itself. Set other values at run time, in a function.",
     r#"fn start(n: i64) i64 {
-    return n * 2
+    var total: i64 = 0
+    for i in 0..n {
+        total += i
+    }
+    return total
 }
 
 var counter: i64 = start(5)

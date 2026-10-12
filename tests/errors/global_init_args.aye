@@ -1,0 +1,34 @@
+fn sum(n: i64) i64 {
+    var total: i64 = 0
+    for i in 0..n {
+        total += i
+    }
+    return total
+}
+
+fn plus(a: i64, b: i64) i64 {
+    return a + b
+}
+
+fn wrap(n: i64) i64 {
+    return plus(n, sum(n))
+}
+
+fn forever(n: i64) i64 {
+    return forever(n + 1)
+}
+
+fn small(n: u8) u8 {
+    return n * 100
+}
+
+var count: i64 = 3
+let A: i64 = sum(4)
+let B: i64 = plus(count, 1)
+let C: i64 = wrap(2)
+let D: i64 = forever(0)
+let E: u8 = small(3)
+
+pub fn main() {
+    @println(A + B + C + D + E as i64)
+}

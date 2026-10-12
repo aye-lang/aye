@@ -1,0 +1,5 @@
+global_init_args.aye:22:14: error[E0089]: integer overflow in a constant: `300` does not fit in `u8`
+global_init_args.aye:26:14: error[E0089]: `sum` cannot be computed when the program is compiled: a global's initializer can call a function only with constant arguments, and only one whose body is one `return` of a constant built from its parameters
+global_init_args.aye:27:19: error[E0089]: `count` is a `var`: a global's initializer can use only `let` constants
+global_init_args.aye:28:14: error[E0089]: `wrap` cannot be computed when the program is compiled: a global's initializer can call a function only with constant arguments, and only one whose body is one `return` of a constant built from its parameters
+global_init_args.aye:29:14: error[E0089]: `forever` nests calls more than 16 deep: a global's initializer folds at most 16 nested calls

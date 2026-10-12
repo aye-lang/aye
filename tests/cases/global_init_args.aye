@@ -1,0 +1,43 @@
+// A global's initializer may call a function with constant arguments when
+// its body is one `return` of a constant built from its parameters
+// (O1.21a): sema substitutes the arguments, so the global is a static
+// value and no code runs before `main`.
+
+struct Buffer {
+    cap: usize
+    len: usize
+    full: bool
+
+    fn init(cap: usize) Buffer {
+        return Buffer { cap: cap, len: 0, full: cap == 0 }
+    }
+
+    fn twice(cap: usize) Buffer {
+        return Buffer.init(double(cap) + 1)
+    }
+}
+
+fn double(n: usize) usize {
+    return n * 2
+}
+
+fn area(w: i64, h: i64) i64 {
+    return w * h - (w + h)
+}
+
+let SIDE: i64 = 6
+var buf = Buffer.init(16)
+var big = Buffer.twice(double(4))
+var empty = Buffer.init(0)
+let AREA: i64 = area(SIDE, SIDE + 1)
+var ranks = [3]i64{area(1, 2), area(2, 3), area(3, 4)}
+
+pub fn main() {
+    @println(buf.cap)
+    @println(big.cap)
+    @println(empty.full)
+    @println(AREA)
+    @println(ranks[2])
+    buf.len += 1
+    @println(buf.len)
+}
