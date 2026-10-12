@@ -720,3 +720,141 @@ fn definition_in_a_path_dependency() {
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+const SIBLINGS: &str = "pub fn main() {
+    if true {
+        let x = 1
+        @println(x)
+    } else {
+        let x = 2
+        @println(x)
+    }
+    for i in 0..2 {
+        @println(i)
+    }
+    for i in 0..3 {
+        @println(i + 1)
+    }
+}
+";
+
+#[test]
+fn a_name_in_a_block_is_its_own_declaration() {
+    let (dir, uri) = scratch("blocks", SIBLINGS);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, SIBLINGS));
+    c.diagnostics();
+    let def_line = |d: &Json| {
+        d.get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(Json::as_i64)
+    };
+    // Each block's `x` and each loop's `i`, from inside it and from just
+    // past its end.
+    for (id, line, character, decl, sig) in [
+        (2, 3, 17, 2, "let x = 1"),
+        (4, 3, 18, 2, "let x = 1"),
+        (6, 6, 17, 5, "let x = 2"),
+        (8, 6, 18, 5, "let x = 2"),
+        (10, 9, 17, 8, "for i in 0..2"),
+        (12, 12, 17, 11, "for i in 0..3"),
+        (14, 12, 18, 11, "for i in 0..3"),
+    ] {
+        let h = at(&mut c, id, "hover", &uri, line, character);
+        assert_eq!(
+            hover_text(&h),
+            format!("```aye\n{sig}\n```"),
+            "{line}:{character}"
+        );
+        let d = at(&mut c, id + 1, "definition", &uri, line, character);
+        assert_eq!(def_line(&d), Some(decl), "{line}:{character}: {d:?}");
+    }
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+const DOCUMENTED: &str = "/// A box of `T`.
+pub fn Box(comptime T: type) type {
+    return struct {
+        v: T
+
+        /// The value.
+        pub fn get(self: *Self) T {
+            return self.v
+        }
+    }
+}
+
+/// Two shapes.
+pub enum Shape {
+    circle,
+    square,
+
+    pub fn round(self: Shape) bool {
+        return self == Shape.circle
+    }
+}
+
+/// Two.
+pub let TWO = 1 +
+    1
+
+pub fn main() {
+    let b = Box(i64) { v: TWO }
+    @println(b.get())
+    @println(Shape.round(Shape.square))
+}
+";
+
+/// Hover shows a declaration as `aye doc --signatures` does: one renderer.
+#[test]
+fn hover_renders_declarations_like_aye_doc() {
+    let (dir, uri) = scratch("documented", DOCUMENTED);
+    let file = dir.join("main.aye");
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .args(["doc", "--signatures"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let signatures = String::from_utf8(out.stdout).unwrap();
+    // Line and character of the first `name` in the line containing `line`.
+    let pos = |line: &str, name: &str| {
+        let (l, text) = DOCUMENTED
+            .lines()
+            .enumerate()
+            .find(|(_, t)| t.contains(line))
+            .unwrap();
+        (l as u32, text.find(name).unwrap() as u32)
+    };
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, DOCUMENTED));
+    c.diagnostics();
+    for (id, line, name, doc) in [
+        (2, "let b = Box", "Box", "A box of `T`."),
+        (3, "Shape.round(", "Shape", "Two shapes."),
+    ] {
+        let (l, ch) = pos(line, name);
+        let h = at(&mut c, id, "hover", &uri, l, ch);
+        let text = hover_text(&h);
+        let sig = text
+            .strip_prefix("```aye\n")
+            .and_then(|t| t.strip_suffix(&format!("\n```\n\n{doc}")))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(sig.contains('\n'), "{sig}");
+        assert!(
+            signatures.contains(&format!("/// {doc}\n{sig}\n")),
+            "{sig}\n---\n{signatures}"
+        );
+    }
+    // A `let` over several lines: its first line (`aye doc` prints all).
+    let (l, ch) = pos("v: TWO", "TWO");
+    let h = at(&mut c, 4, "hover", &uri, l, ch);
+    assert_eq!(hover_text(&h), "```aye\npub let TWO = 1 + ...\n```\n\nTwo.");
+    assert!(signatures.contains("pub let TWO = 1 + 1\n"), "{signatures}");
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}

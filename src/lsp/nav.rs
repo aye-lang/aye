@@ -453,42 +453,25 @@ fn declaration(scan: &Scan, has_code: &[bool], d: &[Item]) -> Option<Decl> {
         return None;
     }
     let name = d.get(k + 1).filter(|it| matches!(it.tok, Tok::Ident(_)))?;
-    let body = body(d);
-    let (sig, members) = match body {
-        Some(b) if is_fn => (flat(&d[..b.0]), Vec::new()),
-        Some(b) if is_type => {
-            let interface = *kw == Tok::Kw(Kw::Interface);
-            let found = doc::members(scan, has_code, d, b.0 + 1, b.1);
-            let mut lines = String::new();
-            doc::render_members(&found, interface, "    ", &mut lines);
-            let members = found
-                .iter()
-                .filter_map(|m| {
-                    let n = m.name()?;
-                    Some(Decl {
-                        name: n.text.clone(),
-                        line: n.line,
-                        col: n.col,
-                        is_pub: m.is_pub,
-                        sig: m.sig.clone(),
-                        doc: strip_doc(&m.doc),
-                        members: Vec::new(),
-                    })
+    let members = match body(d) {
+        Some(b) if is_type => doc::members(scan, has_code, d, b.0 + 1, b.1)
+            .iter()
+            .filter_map(|m| {
+                let n = m.name()?;
+                Some(Decl {
+                    name: n.text.clone(),
+                    line: n.line,
+                    col: n.col,
+                    is_pub: m.is_pub,
+                    sig: m.sig.clone(),
+                    doc: strip_doc(&m.doc),
+                    members: Vec::new(),
                 })
-                .collect();
-            let sig = if d[0].line != d[d.len() - 1].line {
-                format!("{} {{\n{lines}}}", flat(&d[..b.0]))
-            } else {
-                flat(d)
-            };
-            (sig, members)
-        }
-        _ if matches!(kw, Tok::Kw(Kw::Let | Kw::Var)) && d[0].line != d[d.len() - 1].line => {
-            let first: Vec<&Item> = d.iter().take_while(|it| it.line == d[0].line).collect();
-            (format!("{} ...", fmt::join(first)), Vec::new())
-        }
-        _ => (flat(d), Vec::new()),
+            })
+            .collect(),
+        _ => Vec::new(),
     };
+    let sig = doc::render_decl(scan, has_code, d, true);
     Some(Decl {
         name: name.text.clone(),
         line: name.line,
