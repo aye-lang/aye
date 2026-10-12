@@ -85,7 +85,7 @@ pub struct Child {
             if r == self.pid {
                 break
             }
-            if r < 0 && aye_std_errno() != EINTR {
+            if r < 0 && errno() != EINTR {
                 return WaitError.WaitFailed
             }
         }
@@ -106,7 +106,7 @@ pub struct Child {
             return KillError.NoSuchProcess
         }
         if kill(self.pid, SIGTERM) != 0 {
-            if aye_std_errno() == ESRCH {
+            if errno() == ESRCH {
                 return KillError.NoSuchProcess
             }
             return KillError.KillFailed
@@ -120,7 +120,7 @@ pub struct Child {
             return KillError.NoSuchProcess
         }
         if kill(self.pid, SIGKILL) != 0 {
-            if aye_std_errno() == ESRCH {
+            if errno() == ESRCH {
                 return KillError.NoSuchProcess
             }
             return KillError.KillFailed
@@ -215,7 +215,17 @@ let ENOMEM: i32 = 12
 let SIGTERM: i32 = 15
 let SIGKILL: i32 = 9
 
-extern fn aye_std_errno() i32
+// `errno`: `__error()` on macOS, `__errno_location()` on Linux.
+fn errno() i32 {
+    if @targetOs() is .macos {
+        return darwinErrno().*
+    } else {
+        return linuxErrno().*
+    }
+}
+
+extern("__error") fn darwinErrno() *i32
+extern("__errno_location") fn linuxErrno() *i32
 extern fn aye_std_spawn(args: [*]u8, argc: i32, envc: i32, hascwd: i32, modes: i32, out: [*]i32) i32
 extern fn waitpid(pid: i32, status: *mut i32, options: i32) i32
 extern fn kill(pid: i32, sig: i32) i32

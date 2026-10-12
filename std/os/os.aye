@@ -9,7 +9,6 @@
 
 import std.mem.Allocator
 import std.mem.AllocError
-import std.text
 
 /// The program's arguments; the first is the program itself. The slice is
 /// new memory from `alloc` (free it with `alloc.free`); the arguments are
@@ -34,12 +33,9 @@ pub fn getenv(name: []u8) ?[]u8 {
 
 /// The number of CPUs that are online (`sysconf`), at least 1.
 pub fn cpuCount() u32 {
-    // _SC_NPROCESSORS_ONLN is 58 on macOS and 84 on Linux. `struct utsname`
-    // starts with the system's name on both; it is 390 bytes on Linux and
-    // 1280 on macOS.
-    var buf = @zeroed([2048]u8)
+    // _SC_NPROCESSORS_ONLN is 58 on macOS and 84 on Linux (and wasi-libc).
     var name: i32 = 84
-    if uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin") {
+    if @targetOs() is .macos {
         name = 58
     }
     let n = sysconf(name)
@@ -74,4 +70,3 @@ extern fn aye_std_stop_requested() bool
 extern fn aye_std_getenv(name: [*]u8, len: usize) ?[*]u8
 extern fn strlen(s: [*]u8) usize
 extern fn sysconf(name: i32) i64
-extern fn uname(buf: [*]u8) i32

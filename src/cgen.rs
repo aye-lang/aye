@@ -855,10 +855,9 @@ AYE_RT void aye_log_e(uint16_t e) { aye_rt_dprintf(2, "%s", aye_error_names[e]);
 
 /* Hooks that std calls through `extern fn`: the program's arguments;
    `open` for reading or `create` (write, create, truncate) with a path that
-   is not NUL-terminated (the fd, or -errno); `exists`; `mtime`; and the
-   monotonic clock in nanoseconds. Flag and clock values, errno numbers, and
-   where `struct stat` keeps the modification time, differ between macOS,
-   Linux and wasi-libc (wasm32-wasip1). */
+   is not NUL-terminated (the fd, or -errno); `exists`; and the monotonic
+   clock in nanoseconds. Flag and clock values and errno numbers differ
+   between macOS, Linux and wasi-libc (wasm32-wasip1). */
 AYE_DATA int aye_argc;
 AYE_DATA char **aye_argv;
 AYE_RT int32_t aye_std_argc(void) { return aye_argc; }
@@ -877,9 +876,6 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #define AYE_O_RDONLY 0
 #define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
 #define AYE_CLOCK_MONOTONIC 6
-#define AYE_ST_MTIME 6 /* st_mtimespec, in int64_t: byte 48 */
-#define AYE_ST_SIZE 12 /* st_size: byte 96 */
-#define AYE_ST_MODE 4 /* st_mode, 16 bits: byte 4 */
 #define AYE_ENOTEMPTY 66
 #define AYE_D_TYPE 20 /* dirent: d_type, then d_name */
 #define AYE_NSEC(v) (v)
@@ -887,9 +883,6 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #define AYE_O_RDONLY 0x04000000
 #define AYE_O_CREATE 0x10009000 /* O_WRONLY | O_CREAT | O_TRUNC */
 #define AYE_CLOCK_MONOTONIC (&_CLOCK_MONOTONIC)
-#define AYE_ST_MTIME 11 /* st_mtim: byte 88 */
-#define AYE_ST_SIZE 6 /* st_size: byte 48 */
-#define AYE_ST_MODE 24 /* st_mode, 32 bits: byte 24 */
 #define AYE_ENOTEMPTY 55
 #define AYE_D_TYPE 8 /* dirent: d_ino, d_type, then d_name */
 #define AYE_NSEC(v) ((int64_t)(uint32_t)(v)) /* tv_nsec is a 32-bit long; the padding is not zeroed */
@@ -897,13 +890,6 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #define AYE_O_RDONLY 0
 #define AYE_O_CREATE 01101
 #define AYE_CLOCK_MONOTONIC 1
-#define AYE_ST_MTIME 11 /* st_mtim, byte 88 on x86_64 and aarch64 */
-#define AYE_ST_SIZE 6 /* st_size: byte 48 on both */
-#ifdef __x86_64__
-#define AYE_ST_MODE 24 /* st_mode, low 16 bits: byte 24 */
-#else
-#define AYE_ST_MODE 16 /* byte 16 on aarch64 */
-#endif
 #define AYE_ENOTEMPTY 39
 #define AYE_D_TYPE 18
 #define AYE_NSEC(v) (v)
@@ -976,21 +962,6 @@ AYE_RT bool aye_std_exists(uint8_t *path, size_t len) {
     aye_rt_free(p);
     return r == 0;
 }
-/* std.fs.mtime: the modification time in nanoseconds since 1970, in
-   `*ns`; false if `stat` fails. Gap #50 (no per-OS declarations): the
-   field is `st_mtimespec` on macOS and `st_mtim` on Linux, so Aye code
-   cannot name it. `st` is larger than both OSes' `struct stat` (144
-   bytes). */
-AYE_RT bool aye_std_mtime(uint8_t *path, size_t len, int64_t *ns) {
-    char *p = aye_c_path(path, len);
-    if (!p) return false;
-    int64_t st[32];
-    int r = aye_rt_stat(p, st);
-    aye_rt_free(p);
-    if (r != 0) return false;
-    *ns = st[AYE_ST_MTIME] * 1000000000 + AYE_NSEC(st[AYE_ST_MTIME + 1]);
-    return true;
-}
 /* std.fs: stat, readDir, mkdir, remove and rename. `-errno` as a result
    keeps the numbers that are the same on both OSes; ENOTEMPTY (66 on macOS,
    39 on Linux) is -39 on both. */
@@ -998,21 +969,12 @@ static __attribute__((unused)) int32_t aye_std_fail(void) {
     int e = aye_errno();
     return e == AYE_ENOTEMPTY ? -39 : -e;
 }
-/* `lstat` of the path (`stat` if `follow`) into `out`: the size, the
-   modification time in nanoseconds since 1970 and the S_IFMT bits of the
-   mode (the same values on both OSes); 0, or -errno. */
-AYE_RT int32_t aye_std_lstat(uint8_t *path, size_t len, bool follow, int64_t *out) {
-    char *p = aye_c_path(path, len);
-    if (!p) return -12;
-    int64_t st[32];
-    int r = follow ? aye_rt_stat(p, st) : aye_rt_lstat(p, st);
-    int32_t err = r != 0 ? aye_std_fail() : 0;
-    aye_rt_free(p);
-    if (r != 0) return err;
-    out[0] = st[AYE_ST_SIZE];
-    out[1] = st[AYE_ST_MTIME] * 1000000000 + AYE_NSEC(st[AYE_ST_MTIME + 1]);
-    out[2] = *(uint16_t *)((char *)st + AYE_ST_MODE) & 0170000;
-    return 0;
+/* `lstat` (`stat` if `follow`) of the NUL-terminated `path` into `st`
+   (std.fs reads the fields per OS); 0, or -errno. Only the symbol is
+   chosen here: `stat$INODE64` on x86_64 macOS. */
+AYE_RT int32_t aye_std_statbuf(uint8_t *path, bool follow, int64_t *st) {
+    int r = follow ? aye_rt_stat((char *)path, st) : aye_rt_lstat((char *)path, st);
+    return r != 0 ? aye_std_fail() : 0;
 }
 /* `mkdir` (op 0), `remove` (op 1) of `path`, and `rename` (op 2) of `path`
    to `to`; 0, or -errno. */
@@ -1056,9 +1018,6 @@ AYE_RT uint8_t *aye_std_readdir(uint8_t *dir, int32_t *kind) {
    `@cimport`s dirent.h declares the libc names itself (E0096). */
 AYE_RT void aye_std_closedir(uint8_t *dir) { aye_rt_closedir(dir); }
 AYE_RT void aye_std_rewinddir(uint8_t *dir) { aye_rt_rewinddir(dir); }
-/* std.net: errno. Its C symbol differs per OS (`__error`, `__errno_location`),
-   and Aye has no per-OS declarations, so this helper stays. */
-AYE_RT int32_t aye_std_errno(void) { return aye_errno(); }
 /* std.os.getenv: the value (not a copy), or null. `name` is not
    NUL-terminated. */
 extern char *aye_rt_getenv(const char *) __asm__(AYE_SYM("getenv"));
