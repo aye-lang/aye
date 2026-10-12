@@ -1255,6 +1255,20 @@ impl<'a> Lower<'a> {
             _ => {
                 let rv = self.rvalue(e, out);
                 self.push(out, StmtKind::Eval(rv));
+                // A C function pointer cannot say `noreturn`: tell C that a
+                // call through a `fn(..) noreturn` value does not come back.
+                if let TExprKind::CallValue { callee, .. } = &e.kind
+                    && matches!(&callee.ty, Type::Fn(_, r) if **r == Type::Never)
+                {
+                    self.push(
+                        out,
+                        StmtKind::Check {
+                            cond: None,
+                            msg: "a `noreturn` function returned",
+                            span: e.span,
+                        },
+                    );
+                }
             }
         }
     }

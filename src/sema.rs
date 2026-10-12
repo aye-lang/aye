@@ -167,6 +167,10 @@ pub enum Type {
     Bool,
     /// Result type of functions without a return type. Not nameable.
     Void,
+    /// `noreturn`: the result of a function type whose calls never come
+    /// back (`fn([]u8) noreturn`). Only a function type's result; a call
+    /// through such a value is `void`.
+    Never,
     Array(Box<Type>, u64),
     /// `simd[N]T`: `N` lanes (a power of two, 2 to 64) of a number or
     /// `bool` (a mask, from a comparison), a C vector.
@@ -295,6 +299,7 @@ impl fmt::Display for Type {
             Type::Float(FloatTy::F64) => f.write_str("f64"),
             Type::Bool => f.write_str("bool"),
             Type::Void => f.write_str("void"),
+            Type::Never => f.write_str("noreturn"),
             Type::Array(t, n) => write!(f, "[{n}]{t}"),
             Type::Simd(t, n) => write!(f, "simd[{n}]{t}"),
             Type::Slice(t, false) => write!(f, "[]{t}"),
@@ -1432,11 +1437,7 @@ fn match_is_stmt(arms: &[ast::MatchArm]) -> bool {
 /// Does every path through `stmts` end in `return` (or, with `or_jumps`,
 /// in `break` or `continue`)?
 fn block_returns(stmts: &[TStmt], or_jumps: bool, noreturn: &HashSet<String>) -> bool {
-    let leaves = |x: &TExpr| match &x.kind {
-        TExprKind::Unreachable => true,
-        TExprKind::Call { name, .. } => noreturn.contains(name),
-        _ => false,
-    };
+    let leaves = |x: &TExpr| leaves(x, noreturn);
     stmts.iter().any(|s| match &s.kind {
         TStmtKind::Return(_) => true,
         TStmtKind::Expr(x) if leaves(x) => true,
@@ -1454,6 +1455,36 @@ fn block_returns(stmts: &[TStmt], or_jumps: bool, noreturn: &HashSet<String>) ->
         }),
         _ => false,
     })
+}
+
+/// Does `x` never come back: `unreachable`, or a call to a `noreturn`
+/// function (by name or through a `fn(..) noreturn` value)?
+fn leaves(x: &TExpr, noreturn: &HashSet<String>) -> bool {
+    match &x.kind {
+        TExprKind::Unreachable => true,
+        TExprKind::Call { name, .. } => noreturn.contains(name),
+        TExprKind::CallValue { callee, .. } => {
+            matches!(&callee.ty, Type::Fn(_, r) if **r == Type::Never)
+        }
+        _ => false,
+    }
+}
+
+/// Is `e` a call (of a function, a method or a function value)?
+fn is_call(e: &ast::Expr) -> bool {
+    matches!(
+        strip_parens(e).kind,
+        ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::CallExpr { .. }
+    )
+}
+
+/// A call that never comes back, as an arm that gives no value: the block
+/// `{ die(..) }`, which leaves like `{ return }`.
+fn leaving_arm(x: TExpr) -> TArmBody {
+    TArmBody::Block(vec![TStmt {
+        span: x.span,
+        kind: TStmtKind::Expr(x),
+    }])
 }
 
 /// Is a function's return type `noreturn`?
@@ -3540,6 +3571,7 @@ impl<'a> Checker<'a> {
                             "a function type must spell out its error set (`E!T`)",
                         );
                     }
+                    Some(r) if is_noreturn(&Some(r.clone())) => Type::Never,
                     Some(r) => self.resolve_type(r)?,
                 };
                 Type::Fn(params, Box::new(ret))
@@ -4678,6 +4710,39 @@ impl<'a> Checker<'a> {
         })
     }
 
+    /// An arm where a `ty` value is expected (`orelse`, `catch`, a value
+    /// `match`): like `expect`, except that a call to a `noreturn` function
+    /// fits any type and gives no value (`x orelse die("..")`).
+    fn expect_arm(&mut self, e: &ast::Expr, ty: &Type) -> Result<TArmBody> {
+        if *ty == Type::Error || !is_call(e) {
+            return self.expect(e, ty).map(TArmBody::Expr);
+        }
+        match self.arm_value(e, Some(Self::hint(e, ty)))? {
+            TArmBody::Expr(t) => {
+                self.coerce(t, ty)
+                    .map(TArmBody::Expr)
+                    .map_err(|err| match err.end {
+                        None if err.span == e.span => err.ending(e.end),
+                        _ => err,
+                    })
+            }
+            leaving => Ok(leaving),
+        }
+    }
+
+    /// `value` for an arm: a call that never comes back is a block that
+    /// leaves (`leaving_arm`) rather than a `void` value.
+    fn arm_value(&mut self, e: &ast::Expr, expected: Option<&Type>) -> Result<TArmBody> {
+        if !is_call(e) {
+            return self.value(e, expected).map(TArmBody::Expr);
+        }
+        let t = self.expr(e, expected)?;
+        if leaves(&t, &self.noreturn) {
+            return Ok(leaving_arm(t));
+        }
+        self.value_of(t).map(TArmBody::Expr)
+    }
+
     /// The type to check `e` with when `ty` is expected: `T` for `?T`, so
     /// that the value is wrapped; `null` and `match` need `?T` itself.
     fn hint<'t>(e: &ast::Expr, ty: &'t Type) -> &'t Type {
@@ -4704,6 +4769,31 @@ impl<'a> Checker<'a> {
     fn coerce(&mut self, t: TExpr, ty: &Type) -> Result<TExpr> {
         if t.ty == *ty {
             return Ok(t);
+        }
+        // A `fn(A) noreturn` is a `fn(A)` that never comes back.
+        let never_fits = |have: &Type, want: &Type| {
+            matches!((have, want), (Type::Fn(hp, hr), Type::Fn(wp, wr))
+                if hp == wp && **hr == Type::Never && **wr == Type::Void)
+        };
+        if never_fits(&t.ty, ty) {
+            return Ok(TExpr {
+                ty: ty.clone(),
+                ..t
+            });
+        }
+        if let Type::Optional(inner) = ty
+            && never_fits(&t.ty, inner)
+        {
+            let t = TExpr {
+                ty: (**inner).clone(),
+                ..t
+            };
+            let span = t.span;
+            return Ok(TExpr {
+                kind: TExprKind::Some(Box::new(t)),
+                ty: ty.clone(),
+                span,
+            });
         }
         if let Type::Optional(inner) = ty {
             let wrap = |t: TExpr| {
@@ -4935,6 +5025,11 @@ impl<'a> Checker<'a> {
     /// not an unhandled error union).
     fn value(&mut self, e: &ast::Expr, expected: Option<&Type>) -> Result<TExpr> {
         let t = self.expr(e, expected)?;
+        self.value_of(t)
+    }
+
+    /// `t`, checked as a value: not `void`, its errors handled.
+    fn value_of(&mut self, t: TExpr) -> Result<TExpr> {
         if t.ty == Type::Error {
             return Err(silent());
         }
@@ -5231,7 +5326,8 @@ impl<'a> Checker<'a> {
                         name: sig.c_key(name),
                         is_extern: sig.is_extern,
                     };
-                    (kind, Type::Fn(sig.params, Box::new(sig.ret)))
+                    let ret = if sig.noreturn { Type::Never } else { sig.ret };
+                    (kind, Type::Fn(sig.params, Box::new(ret)))
                 }
                 None if self.generics.contains_key(name) => {
                     return err(
@@ -6033,13 +6129,13 @@ impl<'a> Checker<'a> {
                         ty = t.ty.clone();
                         self.expect(x, &ty).map(TArmBody::Expr)
                     }
-                    ArmBody::Expr(x) => match self.value(x, Some(Self::hint(x, &payload))) {
-                        Ok(v) if v.ty == t.ty && v.ty != payload => {
+                    ArmBody::Expr(x) => match self.arm_value(x, Some(Self::hint(x, &payload))) {
+                        Ok(TArmBody::Expr(v)) if v.ty == t.ty && v.ty != payload => {
                             ty = t.ty.clone();
                             Ok(TArmBody::Expr(v))
                         }
-                        Ok(v) => self.coerce(v, &payload).map(TArmBody::Expr),
-                        Err(e) => Err(e),
+                        Ok(TArmBody::Expr(v)) => self.coerce(v, &payload).map(TArmBody::Expr),
+                        other => other,
                     },
                 };
                 (
@@ -6869,6 +6965,8 @@ impl<'a> Checker<'a> {
     ) -> Result<TExpr> {
         let shown = what.map_or("this value".to_string(), |w| format!("`{w}`"));
         let (params, ret) = match &callee.ty {
+            // A `noreturn` call is `void`; `leaves` sees the callee's type.
+            Type::Fn(params, ret) if **ret == Type::Never => (params.clone(), Type::Void),
             Type::Fn(params, ret) => (params.clone(), (**ret).clone()),
             Type::Optional(inner) if matches!(**inner, Type::Fn(..)) => {
                 return err(
@@ -7905,7 +8003,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ArmBody::Expr(x) if payload == Type::Void => self.expr_stmt(x).map(TArmBody::Expr),
-            ArmBody::Expr(x) => self.expect(x, &payload).map(TArmBody::Expr),
+            ArmBody::Expr(x) => self.expect_arm(x, &payload),
         };
         self.scopes.pop();
         let capture = match capture {
@@ -8222,7 +8320,10 @@ impl<'a> Checker<'a> {
         let ty = match want {
             _ if is_stmt => Type::Void,
             Some(t) => t,
-            None if arms.iter().any(|a| matches!(a.body, ArmBody::Block(_))) => {
+            None if checked
+                .iter()
+                .any(|a| matches!(a.as_ref().unwrap().body, TArmBody::Block(_))) =>
+            {
                 return err(
                     E0124,
                     e.span,
@@ -8349,7 +8450,7 @@ impl<'a> Checker<'a> {
                 );
             }
             ArmBody::Expr(x) if is_stmt => TArmBody::Expr(self.expr_stmt(x)?),
-            ArmBody::Expr(x) => TArmBody::Expr(match want {
+            ArmBody::Expr(x) => match want {
                 // The `match` is returned (`return match ...`): the arm is
                 // what `return` takes.
                 Some(t @ Type::ErrorUnion(set, payload)) => {
@@ -8358,11 +8459,15 @@ impl<'a> Checker<'a> {
                         _ => (**payload != Type::Void).then(|| Self::hint(x, payload)),
                     };
                     let v = self.expr(x, hint)?;
-                    self.return_union(v, set, payload)?
+                    if leaves(&v, &self.noreturn) {
+                        leaving_arm(v)
+                    } else {
+                        TArmBody::Expr(self.return_union(v, set, payload)?)
+                    }
                 }
-                Some(t) => self.expect(x, t)?,
-                None => self.value(x, None)?,
-            }),
+                Some(t) => self.expect_arm(x, t)?,
+                None => self.arm_value(x, None)?,
+            },
         };
         Ok(TArm {
             variants: variants.to_vec(),

@@ -1,0 +1,62 @@
+// A call to a `noreturn` function gives no value, so it fits an arm where
+// a value is expected: `x orelse die("..")`, `x catch die("..")` and an
+// arm of a value `match` type as the other side, not as `void`.
+
+import std.os
+
+error Bad { Negative }
+
+enum Shape { Circle, Square, Blob }
+
+fn die(msg: []u8) noreturn {
+    @println(msg)
+    os.exit(0)
+}
+
+fn find(n: i32) ?i32 {
+    if n > 0 {
+        return n
+    }
+    return null
+}
+
+fn parse(n: i32) Bad!i32 {
+    if n < 0 {
+        return Bad.Negative
+    }
+    return n * 2
+}
+
+fn sides(s: Shape) u32 {
+    return match s {
+        .Circle => 0,
+        .Square => 4,
+        .Blob => die("sides: a blob has no sides"),
+    }
+}
+
+fn parse_or_die(n: i32) Bad!i32 {
+    return match n {
+        0 => die("parse_or_die: zero"),
+        _ => parse(n),
+    }
+}
+
+pub fn main() {
+    let a = find(7) orelse die("find failed")
+    @println(a)
+    let b: i32 = parse(21) catch die("parse failed")
+    @println(b)
+    let first = match Shape.Square {
+        .Blob => die("first arm leaves"),
+        .Circle => 1,
+        .Square => 2,
+    }
+    @println(first)
+    @println(sides(Shape.Square))
+    let p = parse_or_die(5) catch |e| 0
+    @println(p)
+    let c = find(-1) orelse (die("orelse: not found"))
+    @println(c)
+    @println("not reached")
+}
