@@ -1,0 +1,49 @@
+// Acceptance (O3.7): SQLite through `@cimport("sqlite3.h")`, no
+// hand-written declarations. An in-memory database, a table, two rows
+// inserted and read back with a prepared statement.
+@link("sqlite3")
+
+let c = @cimport("sqlite3.h")
+
+extern fn strlen(s: [*]u8) usize
+
+fn text(p: ?[*]u8) []u8 {
+    let q = p orelse return ""
+    return q[0..strlen(q)]
+}
+
+fn exec(db: *mut c.sqlite3, sql: []u8) {
+    let code = c.sqlite3_exec(db, sql.ptr, null, null, null)
+    if code != c.SQLITE_OK {
+        @println("sqlite3_exec failed")
+    }
+}
+
+pub fn main() {
+    var handle: ?*mut c.sqlite3 = null
+    if c.sqlite3_open(":memory:".ptr, &mut handle) != c.SQLITE_OK {
+        @println("open failed")
+        return
+    }
+    let db = handle orelse return
+    exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    exec(db, "INSERT INTO users (name) VALUES ('ada')")
+    exec(db, "INSERT INTO users (name) VALUES ('grace')")
+
+    var stmt: ?*mut c.sqlite3_stmt = null
+    let sql = "SELECT id, name FROM users ORDER BY id"
+    if c.sqlite3_prepare_v2(db, sql.ptr, -1, &mut stmt, null) != c.SQLITE_OK {
+        @println("prepare failed")
+        return
+    }
+    let st = stmt orelse return
+    var rows = 0
+    while c.sqlite3_step(st) == c.SQLITE_ROW {
+        rows += 1
+        @println(c.sqlite3_column_int(st, 0))
+        @println(text(c.sqlite3_column_text(st, 1)))
+    }
+    @println(rows)
+    c.sqlite3_finalize(st)
+    c.sqlite3_close(db)
+}

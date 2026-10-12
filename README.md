@@ -16,7 +16,7 @@ builds it with clang. It implements a first slice of the language (see
 
 Requirements: Rust (cargo), and `clang` on `PATH`. Developed on macOS arm64
 with Apple clang 17. Programs that `@link` a C library find it through
-`pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl and
+`pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl, SQLite (`@cimport("sqlite3.h")`; it ships with macOS, and the dev package on Ubuntu is `libsqlite3-dev`) and
 SDL2 (`brew install sdl2`) and are skipped when `pkg-config` lacks them.
 `@cimport` reads C headers with libclang, which the compiler loads only
 when it needs it (it comes with the Command Line Tools on macOS; on Linux,
