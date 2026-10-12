@@ -1613,7 +1613,7 @@ std.testing   the leak-checked allocator of a test                           bel
 std.log       err/info: "error: "/"info: " lines to stderr; line: no prefix  below
 std.diag      Diagnostics: coded messages over byte ranges, lineCol          below
 std.os        args, getenv, exit, cpuCount, onStop/stopRequested (signals)  below
-std.process   child processes: spawn (piped or inherited streams, env, cwd), wait, kill, killHard aye doc --signatures std.process
+std.process   child processes: spawn/spawnWith (env, cwd), wait, kill, killHard   aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
