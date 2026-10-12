@@ -143,7 +143,7 @@ brackets.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
 - O3.6c (done 2026-10-12, a50bc56) graceful stop, the rest of O3.6 (O3.6a query/form/cookies, O3.6b server-sent events and O3.6d streamed responses are done): `std.os.onStop()`/`stopRequested()`, `Server.run` stops on SIGINT/SIGTERM and writes answered responses whole before closing. Verify: golden `http_stop`.
 - O3.6b `std.http` server-sent events (what is left of O3.6 after O3.6a; framework F3.5): a handler can keep its response open as a stream (`res.events()` writes the headers `Content-Type: text/event-stream` and `Cache-Control: no-cache` without `Content-Length`; the server holds the connection in its `poll` set instead of a blocked handler), the server can send `data:` frames to the open streams (`Server.broadcast` or a handle kept by the handler), and `stop` closes them within `idleMs`. Verify: a golden (`http_sse`) where a client reads the first frame, then a frame sent later from another thread, a second request on another connection is answered meanwhile, and `stop` returns with the stream closed.
-- O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
+- O3.7 (done 2026-10-12) SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
 - P-tmp about 7000 stale `aye-run-*.dSYM`/`aye-test-*.dSYM` folders sit in `$TMPDIR` from before O5.2g; delete them once no agent runs an old binary (`rm -rf $TMPDIR/aye-run-*.dSYM $TMPDIR/aye-test-*.dSYM`).
 - O5.2f drop `-g` for `aye test` executables unless `--cflags` is given (−45% on top of O5.2e; no code reads DWARF). Decide after O5.2e.
@@ -192,7 +192,7 @@ and it measures itself with a compat suite and benchmarks:
 | Runtime, `bun run` | 0.1, Jul 2022 | `aye run` (have) | – |
 | `Bun.serve` (HTTP, WebSocket), `fetch` | 0.1 → 1.0 | `std.net`, `std.http` server and client | O6 |
 | `Bun.file`, `Bun.write` | 1.0, Sep 2023 | `std.fs` breadth, `std.path` | O6 |
-| `bun:sqlite` | 0.1 | an `@cimport("sqlite3.h")` example, no std module (C is first-class, design principle 4) | O6 |
+| `bun:sqlite` | 0.1 | an `@cimport("sqlite3.h")` example, no std module (C is first-class, design principle 4) | O6; done: `tests/ffi/sqlite.aye` (O3.7) |
 | `Bun.password`, crypto | 1.0 | `std.crypto` basics | O6 |
 | Bun Shell (`Bun.$`) | 1.0.x, cross-platform in 1.1 | `std.process` | O6 |
 | `bun install`; text `bun.lock` | 1.0; 1.2, Jan 2025 | `build.aye` deps by URL, `aye.lock` content hashes (`design.md`, 模組、套件與建置) | O7 |
