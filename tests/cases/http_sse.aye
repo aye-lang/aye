@@ -122,7 +122,8 @@ fn readCount(c: Conn, want: usize) !void {
 }
 
 // True when `want` streams are open within 5 s (the worker adds a stream
-// after it writes the last of its first chunk, so the client can be first).
+// after it writes the last of its first chunk, so the client can read that
+// chunk and ask `streams()` first; O3.6e).
 fn waitOpen(s: *mut Server, want: usize) bool {
     for i in 0..100 {
         if s.streams() == want {
