@@ -1,0 +1,57 @@
+// An `orelse` takes the expected type the way `catch` does: on a
+// `?[]mut u8` it has type `[]u8` where a `[]u8` is expected (a declared
+// `let`, a `[]u8` return), so its fallback may be a string literal. The
+// fallback of a `?u64` may be a literal that only fits a `u64`, and the
+// fallback of a `?P` a struct literal.
+
+struct P {
+    x: i32,
+    y: i32,
+}
+
+fn find(buf: []mut u8, ok: bool) ?[]mut u8 {
+    if ok {
+        return buf
+    }
+    return null
+}
+
+fn label(buf: []mut u8, ok: bool) []u8 {
+    return find(buf, ok) orelse "none"
+}
+
+fn big(ok: bool) ?u64 {
+    if ok {
+        return 1
+    }
+    return null
+}
+
+fn pt(ok: bool) ?P {
+    if ok {
+        return P { x: 1, y: 2 }
+    }
+    return null
+}
+
+pub fn main() {
+    var store = [2]u8{104, 105}
+    let a: []u8 = find(store[..], false) orelse "none"
+    @println(a)
+    let b: []u8 = find(store[..], true) orelse "none"
+    @println(b)
+    let c: []u8 = find(store[..], false) orelse {
+        "block"
+    }
+    @println(c)
+    @println(label(store[..], false))
+    @println(label(store[..], true))
+    let n: u64 = big(false) orelse 5000000000
+    @println(n)
+    let m: u64 = big(true) orelse 5000000000
+    @println(m)
+    let p: P = pt(false) orelse P { x: 3, y: 4 }
+    @println(p.x + p.y)
+    let q: P = pt(true) orelse P { x: 3, y: 4 }
+    @println(q.x + q.y)
+}

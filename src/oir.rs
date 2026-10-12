@@ -59,6 +59,8 @@ pub struct Func {
     pub is_main: bool,
     /// Exported to C under its own name (`pub extern fn`).
     pub export: bool,
+    /// Declared `noreturn`.
+    pub noreturn: bool,
 }
 
 /// A function-wide local slot: a user variable (`name` set) or a temporary.
@@ -652,6 +654,7 @@ impl<'a> Lower<'a> {
             body,
             is_main: f.is_main,
             export: f.export,
+            noreturn: f.noreturn,
         };
         (func, l.refs)
     }

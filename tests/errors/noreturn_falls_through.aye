@@ -1,0 +1,25 @@
+// A `noreturn` function must not reach the end of its body, on any path,
+// and must not `return`.
+
+fn die(msg: []u8) noreturn {
+    @println(msg)
+}
+
+fn half(n: i32) noreturn {
+    if n > 0 {
+        unreachable
+    }
+}
+
+fn early(n: i32) noreturn {
+    if n > 0 {
+        return
+    }
+    unreachable
+}
+
+pub fn main() {
+    half(1)
+    early(1)
+    die("x")
+}
