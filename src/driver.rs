@@ -874,6 +874,15 @@ pub fn run_tests(
             remove_dsym(&exe);
             return Err(TestError::Run(e));
         }
+        // The first launch of a new executable is slow on macOS (`syspolicyd`
+        // assesses it, ~0.5 s): one launch without arguments (it exits at
+        // once) before the timed test processes.
+        if !c.target.is_wasm() {
+            let _ = Command::new(&exe)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
         let done = run_parallel(jobs, todo.len(), |k| {
             let (i, name, _) = &todo[k];
             run_one(c.target, &exe, *i, name.clone(), &files, time_limit)
