@@ -1694,6 +1694,7 @@ error WriteError { WriteFailed }
 error ReadFileError = OpenError || ReadError
 error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathFailed }
 error ReadDirError = PathError || AllocError
+error ReadLinkError = PathError || AllocError
 enum Kind { File, Dir, Symlink, Other }
 struct Stat { size: u64, mtime: i64, kind: Kind }
 struct DirEntry { name: []u8, kind: Kind }
@@ -1711,6 +1712,7 @@ std.fs.mkdir(path: []u8) PathError!void                  create a directory (the
 std.fs.remove(path: []u8) PathError!void                 delete a file, symlink or empty directory
 std.fs.rename(from: []u8, to: []u8) PathError!void       rename or move; replaces an existing "to"
 std.fs.symlink(target: []u8, link: []u8) PathError!void  create a symlink at link holding target
+std.fs.readLink(alloc: Allocator, path: []u8) ReadLinkError![]mut u8   the target a symlink holds, unresolved; free with alloc.free
 std.fs.stdin() File
 std.fs.stdout() File
 std.fs.stderr() File

@@ -68,6 +68,19 @@ pub fn main() !void {
     defer alloc.free(through)
     @print(through)
 
+    let t1 = try std.fs.readLink(alloc, at(&mut p, dir, "link"))
+    defer alloc.free(t1)
+    @println(t1)
+    let t2 = try std.fs.readLink(alloc, at(&mut p, dir, "dangling"))
+    defer alloc.free(t2)
+    @println(t2)
+    std.fs.readLink(alloc, at(&mut p, dir, "sub")) catch |err| {
+        @println(match err {
+            .PathFailed => "readLink: not a link"
+            _ => "readLink: other error"
+        })
+    }
+
     // Errors: the link exists; its directory does not.
     std.fs.symlink("sub", at(&mut p, dir, "link")) catch |err| {
         @println(match err {

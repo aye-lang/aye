@@ -9,6 +9,7 @@ pub error WriteError { WriteFailed }
 pub error ReadFileError = OpenError || ReadError
 pub error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathFailed }
 pub error ReadDirError = PathError || AllocError
+pub error ReadLinkError = PathError || AllocError
 
 /// What a path names: a regular file, a directory, a symbolic link, or
 /// anything else (a device, a socket, a pipe; also an entry that the file
@@ -354,6 +355,29 @@ pub fn symlink(target: []u8, link: []u8) PathError!void {
     try pathResult(code)
 }
 
+/// The target a symbolic link holds, as stored (not resolved), in new
+/// memory from `alloc` (free it with `alloc.free`). A path that is not a
+/// link is `PathFailed`; a target of 4096 bytes or more is `PathFailed`.
+pub fn readLink(alloc: Allocator, path: []u8) ReadLinkError![]mut u8 {
+    if path.len >= 4096 {
+        return PathError.PathFailed
+    }
+    var p = @zeroed([4096]u8)
+    memcpy(p[0..].ptr, path.ptr, path.len)
+    var buf = @zeroed([4096]u8)
+    let n = cReadlink(p[0..].ptr, buf[0..].ptr, 4096)
+    if n < 0 {
+        return pathError(aye_std_fail())
+    }
+    if n >= 4096 {
+        return PathError.PathFailed
+    }
+    let len = n as usize
+    let out = try alloc.alloc(0 as u8, len)
+    memcpy(out.ptr, buf[0..].ptr, len)
+    return out
+}
+
 // 0, or -errno (ENOTEMPTY as -39), as nothing or an error.
 fn pathResult(code: i32) PathError!void {
     if code != 0 {
@@ -464,6 +488,7 @@ extern fn aye_std_closedir(dir: [*]u8)
 extern fn aye_std_rewinddir(dir: [*]u8)
 extern fn aye_std_fail() i32
 extern("symlink") fn cSymlink(target: [*]u8, link: [*]u8) i32
+extern("readlink") fn cReadlink(path: [*]u8, buf: [*]u8, n: usize) isize
 extern fn strlen(s: [*]u8) usize
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn write(fd: i32, buf: [*]u8, n: usize) isize

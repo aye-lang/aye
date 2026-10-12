@@ -439,8 +439,8 @@ cargo test --test framework
 writes `.web/` as in section 1; the hello app's routes move to
 `app/page.aye`, `app/about/page.aye`, `app/not-found.aye`. The test runs
 `web gen`, then `aye build`, and checks `/`, `/about` and an unknown
-path. Symlinks are made with an `extern fn symlink` from libc until std
-has one (gap list below). `--web` goes away with O4.2.
+path. Symlinks are made with `std.fs.symlink` (and read back with
+`std.fs.readLink`, O1.27). `--web` goes away with O4.2.
 
 **F1.3 (needs F1.2, O3.1).** `app/api/items/[id]/route.aye` with
 `pub fn get`; the transcript checks `200`, `Content-Type:
@@ -469,7 +469,7 @@ meets them:
    take the port back at once. (O1.3, O1.4, F1.1, F3)
 5. **`Arena.reset`** keeping its first block, so a connection reuses one
    arena per request instead of mapping new memory each time. (F1.1, O1.7)
-6. **`std.fs.symlink`** (and `readLink`): not in O1.5's list. (F1.2)
+6. **`std.fs.symlink`** and **`readLink`**: done (O1.27). (F1.2)
 7. **Errors carry no payload.** A 400 that says which field was wrong
    goes through the response (`res.status`, a body), not the error;
    fine, but worth a `docs/practices/` entry when F2 writes forms.
