@@ -3877,8 +3877,13 @@ impl<'a> Checker<'a> {
                 value,
             } if n == "_" && self.lookup(n).is_none() => TStmtKind::Expr(self.value(value, None)?),
             StmtKind::Assign { target, op, value } => {
-                let target = self.value(target, None)?;
-                self.check_mutable(&target, false)?;
+                let ast_target = target;
+                let target = self.value(ast_target, None)?;
+                self.check_mutable(&target, false)
+                    .map_err(|err| match err.end {
+                        None if err.span == ast_target.span => err.ending(ast_target.end),
+                        _ => err,
+                    })?;
                 let value = self.expect(value, &target.ty)?;
                 let op = match op {
                     AssignOp::Set => None,
@@ -5854,7 +5859,8 @@ impl<'a> Checker<'a> {
                         E0041,
                         *variant_span,
                         format!("enum `{ename}` has no variant `{variant}`"),
-                    );
+                    )
+                    .ending(variant_span.right(variant.chars().count() as u32));
                     return Err(suggest(
                         e,
                         variant,
@@ -6173,7 +6179,8 @@ impl<'a> Checker<'a> {
                     if self.global_decls.iter().any(|g| g.name == *name) {
                         return err(E0017, span, format!("`{name}` is a constant, not a struct"));
                     }
-                    let e = Error::new(E0017, span, format!("unknown struct `{name}`"));
+                    let e = Error::new(E0017, span, format!("unknown struct `{name}`"))
+                        .ending(span.right(name.chars().count() as u32));
                     let structs = self
                         .structs
                         .keys()
@@ -7694,7 +7701,8 @@ impl<'a> Checker<'a> {
         }
         for f in fields {
             let Some(index) = def.iter().position(|(n, _)| *n == f.name) else {
-                let e = Error::new(E0038, f.span, format!("{owner} has no field `{}`", f.name));
+                let e = Error::new(E0038, f.span, format!("{owner} has no field `{}`", f.name))
+                    .ending(f.span.right(f.name.chars().count() as u32));
                 return Err(suggest(
                     e,
                     &f.name,

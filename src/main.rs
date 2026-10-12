@@ -381,7 +381,10 @@ fn lsp_cmd(args: Vec<String>) -> ExitCode {
         eprintln!("aye: `lsp` takes no arguments, found `{a}`\n{USAGE}");
         return ExitCode::from(2);
     }
-    let code = lsp::run(std::io::stdin().lock(), std::io::stdout().lock());
+    let code = lsp::run(
+        std::io::BufReader::new(std::io::stdin()),
+        std::io::stdout().lock(),
+    );
     ExitCode::from(code as u8)
 }
 

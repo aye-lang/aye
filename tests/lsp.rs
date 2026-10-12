@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct Client {
     child: Child,
@@ -717,6 +717,90 @@ fn definition_in_a_path_dependency() {
         r#"{"start":{"line":1,"character":7},"end":{"line":1,"character":13}}"#
     );
 
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// One error per source; the range of the diagnostic must end after the name,
+/// the offending expression or the type, not at the token fallback.
+fn range_of(name: &str, src: &str, code: &str) -> String {
+    let (dir, uri) = scratch(name, src);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, src));
+    let p = c.diagnostics();
+    let list = p.get("diagnostics").unwrap().as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0].get("code").and_then(Json::as_str), Some(code));
+    let r = list[0].get("range").unwrap().write();
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+    r
+}
+
+#[test]
+fn more_errors_have_real_ends() {
+    // Unknown field in a struct literal: the field name.
+    let src = "struct P {\n    x: i32,\n}\n\npub fn main() {\n    let p = P { widthy: 1 }\n    @println(p.x)\n}\n";
+    assert_eq!(
+        range_of("field", src, "E0038"),
+        r#"{"start":{"line":5,"character":16},"end":{"line":5,"character":22}}"#
+    );
+    // Unknown struct name.
+    let src = "pub fn main() {\n    let p = Missing { x: 1 }\n    @println(p.x)\n}\n";
+    assert_eq!(
+        range_of("struct", src, "E0017"),
+        r#"{"start":{"line":1,"character":12},"end":{"line":1,"character":19}}"#
+    );
+    // Assignment to an immutable name: the whole target.
+    let src = "pub fn main() {\n    let sum = 0\n    sum += 1\n    @println(sum)\n}\n";
+    let r = range_of("assign", src, "E0032");
+    assert_eq!(
+        r,
+        r#"{"start":{"line":2,"character":4},"end":{"line":2,"character":7}}"#
+    );
+}
+
+#[test]
+fn unknown_variant_ends_after_its_name() {
+    let src = "enum Color {\n    Red,\n    Blue,\n}\n\npub fn main() {\n    let c = Color.Red\n    if c is .Gren {\n        @println(1)\n    }\n}\n";
+    let r = range_of("variant", src, "E0041");
+    assert!(r.contains(r#""line":7"#), "{r}");
+    let (s, e) = (
+        r.split(r#""character":"#).nth(1).unwrap(),
+        r.split(r#""character":"#).nth(2).unwrap(),
+    );
+    let num = |t: &str| t.split(['}', ',']).next().unwrap().parse::<u32>().unwrap();
+    assert!(num(e) - num(s) >= 4, "{r}");
+}
+
+#[test]
+fn two_quick_changes_publish_once() {
+    let (dir, uri) = scratch("debounce", BAD);
+    let mut c = Client::start();
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, BAD));
+    c.diagnostics();
+    let change = |v: i64, text: &str| {
+        format!(
+            r#"{{"textDocument":{{"uri":{},"version":{v}}},"contentChanges":[{{"text":{}}}]}}"#,
+            aye::diag::json_str(&uri),
+            aye::diag::json_str(text)
+        )
+    };
+    let t = Instant::now();
+    c.notify("textDocument/didChange", &change(2, BAD));
+    std::thread::sleep(Duration::from_millis(20));
+    c.notify("textDocument/didChange", &change(3, GOOD));
+    let p = c.diagnostics();
+    assert!(
+        t.elapsed() >= Duration::from_millis(150),
+        "{:?}",
+        t.elapsed()
+    );
+    assert_eq!(p.get("version").and_then(Json::as_i64), Some(3));
+    assert_eq!(p.get("diagnostics"), Some(&Json::Arr(Vec::new())));
+    // No second publish: the next message is the reply.
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
