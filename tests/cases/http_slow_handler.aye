@@ -1,0 +1,114 @@
+// std.http.Server (O3.9b): a slow handler does not hold up the other
+// connections of its worker. The server has two workers. A client opens
+// eight keep-alive connections and gets one answer on each (so the server
+// has accepted them all, spread over the workers in no fixed way). Then
+// connection 0 asks for `/slow`, whose handler sleeps 300 ms, and while it
+// runs, connections 1 to 7 each get an answer: those on the slow worker
+// are taken over by the other worker. The slow answer comes after them.
+// Only pass or fail is printed, no times.
+
+import std.heap.General
+import std.http
+import std.http.Request
+import std.http.Response
+import std.http.Server
+import std.list.List
+import std.mem
+import std.mem.Allocator
+import std.net
+import std.net.Conn
+import std.text
+import std.thread
+import std.time
+
+let CONNS: usize = 8
+
+struct App {
+    unused: u32
+}
+
+fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
+    if text.eql(req.path(), "/slow") {
+        time.sleep(300)
+        res.body = "slow"
+        return
+    }
+    res.body = "ok"
+}
+
+fn run(s: *mut Server) {
+    var gpa = General.init()
+    defer gpa.deinit()
+    s.run(gpa.allocator()) catch |e| {
+        @println("run failed")
+    }
+}
+
+// Reads one answer on `c` until it ends with `body`; true when it is a 200.
+fn answer(c: Conn, body: []u8) !bool {
+    var buf = @zeroed([512]u8)
+    var got: usize = 0
+    while got < 512 {
+        let n = try c.readTimeout(buf[got..], 5000)
+        if n == 0 {
+            break
+        }
+        got += n
+        if got >= body.len && mem.eql(buf[got - body.len..got], body) {
+            break
+        }
+    }
+    return got >= 12 && mem.eql(buf[0..12], "HTTP/1.1 200") && got >= body.len && mem.eql(buf[got - body.len..got], body)
+}
+
+pub fn main() !void {
+    var app = App { unused: 0 }
+    var s = try http.listen(App, "127.0.0.1", 0, &mut app, handle)
+    s.workers = 2
+    let t = try thread.spawn(Server, run, &mut s)
+
+    var gpa = General.init()
+    defer gpa.deinit()
+    var list = List(Conn).init(gpa.allocator())
+    defer list.deinit()
+    var ok: u32 = 0
+    for i in 0..CONNS {
+        try list.append(try net.connect("127.0.0.1", s.port()))
+    }
+    let conns = list.items()
+    for i in 0..CONNS {
+        try conns[i].write("GET /k HTTP/1.1\r\nHost: x\r\n\r\n")
+        if try answer(conns[i], "ok") {
+            ok += 1
+        }
+    }
+    @print("first answers: ")
+    @println(ok)
+
+    try conns[0].write("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n")
+    // Let the slow handler begin.
+    time.sleep(50)
+    ok = 0
+    for i in 1..CONNS {
+        try conns[i].write("GET /k HTTP/1.1\r\nHost: x\r\n\r\n")
+        if try answer(conns[i], "ok") {
+            ok += 1
+        }
+    }
+    let fastMs = time.monotonicMs()
+    let slowOk = try answer(conns[0], "slow")
+    let slowMs = time.monotonicMs()
+
+    @print("answers during the slow handler: ")
+    @println(ok)
+    @print("slow answer: ")
+    @println(slowOk)
+    @print("the others were answered first: ")
+    @println(fastMs < slowMs)
+
+    for i in 0..CONNS {
+        conns[i].close()
+    }
+    s.stop()
+    t.join()
+}
