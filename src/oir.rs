@@ -360,12 +360,13 @@ pub enum Rvalue {
 }
 
 /// Lower the program. `linked` are the libraries it is linked with: an
-/// `if @hasLink(name)` keeps only the branch that runs. Only the functions
-/// and vtables that the program can reach are kept (from `main`, the
-/// tests, exported functions and globals; with tests, not from `main`),
-/// so a function that calls into a library that is not linked is left out
-/// when nothing calls it.
-pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
+/// `if @hasLink(name)` keeps only the branch that runs. `os` is the tag of
+/// the target's OS in `sema::TARGET_OS`, for `if @targetOs() is .linux`
+/// the same way. Only the functions and vtables that the program can reach
+/// are kept (from `main`, the tests, exported functions and globals; with
+/// tests, not from `main`), so a function that calls into a library that
+/// is not linked is left out when nothing calls it.
+pub fn lower(p: &sema::Program, linked: &[String], os: usize) -> Program {
     let structs: HashMap<&str, &sema::StructDef> =
         p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
     let enums: HashMap<&str, &sema::EnumDef> =
@@ -373,7 +374,7 @@ pub fn lower(p: &sema::Program, linked: &[String]) -> Program {
     let (funcs, refs): (Vec<Func>, Vec<Vec<Ref>>) = p
         .fns
         .iter()
-        .map(|f| Lower::func(f, &structs, &enums, linked))
+        .map(|f| Lower::func(f, &structs, &enums, linked, os))
         .unzip();
     let (funcs, vtables) = reachable(p, funcs, refs);
     Program {
@@ -470,25 +471,29 @@ fn reachable(
 }
 
 /// The value of an `if` condition when it is known before the program runs:
-/// `@hasLink(name)`, `true`, `false`, and `!`, `&&`, `||` of those.
-fn static_bool(e: &TExpr, linked: &[String]) -> Option<bool> {
+/// `@hasLink(name)`, `@targetOs() is .V`, `true`, `false`, and `!`, `&&`,
+/// `||` of those.
+fn static_bool(e: &TExpr, linked: &[String], os: usize) -> Option<bool> {
     match &e.kind {
         TExprKind::HasLink(name) => Some(linked.contains(name)),
+        TExprKind::IsVariant { expr, index } if matches!(expr.kind, TExprKind::TargetOs) => {
+            Some(*index == os)
+        }
         TExprKind::Bool(b) => Some(*b),
         TExprKind::Unary {
             op: UnOp::Not,
             expr,
-        } => static_bool(expr, linked).map(|b| !b),
+        } => static_bool(expr, linked, os).map(|b| !b),
         TExprKind::Binary {
             op: BinOp::And,
             lhs,
             rhs,
-        } => Some(static_bool(lhs, linked)? && static_bool(rhs, linked)?),
+        } => Some(static_bool(lhs, linked, os)? && static_bool(rhs, linked, os)?),
         TExprKind::Binary {
             op: BinOp::Or,
             lhs,
             rhs,
-        } => Some(static_bool(lhs, linked)? || static_bool(rhs, linked)?),
+        } => Some(static_bool(lhs, linked, os)? || static_bool(rhs, linked, os)?),
         _ => None,
     }
 }
@@ -515,6 +520,8 @@ struct Lower<'a> {
     globals: HashMap<String, LocalId>,
     /// The libraries the program is linked with (`@hasLink`).
     linked: &'a [String],
+    /// The tag of the target's OS (`@targetOs`).
+    os: usize,
     /// The functions and vtables the code refers to.
     refs: Vec<Ref>,
     /// Where the value of each enclosing `catch` or `orelse` block goes
@@ -571,6 +578,7 @@ fn has_call(e: &TExpr) -> bool {
         | TExprKind::ErrorValue(_)
         | TExprKind::FnRef { .. }
         | TExprKind::HasLink(_)
+        | TExprKind::TargetOs
         | TExprKind::SizeOf(_)
         | TExprKind::Zeroed => false,
         TExprKind::Binary { lhs, rhs, .. }
@@ -614,6 +622,7 @@ impl<'a> Lower<'a> {
         structs: &'a HashMap<&'a str, &'a sema::StructDef>,
         enums: &'a HashMap<&'a str, &'a sema::EnumDef>,
         linked: &'a [String],
+        os: usize,
     ) -> (Func, Vec<Ref>) {
         // Sema variables keep their ids as OIR locals; temporaries follow.
         let locals = f
@@ -634,6 +643,7 @@ impl<'a> Lower<'a> {
             ret: f.ret.clone(),
             globals: HashMap::new(),
             linked,
+            os,
             refs: Vec::new(),
             values: Vec::new(),
         };
@@ -846,7 +856,7 @@ impl<'a> Lower<'a> {
                 capture: None,
                 then,
                 els,
-            } if let Some(b) = static_bool(cond, self.linked) => {
+            } if let Some(b) = static_bool(cond, self.linked, self.os) => {
                 let mut t = Vec::new();
                 self.block(if b { then } else { els }, false, &mut t);
                 self.span = s.span;
@@ -1938,6 +1948,15 @@ impl<'a> Lower<'a> {
                 })
             }
             TExprKind::HasLink(name) => Rvalue::Use(Operand::Bool(self.linked.contains(name))),
+            TExprKind::IsVariant { expr, index } if matches!(expr.kind, TExprKind::TargetOs) => {
+                Rvalue::Use(Operand::Bool(*index == self.os))
+            }
+            TExprKind::TargetOs => Rvalue::Variant {
+                enum_name: sema::TARGET_OS_ENUM.to_string(),
+                tag: self.os,
+                variant: sema::TARGET_OS[self.os].to_string(),
+                fields: vec![],
+            },
             TExprKind::CallValue { callee, args } => {
                 let callee = self.operand(callee, out);
                 let args = args.iter().map(|a| self.operand(a, out)).collect();

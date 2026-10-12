@@ -445,6 +445,12 @@ pub struct StructDef {
     pub is_union: bool,
 }
 
+/// The enum of `@targetOs()`; the `@` keeps it from clashing with a
+/// program's names (it cannot be written as a type).
+pub const TARGET_OS_ENUM: &str = "@TargetOs";
+/// The variants of `TARGET_OS_ENUM`, by tag.
+pub const TARGET_OS: [&str; 4] = ["macos", "linux", "wasi", "freestanding"];
+
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
@@ -615,6 +621,10 @@ pub enum TExprKind {
     /// `@hasLink("name")`: is the library linked? Known when the program
     /// is built, not when it is checked.
     HasLink(String),
+    /// `@targetOs()`: the OS of `--target`, a value of the enum
+    /// `TARGET_OS_ENUM`. Known when the program is built, not when it is
+    /// checked.
+    TargetOs,
     /// `@sizeOf(T)`: the size of `T` in bytes, as C lays it out.
     SizeOf(Type),
     /// `@zeroed(T)`: the all-zero value of the type `ty`.
@@ -2099,6 +2109,9 @@ impl<'a> Checker<'a> {
                 | ast::Item::Link(_)
                 | ast::Item::CImport(_) => {}
             }
+        }
+        if let Some(e) = self.enums.get(TARGET_OS_ENUM) {
+            enums.push(e.clone());
         }
         let globals = self
             .global_decls
@@ -3682,7 +3695,7 @@ impl<'a> Checker<'a> {
             .chain(self.enums.keys())
             .chain(self.sets.keys())
             .chain(self.alias_decls.keys());
-        let named = named.filter(|n| !n.contains(['(', ' ']));
+        let named = named.filter(|n| !n.contains(['(', ' ', '@']));
         TYPE_NAMES
             .iter()
             .copied()
@@ -5664,6 +5677,28 @@ impl<'a> Checker<'a> {
                     );
                 }
                 (TExprKind::HasLink(lib), Type::Bool)
+            }
+            ExprKind::Builtin { name, args } if name == "targetOs" => {
+                if !args.is_empty() {
+                    return err(
+                        E0022,
+                        span,
+                        "`@targetOs` takes no arguments: `if @targetOs() is .linux { .. }`",
+                    );
+                }
+                self.enums
+                    .entry(TARGET_OS_ENUM.to_string())
+                    .or_insert_with(|| EnumDef {
+                        name: TARGET_OS_ENUM.to_string(),
+                        variants: TARGET_OS
+                            .iter()
+                            .map(|v| VariantDef {
+                                name: v.to_string(),
+                                fields: vec![],
+                            })
+                            .collect(),
+                    });
+                (TExprKind::TargetOs, Type::Enum(TARGET_OS_ENUM.to_string()))
             }
             ExprKind::Builtin { name, args }
                 if matches!(

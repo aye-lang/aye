@@ -140,7 +140,7 @@ pub fn main() {
 - Builtins start with `@`: `@print`, `@println`, `@expect`, `@expectEqual`,
   `@testAllocator`, `@sizeOf`, `@zeroed`, `@ptrCast`, `@downcast`,
   `@embedFile`, `@link`,
-  `@linkOptional`, `@cimport`, `@hasLink`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
+  `@linkOptional`, `@cimport`, `@hasLink`, `@targetOs`, `@atomicLoad`, `@atomicStore`, `@atomicAdd`,
   `@atomicSub`, `@atomicCas`, `@hash`, `@setSafety`, `@splat`,
   `@reduceAdd`, `@reduceMin`, `@reduceMax`, `@all`, `@any`, `@select`,
   `@tagName(x)` (the tag name of an error, enum or tagged-union value, a `[]u8`).
@@ -1580,6 +1580,37 @@ failure is `{"kind":"assertion"|"panic"|"leak","line":L,"col":C,"message":M}`,
 - `@sizeOf(T)`, `@zeroed(T)`, `@ptrCast(T, p)`, `@link("lib")`,
   `@linkOptional("lib")`, `@hasLink("lib")`, `@cimport("header.h")`:
   section 4.
+- `@targetOs()`: the OS of `--target` (default: this machine), a value of
+  a built-in enum with the variants `.macos`, `.linux`, `.wasi`
+  (`wasm32-wasip1`) and `.freestanding` (`wasm32-freestanding`). The enum
+  has no name to write; test it with `is` (`@targetOs() is .linux`), take
+  `@tagName` of it or `match` on it. Like `@hasLink` (section 4), in
+  `if @targetOs() is .macos { ... } else { ... }` (also with `!`, `&&`,
+  `||`, and `@hasLink`) both branches are checked, but only the one for
+  the target is built, and a function that only the other branch calls is
+  left out of the program; so the per-OS C constants and calls of a
+  library can live in Aye:
+
+```aye
+extern fn sysconf(name: i32) i64
+
+fn cpus() i64 {
+    // _SC_NPROCESSORS_ONLN
+    if @targetOs() is .macos {
+        return sysconf(58)
+    }
+    return sysconf(84)
+}
+
+pub fn main() {
+    if @targetOs() is .wasi || @targetOs() is .freestanding {
+        @println(1)
+    } else {
+        @println(cpus() > 0)
+    }
+}
+```
+
 - `@hash(x)`: section 11 (`where T: Hash`).
 - `@downcast(*S, d)`: section 10.
 - `@embedFile("path")`: the bytes of the file at `path` as a `[]u8`

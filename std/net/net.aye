@@ -6,9 +6,8 @@
 //
 // The C constants that differ between macOS and Linux (the layout of
 // `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
-// or SO_NOSIGPIPE) are chosen at run time from `uname`, as
-// `browser/ui/socket.aye` in aye-lang/anyknown does. Writes never raise SIGPIPE: a closed peer
-// is an error.
+// or SO_NOSIGPIPE) are chosen by `@targetOs()` when the program is built.
+// Writes never raise SIGPIPE: a closed peer is an error.
 
 import std.text
 
@@ -55,7 +54,7 @@ pub struct Listener {
     /// spread them), or for a listener from `listen`, it is ListenFailed or
     /// AddressInUse.
     pub fn again(self: Self) ListenError!Listener {
-        if isDarwin() {
+        if @targetOs() is .macos {
             return ListenError.ListenFailed
         }
         var addr = @zeroed([128]u8)
@@ -157,7 +156,7 @@ pub struct Conn {
             return 0
         }
         var flags: i32 = 0
-        if !isDarwin() {
+        if !(@targetOs() is .macos) {
             flags = MSG_NOSIGNAL_LINUX
         }
         while true {
@@ -231,11 +230,11 @@ fn listenOn(host: []u8, port: u16, shared: bool) ListenError!Listener {
         if fd >= 0 {
             var one = [4]u8{1, 0, 0, 0}
             var reuse: i32 = 2
-            if isDarwin() {
+            if @targetOs() is .macos {
                 reuse = 4
             }
             _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
-            if shared && !isDarwin() {
+            if shared && !(@targetOs() is .macos) {
                 _ = setsockopt(fd, solSocket(), SO_REUSEPORT_LINUX, one[..].ptr, 4)
             }
             if bind(fd, sockAddr(ai), ai.addrlen) == 0 && cListen(fd, 128) == 0 {
@@ -402,7 +401,7 @@ let RESOLVE_INVALID: i32 = -1
 // ai_addr of `ai`.
 fn sockAddr(ai: *mut AddrInfo) [*]u8 {
     var p = ai.first
-    if isDarwin() {
+    if @targetOs() is .macos {
         p = ai.second
     }
     if p |a| {
@@ -466,25 +465,9 @@ let F_SETFL: i32 = 4
 let MSG_NOSIGNAL_LINUX: i32 = 0x4000
 let SO_NOSIGPIPE_DARWIN: i32 = 0x1022
 
-// 1: macOS, 0: another system (Linux), -1: not asked yet. Threads may ask
-// at once; they store the same answer.
-var darwin: i32 = -1
-
-fn isDarwin() bool {
-    var d = @atomicLoad(&darwin)
-    if d < 0 {
-        // `struct utsname` starts with the system's name on both; it is
-        // 390 bytes on Linux and 1280 on macOS.
-        var buf = @zeroed([2048]u8)
-        d = (uname(buf[..].ptr) == 0 && text.startsWith(buf[..], "Darwin")) as i32
-        @atomicStore(&mut darwin, d)
-    }
-    return d == 1
-}
-
 // macOS's value, else Linux's.
 fn pick(mac: i32, linux: i32) i32 {
-    if isDarwin() {
+    if @targetOs() is .macos {
         return mac
     }
     return linux
@@ -517,7 +500,7 @@ fn readError(e: i32) ReadError {
 
 // No SIGPIPE for writes to `fd` on macOS (Linux: `write`'s flag).
 fn noSigpipe(fd: i32) {
-    if isDarwin() {
+    if @targetOs() is .macos {
         var one = [4]u8{1, 0, 0, 0}
         _ = setsockopt(fd, solSocket(), SO_NOSIGPIPE_DARWIN, one[..].ptr, 4)
     }
@@ -536,7 +519,6 @@ extern fn poll(fds: [*]PollFd, n: u64, timeout: i32) i32
 extern fn send(fd: i32, buf: [*]u8, n: usize, flags: i32) isize
 extern fn getaddrinfo(node: [*]u8, service: [*]u8, hints: *AddrInfo, res: *mut ?*mut AddrInfo) i32
 extern fn freeaddrinfo(res: ?*mut AddrInfo)
-extern fn uname(buf: [*]u8) i32
 extern fn read(fd: i32, buf: [*]u8, n: usize) isize
 extern fn close(fd: i32) i32
 extern fn fcntl(fd: i32, cmd: i32, ...) i32

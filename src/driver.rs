@@ -53,6 +53,18 @@ pub enum Os {
     Freestanding,
 }
 
+impl Os {
+    /// The tag of the OS in `sema::TARGET_OS` (`@targetOs()`).
+    pub fn tag(self) -> usize {
+        match self {
+            Os::Macos => 0,
+            Os::Linux => 1,
+            Os::Wasip1 => 2,
+            Os::Freestanding => 3,
+        }
+    }
+}
+
 /// What a program is built for (`--target`).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Target {
@@ -525,7 +537,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     typed.fns.retain(|f| !sema::is_test(&f.name));
     typed.tests.clear();
     let links = linked(&typed, target, &no_link)?;
-    let ir = oir::lower(&typed, &links);
+    let ir = oir::lower(&typed, &links, target.os.tag());
     let (c, parts) = cgen::emit(
         &ir,
         &file_names(&checked.files),
@@ -637,7 +649,7 @@ pub fn compile_tests_to_c(
     );
     let typed = checked.result?;
     let links = linked(&typed, target, &no_link)?;
-    let ir = oir::lower(&typed, &links);
+    let ir = oir::lower(&typed, &links, target.os.tag());
     let files = file_names(&checked.files);
     let mut dirs: Vec<PathBuf> = Vec::new();
     for f in checked.files.iter().filter(|f| !f.std && !f.dep) {
