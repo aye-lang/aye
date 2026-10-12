@@ -32,6 +32,8 @@ use crate::module::SourceFile;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::mpsc;
+use std::time::Duration;
 
 mod nav;
 
@@ -633,11 +635,18 @@ struct Doc {
 struct Server<W: Write> {
     out: W,
     docs: HashMap<String, Doc>,
+    /// Documents changed since their last check, waiting for `DEBOUNCE`
+    /// of quiet.
+    pending: Vec<String>,
     shutdown: bool,
 }
 
+/// Quiet time after a `didChange` before the document is checked again.
+const DEBOUNCE: Duration = Duration::from_millis(150);
+
 impl<W: Write> Server<W> {
     fn publish(&mut self, uri: &str) -> std::io::Result<()> {
+        self.pending.retain(|u| u != uri);
         let Some(doc) = self.docs.get(uri) else {
             return Ok(());
         };
@@ -652,6 +661,14 @@ impl<W: Write> Server<W> {
             json_str(uri)
         );
         send(&mut self.out, &body)
+    }
+
+    /// Check every document changed since its last check.
+    fn flush(&mut self) -> std::io::Result<()> {
+        for uri in std::mem::take(&mut self.pending) {
+            self.publish(&uri)?;
+        }
+        Ok(())
     }
 
     /// Handle one message. `Some(code)` is the exit status after `exit`.
@@ -677,6 +694,7 @@ impl<W: Write> Server<W> {
                 send(&mut self.out, &response(id, result))?;
             }
             ("shutdown", Some(id)) => {
+                self.flush()?;
                 self.shutdown = true;
                 send(&mut self.out, &response(id, "null"))?;
             }
@@ -775,7 +793,9 @@ impl<W: Write> Server<W> {
                         version,
                     };
                     self.docs.insert(uri.clone(), doc);
-                    self.publish(&uri)?;
+                    if !self.pending.contains(&uri) {
+                        self.pending.push(uri);
+                    }
                 }
             }
             ("textDocument/didSave", None) => {
@@ -790,6 +810,7 @@ impl<W: Write> Server<W> {
             ("textDocument/didClose", None) => {
                 if let Some(uri) = uri {
                     self.docs.remove(&uri);
+                    self.pending.retain(|u| *u != uri);
                     self.notify_diagnostics(&uri, "[]", "")?;
                 }
             }
@@ -799,18 +820,48 @@ impl<W: Write> Server<W> {
     }
 }
 
+/// What the main loop does next: wait for a message with this timeout
+/// (`None`: forever), given the documents waiting for a check.
+fn wait_for(pending: bool) -> Option<Duration> {
+    pending.then_some(DEBOUNCE)
+}
+
 /// Serve the client on `input` and `output` until `exit` or the end of the
 /// input. Returns the exit status: 0 after `shutdown` and `exit`, else 1.
-pub fn run(mut input: impl BufRead, output: impl Write) -> i32 {
+/// A reader thread feeds the messages, so that the loop can check the
+/// changed documents once `DEBOUNCE` passes without another message.
+pub fn run(mut input: impl BufRead + Send + 'static, output: impl Write) -> i32 {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(Some(body)) = read_message(&mut input) {
+            if tx.send(body).is_err() {
+                return;
+            }
+        }
+    });
     let mut server = Server {
         out: output,
         docs: HashMap::new(),
+        pending: Vec::new(),
         shutdown: false,
     };
     loop {
-        let body = match read_message(&mut input) {
-            Ok(Some(b)) => b,
-            _ => return 1,
+        let body = match wait_for(!server.pending.is_empty()) {
+            None => rx.recv().map_err(|_| ()),
+            Some(t) => match rx.recv_timeout(t) {
+                Ok(b) => Ok(b),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if server.flush().is_err() {
+                        return 1;
+                    }
+                    continue;
+                }
+                Err(_) => Err(()),
+            },
+        };
+        let Ok(body) = body else {
+            let _ = server.flush();
+            return 1;
         };
         let step = match Json::parse(&body) {
             Ok(msg) => server.handle(&msg),
@@ -845,6 +896,12 @@ mod tests {
     fn file_uri_is_decoded() {
         assert_eq!(uri_path("file:///a/b%20c/d.aye"), "/a/b c/d.aye");
         assert_eq!(uri_path("untitled:Untitled-1"), "untitled:Untitled-1");
+    }
+
+    #[test]
+    fn debounce_waits_only_with_pending_changes() {
+        assert_eq!(wait_for(false), None);
+        assert_eq!(wait_for(true), Some(DEBOUNCE));
     }
 
     #[test]
