@@ -76,4 +76,28 @@ test "HTTP date format and parse" {
     let back = try time.parseHttp(s)
     @expectEqual(1791616800000, back.toUnixMs())
     @expect(httpFails("Fri, 10 Oct 2026 07:20:00 GMT"))
+
+    // The obsolete forms parse to the same instants (RFC 7231 examples).
+    let a = try time.parseHttp("Sun, 06 Nov 1994 08:49:37 GMT")
+    let b = try time.parseHttp("Sunday, 06-Nov-94 08:49:37 GMT")
+    let c = try time.parseHttp("Sun Nov  6 08:49:37 1994")
+    @expectEqual(784111777000, a.toUnixMs())
+    @expectEqual(a.toUnixMs(), b.toUnixMs())
+    @expectEqual(a.toUnixMs(), c.toUnixMs())
+    // Two-digit years: 49 is 2049, 50 is 1950.
+    let y49 = try time.parseHttp("Friday, 01-Jan-49 00:00:00 GMT")
+    @expectEqual(2049, y49.year)
+    let y50 = try time.parseHttp("Sunday, 01-Jan-50 00:00:00 GMT")
+    @expectEqual(1950, y50.year)
+    let two = try time.parseHttp("Wed Nov 16 08:49:37 1994")
+    @expectEqual(16, two.day)
+    // Round trip through the IMF-fixdate.
+    let rt = try c.formatHttp(alloc)
+    defer alloc.free(rt)
+    @expectEqual("Sun, 06 Nov 1994 08:49:37 GMT", rt)
+    @expect(httpFails("Monday, 06-Nov-94 08:49:37 GMT"))
+    @expect(httpFails("Sun, 06-Nov-94 08:49:37 GMT"))
+    @expect(httpFails("Sun Nov  6 08:49:37 1994 "))
+    @expect(httpFails("Mon Nov  6 08:49:37 1994"))
+    @expect(httpFails("Sunday, 06-Nov-94 08:49:37 UTC"))
 }
