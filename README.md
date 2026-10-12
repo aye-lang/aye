@@ -469,7 +469,12 @@ sends the errors as diagnostics on open, change and save: the error code
 line of the message. It also formats the whole document (`aye fmt`), and
 on hover and go to definition it shows the declaration of the name under
 the cursor with its `///` comment and finds where it is declared, in the
-file, in its imported modules and in std.
+file, in its imported modules and in std. For `c.name` of a `@cimport` it
+shows the generated declaration (`extern fn`, `extern struct`, constant), and
+definition points into the generated `.aye` file in the cache
+(`~/.cache/aye/cimport`), made if the header was not imported before (this
+needs libclang the first time). URL dependencies are found only through
+sema (member accesses), not by name.
 
 To use it, give any editor with an LSP client the command `aye lsp`
 (no arguments) for the language `aye` and the file extension `.aye`.

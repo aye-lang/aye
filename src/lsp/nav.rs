@@ -32,9 +32,19 @@
 //! compiler; its files are located under this compiler's source tree
 //! (`CARGO_MANIFEST_DIR`) if that is still on disk; if not, hover works and
 //! definition gives `null`. URL dependencies are searched only through
-//! sema; `@cimport` modules have no Aye source and are not searched.
+//! sema.
+//!
+//! `c.name` where `c` is a top-level `let c = @cimport("header.h", flags)`
+//! of the document is looked up in the module that `@cimport` generates
+//! (sema flattens modules before it records members, so it has nothing on
+//! these): hover shows the generated declaration (an `extern fn`,
+//! `extern struct`, constant), and definition points into the generated
+//! `.aye` file in the cache (`$AYE_CACHE_DIR/cimport`), which is made if the
+//! header was not imported before. Without libclang and a cached import
+//! there is nothing to show.
 
 use super::utf16_col;
+use crate::cimport;
 use crate::diag::json_str;
 use crate::doc::{self, body, code_lines, doc_above, flat, matching, split};
 use crate::driver;
@@ -70,6 +80,14 @@ struct Src {
     decls: Vec<Decl>,
     /// The `import`s as (the name they bind, the path).
     imports: Vec<(String, Vec<String>)>,
+    /// The `let c = @cimport("header", flags...)` declarations: (name,
+    /// header, flags).
+    cimports: Vec<(String, String, Vec<String>)>,
+    /// The libraries of `@link` and `@linkOptional`.
+    links: Vec<String>,
+    /// The directory of the file (relative headers start there); empty if
+    /// unknown.
+    dir: PathBuf,
 }
 
 /// What a name stands for.
@@ -78,6 +96,9 @@ enum Found {
     /// A module: its path, and the URI of its first file.
     Module(String, Option<String>),
     Item(Rc<Src>, Decl),
+    /// The module that `@cimport` made of a header: the generated source,
+    /// which is a file in the cache.
+    Generated(Rc<Src>),
 }
 
 /// The hover for the position, or `null`: a Markdown value with the
@@ -90,6 +111,7 @@ pub fn hover(uri: &str, path: &str, text: &str, line: u32, character: u32) -> St
         Found::Item(_, d) if d.doc.is_empty() => format!("```aye\n{}\n```", d.sig),
         Found::Item(_, d) => format!("```aye\n{}\n```\n\n{}", d.sig, d.doc),
         Found::Module(m, _) => format!("```aye\nimport {m}\n```"),
+        Found::Generated(_) => "```aye\n@cimport\n```".to_string(),
     };
     format!(
         r#"{{"contents":{{"kind":"markdown","value":{}}},"range":{range}}}"#,
@@ -104,6 +126,7 @@ pub fn definition(uri: &str, path: &str, text: &str, line: u32, character: u32) 
         return "null".to_string();
     };
     let (target, range) = match &found {
+        Found::Generated(src) => (src.uri.as_ref(), Some(range_json(0, 0, 0))),
         Found::Module(_, uri) => (
             uri.as_ref(),
             Some(
@@ -171,17 +194,19 @@ fn lookup(uri: &str, path: &str, text: &str, line: u32, character: u32) -> Optio
         utf16_col(line_text, start),
         utf16_col(line_text, start + items[t].text.chars().count()),
     );
-    let me = Rc::new(index(&scan, text, Some(uri.to_string())));
+    let base = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_path_buf();
+    let mut me = index(&scan, text, Some(uri.to_string()));
+    me.dir = base.clone();
+    let me = Rc::new(me);
     if t >= 1
         && items[t - 1].tok == Tok::Dot
         && let Some(found) = typed(path, text, &items[t], &me)
     {
         return Some((range, found));
     }
-    let base = Path::new(path)
-        .parent()
-        .unwrap_or(Path::new(""))
-        .to_path_buf();
     let r = Resolver {
         deps: path_deps(&base),
         base,
@@ -369,13 +394,38 @@ impl Resolver {
                 }
                 self.module(&format!("{m}.{seg}"))
             }
-            Found::Item(src, d) => d
-                .members
+            Found::Item(src, d) => match src.cimports.iter().find(|c| c.0 == d.name) {
+                Some(c) => generated(src, c).and_then(|g| self.member(&Found::Generated(g), seg)),
+                None => d
+                    .members
+                    .iter()
+                    .find(|x| x.name == seg)
+                    .map(|x| Found::Item(src.clone(), x.clone())),
+            },
+            Found::Generated(g) => g
+                .decls
                 .iter()
-                .find(|x| x.name == seg)
-                .map(|x| Found::Item(src.clone(), x.clone())),
+                .find(|d| d.name == seg && d.is_pub)
+                .map(|d| Found::Item(g.clone(), d.clone())),
         }
     }
+}
+
+/// The module that `@cimport` makes of `c` in `src`: its generated source,
+/// from the cache (made if the header was not imported before; none if
+/// libclang is missing or the header is wrong).
+fn generated(src: &Src, c: &(String, String, Vec<String>)) -> Option<Rc<Src>> {
+    if src.dir.as_os_str().is_empty() {
+        return None;
+    }
+    let req = cimport::Request {
+        header: c.1.clone(),
+        flags: c.2.clone(),
+        dir: src.dir.clone(),
+        links: src.links.clone(),
+    };
+    let imp = cimport::import(&req).ok()?;
+    source(&imp.source, Some(file_uri(&imp.path)))
 }
 
 /// The source `text` and its declarations; none if it does not lex.
@@ -407,8 +457,32 @@ fn index(scan: &Scan, text: &str, uri: Option<String>) -> Src {
     let has_code = code_lines(scan);
     let mut decls = Vec::new();
     let mut imports = Vec::new();
+    let mut cimports = Vec::new();
+    let mut links = Vec::new();
     for (s, e) in split(items, 0, items.len()) {
         let d = &items[s..e];
+        let strs = || {
+            d.iter()
+                .filter_map(|it| match &it.tok {
+                    Tok::Str(b) => Some(String::from_utf8_lossy(b).into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        if let Tok::Builtin(b) = &d[0].tok
+            && (b == "link" || b == "linkOptional")
+        {
+            links.extend(strs());
+        } else if d.len() > 3
+            && d[0].tok == Tok::Kw(Kw::Let)
+            && d[3].tok == Tok::Builtin("cimport".into())
+            && let Tok::Ident(name) = &d[1].tok
+        {
+            let mut a = strs().into_iter();
+            if let Some(h) = a.next() {
+                cimports.push((name.clone(), h, a.collect()));
+            }
+        }
         if d[0].tok == Tok::Kw(Kw::Import) {
             let path: Vec<String> = d[1..]
                 .iter()
@@ -427,6 +501,9 @@ fn index(scan: &Scan, text: &str, uri: Option<String>) -> Src {
         text: text.to_string(),
         decls,
         imports,
+        cimports,
+        links,
+        dir: PathBuf::new(),
     }
 }
 
