@@ -31,8 +31,9 @@
 //! next to the document) if `a` is its key, or std. std is embedded in the
 //! compiler; its files are located under this compiler's source tree
 //! (`CARGO_MANIFEST_DIR`) if that is still on disk; if not, hover works and
-//! definition gives `null`. URL dependencies are searched only through
-//! sema.
+//! definition gives `null`. A URL dependency is its fetched copy in the
+//! cache (`<cache>/sha256/<hex>/`, the hash from `aye.lock`), only if it is
+//! locked and already there: the server never downloads.
 //!
 //! `c.name` where `c` is a top-level `let c = @cimport("header.h", flags)`
 //! of the document is looked up in the module that `@cimport` generates
@@ -48,6 +49,7 @@ use crate::cimport;
 use crate::diag::json_str;
 use crate::doc::{self, body, code_lines, doc_above, flat, matching, split};
 use crate::driver;
+use crate::fetch;
 use crate::fmt::{self, Br, Item, Role, Scan};
 use crate::lexer::{Kw, Tok};
 use crate::manifest::{self, ManifestFile, Source};
@@ -208,7 +210,7 @@ fn lookup(uri: &str, path: &str, text: &str, line: u32, character: u32) -> Optio
         return Some((range, found));
     }
     let r = Resolver {
-        deps: path_deps(&base),
+        deps: deps(&base),
         base,
     };
     // `a.b.` before the name.
@@ -295,14 +297,18 @@ fn typed(path: &str, text: &str, it: &Item, me: &Rc<Src>) -> Option<Found> {
     Some(Found::Item(src, decl))
 }
 
-/// The path dependencies of the `aye.toml` in `dir`: (key, directory).
-fn path_deps(dir: &Path) -> Vec<(String, PathBuf)> {
+/// The dependencies of the `aye.toml` in `dir`: (key, directory). A URL
+/// dependency is there only if `aye.lock` pins its URL and the tree of that
+/// hash is in the cache.
+fn deps(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(Some(mf)) = ManifestFile::read(dir) else {
         return Vec::new();
     };
     let Ok(m) = manifest::parse(&mf.file.text) else {
         return Vec::new();
     };
+    let mut locked: Option<Vec<manifest::LockEntry>> = None;
+    let cache = fetch::cache_root();
     m.deps
         .into_iter()
         .filter_map(|d| match d.source {
@@ -310,7 +316,19 @@ fn path_deps(dir: &Path) -> Vec<(String, PathBuf)> {
                 let dir = mf.dir.join(p);
                 Some((d.key, std::fs::canonicalize(&dir).unwrap_or(dir)))
             }
-            Source::Url(_) => None,
+            Source::Url(url) => {
+                let lock = locked.get_or_insert_with(|| {
+                    manifest::read_lock(&mf.dir)
+                        .ok()
+                        .flatten()
+                        .and_then(|f| manifest::parse_lock(&f.text).ok())
+                        .map(|es| es.into_iter().map(|(e, _)| e).collect())
+                        .unwrap_or_default()
+                });
+                let entry = lock.iter().find(|e| e.key == d.key && e.url == url)?;
+                let dir = fetch::cached_dir(cache.as_ref()?, &entry.sha256);
+                dir.is_dir().then_some((d.key, dir))
+            }
         })
         .collect()
 }
@@ -319,7 +337,7 @@ fn path_deps(dir: &Path) -> Vec<(String, PathBuf)> {
 struct Resolver {
     /// The directory that `import` paths start from.
     base: PathBuf,
-    /// The path dependencies: (key, directory).
+    /// The dependencies: (key, directory).
     deps: Vec<(String, PathBuf)>,
 }
 

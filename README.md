@@ -478,8 +478,9 @@ file, in its imported modules and in std. For `c.name` of a `@cimport` it
 shows the generated declaration (`extern fn`, `extern struct`, constant), and
 definition points into the generated `.aye` file in the cache
 (`~/.cache/aye/cimport`), made if the header was not imported before (this
-needs libclang the first time). URL dependencies are found only through
-sema (member accesses), not by name.
+needs libclang the first time). A URL dependency is found in its fetched
+copy in the cache, if `aye.lock` pins it and it is there (`aye build` or
+`aye check` fetches it; the server never downloads).
 
 To use it, give any editor with an LSP client the command `aye lsp`
 (no arguments) for the language `aye` and the file extension `.aye`.
