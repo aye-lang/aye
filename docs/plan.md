@@ -8,64 +8,38 @@ is the language's biggest integration test, run as the downstream check. The fra
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-10 night)
+## Resume here (handoff 2026-10-11 night)
 
-A new session starts in `~/Documents/ayelang/aye`; the full suite was
-green on main at fefa325 (28 cards merged on 2026-10-10; O6, O8 and O9
-hold). The state is this file's lane table, [`plans/done.md`](plans/done.md)
-and `git worktree list`. All agent branches are merged. Notes:
+A new session starts in `~/Documents/ayelang/aye`. The full suite was
+green on main at dcd1f6b-era commits (see the last "Plan:" commit on
+main for the exact hash); every criterion O6–O13 holds (2026-10-11,
+`plans/done.md`). The state is this file's lane table,
+[`plans/done.md`](plans/done.md), the lane files and `git worktree list`.
+Branches to merge first, then the rest in order:
 
-- **O2.7** merged (freestanding golden 3 → 11). The two Linux bugs its
-  Linux run exposed (O5.2c, O3.1b) are fixed on main (2026-10-11); the
-  first cloud session verifies the Linux full suite (rule 7).
-- **O1.17b** (first-exec stall): merged as a docs-only decisions entry.
-  Cause: macOS `syspolicyd`/Gatekeeper/XProtect assess every new
-  executable on first exec (~0.37 s, includes a network notarization
-  check); `codesign`/`xattr` do not help. Untried: `-Wl,-no_adhoc_codesign`,
-  `-mmacosx-version-min`, and the **Developer Tools exemption for the
-  terminal app** (System Settings → Privacy & Security → Developer Tools;
-  only the user can do it). Fallback lever: run a case's three mode
-  binaries in parallel so the stalls overlap (they use no CPU).
+1. **O3.6d** (std.http streaming initial frame; dev-server heartbeat
+   threads removed) was merged as 29b1770
+   (b0843f8, main merged, all targeted tests green, downstream not run).
+   Merge it, run the full suite and `scripts/downstream.sh`, fill the
+   `O36D` placeholder in `plans/done.md` and `plans/aye.md`, push.
+2. **O2.6** (stack overflow on wasm) is WIP on
+   `worktree-agent-a8d4905904c125e6d` (388a235): the prelude check and
+   `--stack-first` are in; the V8 `RangeError` mapping in the two runners
+   and the marker changes are left. The card in `plans/aye.md` has the
+   exact list. Continue on that branch.
+3. **O2.5a** (std casts audit, cimport `int64_t` mapping) was started
+   with no commit; the card in `plans/aye.md` records the partial audit
+   and the cimport bug to fix. Start fresh from main.
+4. **F5.9** (framework hello req/s) ran as a cloud routine on
+   2026-10-11 16:05 UTC; look for its PR (`cloud/f59-bench`) and merge it.
+   **F5.8** is merged (PR #4). F5 then has only the Chrome checks left
+   (dev reload, island) and F1.2b (stray `.aye` in a route dir).
+5. Then the backlog in `plans/aye.md` (O2.5e, O2.8a, O6.x leftovers,
+   O3.6c, O7.5) and `plans/framework.md`.
 
-Then, in order:
-
-1. **Linux development (X1): done 2026-10-08.** The full suite passes
-   on Ubuntu 24.04 arm64 and amd64 via `scripts/linux.sh` (Apple
-   `container`). Steps touching the C prelude, `@cimport` or platform
-   calls run it before merging.
-2. **Language cards**, merged one by one on `main`: F1.1, O1.12,
-   O1.13, O1.5a, O1.5, O1.6, O3.1, O3.1a, O3.2, O3.3, O3.3a, O3.4a and
-   O3.4, O3.5, O1.12a, O1.13a, O1.5b, O3.8 and O1.11a are done
-   (2026-10-10, `plans/done.md`). **O6 holds** (checked on bf4c5d8).
-   Phase O2.x (targets, O8): O2.1 done (`docs/decisions.md` "Targets
-   (O2)"); P2.9, P2.9a, O2.2, O2.3 and O2.4 done. **O8 holds** (checked on
-   ec88c60: all four wasm/macOS targets run, E0118 names the target;
-   the Linux triples compile on macOS too via `aye build -c`, O2.8). O5.1 done (`aye test <dir>`). O1.17 done (browser 287 s to 171 s). O2.5 and O5.2 done. **O9 holds** (checked on 91fb479: `aye test
-   <dir>`, time per test, CPU time limit, `-j`, `--filter`/`--module`/
-   `--json`, leak-is-failure, all golden-covered). O1.17a, O2.7 and O1.17b (cause only) done. O5.2c and O3.1b done (2026-10-11). O1.15a, O1.16, O5.1a and O2.5b (PR #1, Linux suite green in 290 s)
-   done; O1.17b closed (no software fix, see decisions). O2.7a, O1.16a, O2.5c (cloud PR #2) and O2.8 done; **O8 fully holds**
-   (the Linux triples compile on macOS with `-c`). O1.15b and O4.1 (dependency design) done. O2.5d and O4.2 (path deps) done. O2.7b done (freestanding golden 91). O4.3 done (URL deps, lock, cache); **O7 holds** (checked on 46d1630:
-   `tests/deps.rs` 3/3, path and URL deps, lock, mismatch, offline). O1.19
-   done (`return` in a match arm). Cloud re-run on x86_64 Linux (0a3cca7): all green except the
-   aarch64 `-c` case (O2.8b, in flight); `net_ipv6` skipped as designed.
-   O4.3a/b and O1.18a done. **O11 holds** (conformance prints
-   passed/total per area and target, 100% native and wasm32-wasip1 with
-   the impossible entries listed, since O2.3). Phase O6.x (LSP, O10):
-   O6.1, O6.2 and O6.3 done: **O10 holds** (checked on 7babce6: lsp
-   diagnostics, format, hover, definition, `aye doc --html`, each tested). **O13 holds** (O7.2, 2026-10-11: rest_json
-   3/3, one check each). **O12 holds** (O7.1, PR #3: Aye fast 39.1k req/s vs Node 10.7k;
-   Go 99k, see O3.9). All of O6–O13 now hold. O2.8b done; a cloud routine re-runs the
-   Linux suite on the no-IPv6 VM. Eval 2026-10-11: 15/15, mean turns 15.1 → 11.1, tokens −35%, 0 refused
-   calls (`docs/aye-eval.md`). Next: O1.18–O1.20 (eval costs), P-flaky,
-   then the O6.x LSP phase.
-   Cloud lane: the Agent tool's `remote` option ran locally (no VM);
-   the working route is a one-time **routine** (`RemoteTrigger`, repo
-   `aye-lang/aye`, x86_64 Linux VM, delivers a PR). First run: O2.5c
-   (x86_64 full suite), routine trig_01YR3PfLjyAVdisYBD1SPQzm, 2026-10-11.
-3. **AI-writability eval** (north star): `scripts/eval.py`
-   (`docs/aye-eval.md`); the 2026-10-10 rerun (3 runs per task) passed
-   15/15 and showed the spec core is still too large for Claude Code's
-   inline output (O1.13a). Rerun after O1.13a.
+Notes: `web dev` needs `aye` on `PATH` (or `AYE=`); dev CLI relative
+app paths work since F3.1a. The macOS first-exec stall (O1.17b) is
+unchanged; heavy verification goes to cloud Linux (rule 7).
 
 ## Lanes
 
@@ -91,8 +65,10 @@ Steps not tied to one lane, in this order. Their cards are in
    passes on Ubuntu 24.04 arm64 and amd64 through `scripts/linux.sh`.
 2. **X2 rename Ore → Aye.** Done 2026-10-08 (3042d53, `scripts/rename-aye.py`).
 3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
-4. **X4 go public** (repo github.com/aye-lang/aye, with the
-   browser): only with the user's OK.
+4. **X4 go public** (aye-lang/aye only): decided 2026-10-12, go
+   public now. The pre-public check passed (`plans/project.md` X4); left
+   is the visibility switch (a repo admin setting). aye-lang/anyknown
+   stays private: it is the user's product.
 
 ## Execution rules
 
@@ -130,14 +106,16 @@ its area. Nothing else of the plan.
    unless the card names it; main updates them once per batch
    ([workflow.md, "Parallel streams do not edit a shared status document"](practices/workflow.md#parallel-streams-do-not-edit-a-shared-status-document)).
    New compiler gaps go in `browser/COMPILER_GAPS.md` of aye-lang/anyknown.
-7. **Linux lane (cloud).** A card with `where: cloud` runs in a Claude
-   cloud session (a Linux VM from GitHub `aye-lang/aye`), never through
-   the local Apple `container`: Linux-only bugs, the WASI toolchain on
-   Linux (O2.5b), cross-link sysroots (O2.8), and the Linux full suite
-   after each batch (`scripts/setup-ubuntu.sh`, then `cargo test
-   --release`). It delivers a branch or PR; main reviews, merges, and
-   runs the macOS suite once. `main` is pushed after every green suite
-   so the cloud sees the current state (user, 2026-10-11: push freely).
+7. **Cloud is the integrator (user, 2026-10-12).** The work runs in
+   Claude cloud sessions (Ubuntu 24.04 VM, a fresh clone of
+   `aye-lang/aye`), merges included: the session that finishes a step
+   reviews it, merges it into `main` and pushes `main` (rule 11). Only
+   one integrator: the local Mac session does not merge while the cloud
+   owns `main`; it pulls first. macOS is checked by the CI macOS job
+   (`.github/workflows/ci.yml`, free once the repo is public); until it
+   runs, a change to macOS-only paths (`cfg!(target_os = "macos")`:
+   cimport's sysroot and libclang lookup, the Mach-O and
+   `x86_64-macos` targets) waits for a green macOS run before merging.
 8. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
    step (cause written down, fix proposed); the fix is the next card.
 8. **Browser symptoms:** before dispatching a browser fix, confirm the
@@ -151,12 +129,15 @@ its area. Nothing else of the plan.
     `docs/practices/` in the same commit as its fix.
 11. **Cloud steps** (Ubuntu 24.04 VM, a fresh clone): if a tool is
     missing, run `sudo sh scripts/setup-ubuntu.sh` first. Work on a
-    branch `<step id>-<slug>` from `main`, push it and open a pull
-    request to `main` whose body is the report (rule 10). Never push to
-    `main` or merge; main merges one PR at a time and runs the macOS
-    checklist. The VM is Linux, so `scripts/linux.sh` is not used
-    there; `scripts/downstream.sh` runs as is (it needs a GitHub login for
-    the private anyknown repo).
+    branch `<step id>-<slug>` from `main`. To merge: the commit audit
+    below, `main` merged into the branch, the Linux full suite (`cargo
+    test --release`; `scripts/downstream.sh` when `src/` or `std/`
+    changed), then a fast-forward push of `main`; the report (rule 10)
+    is the merge commit's or the last commit's message. A PR is only
+    for a change someone should see before it lands. The VM is Linux,
+    so `scripts/linux.sh` is not used there; `scripts/downstream.sh`
+    needs read access to the private anyknown repo (the session's
+    GitHub access), and never writes to it.
 
 Merging (main's side):
 
@@ -214,12 +195,23 @@ goes to the backlog or to `done.md` as dropped.
 
 ## Standing decisions
 
+- **Who decides (user, 2026-10-12):** the AI develops this language on
+  its own and makes every decision in this repo (aye-lang/aye), going
+  public included. Do not ask the user; decide, write the decision down
+  (here, in a lane plan or in `decisions.md`) and go on. The user only
+  stops work when their token budget runs out. Merges and pushes to
+  `main` are the cloud session's too (rule 7).
+- **anyknown is the user's (user, 2026-10-12):** aye-lang/anyknown is
+  the user's product and outside the AI's decisions: it stays private,
+  its license, visibility and product choices are the user's. From
+  here it is read only (`scripts/downstream.sh`); a change it needs is
+  proposed to the user, not pushed.
 - **Lanes and priority (2026-10-08):** language first; browser frozen
   until O6–O9, then split into its own repo (git filter-repo) and
   resumed; framework does F1 only. Lane decisions are in each lane plan.
 - **Name and repo:** Ore → Aye (`aye`, `.aye`, "ayelang"); repo
-  github.com/aye-lang/aye, private until it goes public together
-  with the browser (X4); license MIT OR Apache-2.0 (`LICENSE-MIT`,
+  github.com/aye-lang/aye, going public on its own (X4, decided
+  2026-10-12; aye-lang/anyknown stays private); license MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`); site ayelang.dev (Cloudflare Workers, `site/`).
 - **Platforms:** macOS (local) and Ubuntu 24.04 (Apple `container`
   locally via `scripts/linux.sh`, after X1; the user's cloud).

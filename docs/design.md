@@ -19,7 +19,7 @@ Aye（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統
 
 - 不做 GC，也不做 Rust 式 borrow checker。
 - 不做 exception、繼承、文字巨集。
-- 不取代 JavaScript：網頁內容的腳本語言仍是 JS，Aye 只寫引擎本身。
+- 不取代 JavaScript：網頁的腳本語言仍是 JS，anyknown 引擎照規格實作它。Aye 寫引擎、伺服器與工具；Aye 也能編譯成 wasm32 在網頁裡執行（框架的 island），那是 WebAssembly 的一般用法，網頁作者不必改寫 JS，Aye 也不提供 JS 以外的網頁 API。
 - 1.0 之前不保證語法與 ABI 穩定。
 
 ## 設計原則與定位

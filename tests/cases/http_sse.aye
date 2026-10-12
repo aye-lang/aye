@@ -3,7 +3,9 @@
 // the connection open. The main thread broadcasts a frame, another thread a
 // second one, && a second connection is answered meanwhile. A client that
 // leaves is dropped from `streams()`. `stop` closes the stream: the client
-// reads EOF.
+// reads EOF. A stream response with a body (O3.6d) writes it right after the
+// head, as the first frame; one that does not fit the socket at once goes out
+// through the pending buffer, and a broadcast comes after it.
 
 import std.heap.General
 import std.http
@@ -16,6 +18,7 @@ import std.mem.Allocator
 import std.net
 import std.net.Conn
 import std.text
+import std.text.Builder
 import std.thread
 import std.time
 
@@ -25,6 +28,28 @@ struct App {
 
 fn handle(app: *mut App, req: *Request, res: *mut Response, alloc: Allocator) {
     if text.eql(req.path(), "/events") {
+        res.body = "event: hello\ndata: first\n\n"
+        res.stream()
+        return
+    }
+    if text.eql(req.path(), "/big") {
+        // 2 MiB of comment lines, then one event: more than the socket takes.
+        var line = @zeroed([1024]u8)
+        for i in 0..1024 {
+            line[i] = 'x'
+        }
+        line[0] = ':'
+        line[1023] = '\n'
+        var b = Builder.init(alloc)
+        for i in 0..2048 {
+            b.append(line[0..1024]) catch |e| {
+                return
+            }
+        }
+        b.append("data: end\n\n") catch |e| {
+            return
+        }
+        res.body = b.bytes()
         res.stream()
         return
     }
@@ -77,6 +102,37 @@ fn readUntil(c: Conn, tail: []u8) !void {
     @println("<end>")
 }
 
+// Reads from `c` until `want` bytes came; prints whether that many did.
+fn readCount(c: Conn, want: usize) !void {
+    var buf = @zeroed([65536]u8)
+    var got: usize = 0
+    while got < want {
+        var room = want - got
+        if room > 65536 {
+            room = 65536
+        }
+        let n = try c.readTimeout(buf[0..room], 5000)
+        if n == 0 {
+            break
+        }
+        got += n
+    }
+    @print("big: ")
+    @println(got == want)
+}
+
+// True when `want` streams are open within 5 s (the worker adds a stream
+// after it writes the last of its first chunk, so the client can be first).
+fn waitOpen(s: *mut Server, want: usize) bool {
+    for i in 0..100 {
+        if s.streams() == want {
+            return true
+        }
+        time.sleep(50)
+    }
+    return false
+}
+
 // True when `broadcast` has dropped every stream but `want` within 5 s.
 fn waitStreams(s: *mut Server, want: usize) bool {
     var gpa = General.init()
@@ -103,7 +159,7 @@ pub fn main() !void {
     // The head: no Content-Length, nothing after it until an event.
     let c = try net.connect("127.0.0.1", s.port())
     try c.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
-    try readUntil(c, "keep-alive\r\n\r\n")
+    try readUntil(c, "first\n\n")
     @print("streams: ")
     @println(s.streams())
 
@@ -122,10 +178,25 @@ pub fn main() !void {
     w.join()
     try readUntil(c, "lines\n\n")
 
+    // A body that the socket takes in parts: all of it, then the broadcast.
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n"
+    let g = try net.connect("127.0.0.1", s.port())
+    try g.write("GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+    try readCount(g, head.len + 2048 * 1024 + 11)
+    @print("big open: ")
+    @println(waitOpen(&mut s, 2))
+    n = try s.broadcast(gpa.allocator(), "after", "ok")
+    @print("after wrote to ")
+    @println(n)
+    try readUntil(g, "ok\n\n")
+    g.close()
+    @print("big dropped: ")
+    @println(waitStreams(&mut s, 1))
+
     // A second stream that leaves is dropped.
     let d = try net.connect("127.0.0.1", s.port())
     try d.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
-    try readUntil(d, "keep-alive\r\n\r\n")
+    try readUntil(d, "first\n\n")
     @print("streams: ")
     @println(s.streams())
     d.close()

@@ -16,6 +16,23 @@ Measured 2026-10-11 on a cloud VM (Claude cloud session), commit `7babce6`.
 | Node 22 `http` | 10709 | 10709 / 10020 / 10859 | 5.976 | 5384 | 0.186 | 0 |
 | Go 1.24 `net/http` | 99284 | 99284 / 88924 / 101272 | 0.645 | 8450 | 0.118 | 0 |
 
+## 2026-10-11 framework hello and pages /about (F5.9, Ubuntu 24.04)
+
+Same flags as above (`ab -k -c 64 -n 200000` three times after 1000 warm-up requests, median; `-c 1` is `-n 50000` once), one server at a time, `ab` on the same VM.
+Machine: Intel Xeon @ 2.10GHz, `nproc` 4, 15 GiB, Linux 6.18.44 (`fc` kernel: a Firecracker microVM, cloud session), Ubuntu 24.04. Load average before the run 1.07, after 1.83 (nothing else running).
+This is a different VM shape from the table at the top (2.10 GHz, not 2.80 GHz) and `std.http` has had the O3.9 worker pool since then, so compare rows within this table only.
+Node v22, Go 1.24, ApacheBench 2.3. The `framework` hello is `framework/examples/hello` built with `aye build --mode fast` (a hand-written route table, no `app/` tree, so `framework/build` does not apply); the pages `/about` server is `framework/examples/pages` built with `aye run framework/build -- ... --mode fast`.
+
+| server | -c 64 req/s (median of 3) | runs | mean latency (ms) | -c 1 req/s | -c 1 mean (ms) | failed |
+|---|---|---|---|---|---|---|
+| Aye `std.http` hello, `--mode fast` | 128045 | 128045 / 132103 / 126346 | 0.500 | 26326 | 0.038 | 0 |
+| Node 22 `http` | 20003 | 19139 / 20003 / 20851 | 3.200 | 8885 | 0.113 | 0 |
+| Go 1.24 `net/http` | 126280 | 123991 / 126280 / 131988 | 0.507 | 14229 | 0.070 | 0 |
+| Aye framework hello `/`, `--mode fast` | 127707 | 121547 / 128781 / 127707 | 0.501 | 25848 | 0.039 | 0 |
+| Aye framework pages `/about`, `--mode fast` | 121143 | 121143 / 117114 / 129186 | 0.528 | 25534 | 0.039 | 0 |
+
+The framework hello page does 127.7k req/s at `-c 64`, 6.4x Node 22 and within 0.3% of the bare `std.http` hello (the three runs of each overlap), so the framework's routing and response code add no measurable cost at this size. The pages example's `/about` (a template page in a 11-route app, 269,680-byte executable) is 5% lower (121.1k, inside the run-to-run spread of about ±5%). Run with `scripts/bench/run.sh`, which now builds all five servers (ports 8081 to 8085, `ab` output in `target/ab_*.txt`).
+
 ## Build times of `browser/`
 
 The browser is in aye-lang/anyknown since P8.3; the commands below run in the checkout `scripts/downstream.sh` makes at `target/downstream/anyknown`.
