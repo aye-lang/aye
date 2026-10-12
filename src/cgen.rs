@@ -1477,17 +1477,27 @@ AYE_RT __attribute__((noreturn, cold)) void aye_sync_oom(void) {
     aye_rt_dprintf(2, "panic: out of memory for a mutex or condition variable\n");
     aye_rt_abort();
 }
-AYE_RT uint8_t *aye_mutex_new(void) {
-    void *m = aye_rt_malloc(128);
-    if (!m) aye_sync_oom();
-    aye_rt_pthread_mutex_init(m, 0);
+/* A `Mutex` holds `*slot`, null until the first lock makes it: two threads
+   may both make one, and the loser of the compare-and-swap frees its own.
+   So `Mutex.init()` is a constant (O1.21). */
+static uint8_t *aye_mutex_get(uint8_t **slot) {
+    uint8_t *m = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+    if (m) return m;
+    uint8_t *n = aye_rt_malloc(128);
+    if (!n) aye_sync_oom();
+    aye_rt_pthread_mutex_init(n, 0);
+    if (__atomic_compare_exchange_n(slot, &m, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return n;
+    aye_rt_pthread_mutex_destroy(n);
+    aye_rt_free(n);
     return m;
 }
-AYE_RT void aye_mutex_lock(uint8_t *m) { aye_rt_pthread_mutex_lock(m); }
-AYE_RT void aye_mutex_unlock(uint8_t *m) { aye_rt_pthread_mutex_unlock(m); }
-AYE_RT void aye_mutex_free(uint8_t *m) {
-    aye_rt_pthread_mutex_destroy(m);
-    aye_rt_free(m);
+AYE_RT void aye_mutex_lock(uint8_t **m) { aye_rt_pthread_mutex_lock(aye_mutex_get(m)); }
+AYE_RT void aye_mutex_unlock(uint8_t **m) { aye_rt_pthread_mutex_unlock(aye_mutex_get(m)); }
+AYE_RT void aye_mutex_free(uint8_t **m) {
+    uint8_t *h = *m;
+    if (!h) return;
+    aye_rt_pthread_mutex_destroy(h);
+    aye_rt_free(h);
 }
 AYE_RT uint8_t *aye_cond_new(void) {
     void *c = aye_rt_malloc(128);
@@ -1495,7 +1505,7 @@ AYE_RT uint8_t *aye_cond_new(void) {
     aye_rt_pthread_cond_init(c, 0);
     return c;
 }
-AYE_RT void aye_cond_wait(uint8_t *c, uint8_t *m) { aye_rt_pthread_cond_wait(c, m); }
+AYE_RT void aye_cond_wait(uint8_t *c, uint8_t **m) { aye_rt_pthread_cond_wait(c, aye_mutex_get(m)); }
 AYE_RT void aye_cond_signal(uint8_t *c) { aye_rt_pthread_cond_signal(c); }
 AYE_RT void aye_cond_broadcast(uint8_t *c) { aye_rt_pthread_cond_broadcast(c); }
 AYE_RT void aye_cond_free(uint8_t *c) {

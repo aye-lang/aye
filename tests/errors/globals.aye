@@ -1,5 +1,5 @@
 fn seven() i64 {
-    return 7
+    return @sizeOf(i64) as i64 - 1
 }
 
 let A: i64 = seven()

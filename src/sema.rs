@@ -2186,7 +2186,7 @@ impl<'a> Checker<'a> {
                 .and_then(|ty| self.expect(&decl.init, &ty)),
             None => self.value(&decl.init, None),
         }
-        .and_then(|t| Ok((self.fold(&t)?, t.ty)));
+        .and_then(|t| Ok((self.fold_init(&t)?, t.ty)));
         (
             self.vars,
             self.scopes,
@@ -2214,6 +2214,49 @@ impl<'a> Checker<'a> {
         };
         self.globals.insert(name.to_string(), info);
         Ok((ty, decl.mutable))
+    }
+
+    /// The value of a global's initializer `e`: a constant, or a call
+    /// without arguments to a function whose body is one `return` of a
+    /// constant (`Mutex.init()`, O1.21).
+    fn fold_init(&mut self, e: &TExpr) -> Result<ConstVal> {
+        if let TExprKind::Call {
+            name,
+            is_extern: false,
+            args,
+        } = &e.kind
+            && args.is_empty()
+            && let Some(ctx) = self.fn_decls.get(name)
+            && let Some(body) = &ctx.decl.body
+            && let [
+                ast::Stmt {
+                    kind: StmtKind::Return(Some(_)),
+                    ..
+                },
+            ] = body.stmts.as_slice()
+        {
+            let name = name.clone();
+            self.ensure_body(&name, e.span)?;
+            if let Some(Some(def)) = self.bodies.get(&name)
+                && let [
+                    TStmt {
+                        kind: TStmtKind::Return(Some(r)),
+                        ..
+                    },
+                ] = def.body.as_slice()
+            {
+                let r = r.clone();
+                return self.fold(&r).map_err(|x| match x.code {
+                    E0089 => Error::new(
+                        E0089,
+                        e.span,
+                        format!("`{name}` does not return a constant: a global's initializer can call only a function whose body is one `return` of a constant"),
+                    ),
+                    _ => x,
+                });
+            }
+        }
+        self.fold(e)
     }
 
     /// The value of `e`, a global's initializer, computed now.
@@ -2393,7 +2436,7 @@ impl<'a> Checker<'a> {
                 return err(
                     E0089,
                     span,
-                    "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, and array, struct and enum literals (no calls)",
+                    "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, array, struct and enum literals, and a call without arguments to a function that returns one (no other calls)",
                 );
             }
         })
