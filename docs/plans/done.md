@@ -146,6 +146,7 @@ longer needed. Newest phases last; within a phase, by id. The lane plans
 | O4.3a/b | 2026-10-11 | the `aye.lock:` notice goes to stderr (stdout equals program output, `tests/deps.rs` checks both); `aye.lock` is read and validated whenever it exists, a malformed one is E0119 even without URL deps (`tests/deps/errors/bad_lock`); decisions and spec §12 updated | 033996d |
 | O1.15b | 2026-10-11 | std module suggestion (E0081 and `aye doc`): `closest_std_module` picks the smallest edit distance (ties: shorter, then alphabetical), no first-two-letters rule; distance ≤ 2 only when 2·distance ≤ shorter length, distance 3 only for names ≥ 7 letters, so `std.txt`/`std.jsno` suggest `text`/`json` while `std.io`/`std.string` get none; goldens `std_unknown_{omitted,swapped,far}` | c61c137 |
 | O3.1b | 2026-10-11 | `aye_std_ecvt` uses `snprintf("%.*e")` on Linux too (glibc `ecvt` rounds the 17th digit, `DBL_MAX` did not round-trip through `std.json`) | 48a4043 |
+| O3.6c | 2026-10-12 | graceful stop: `std.os.onStop()` makes SIGINT/SIGTERM set a flag (C handler in the runtime prelude, flag only), `std.os.stopRequested()` reads it; `Server.run`'s workers check it after each `poll` and stop as `stop` does; on stop a worker writes the rest of the answered responses (at most `idleMs`) before closing; golden `http_stop` (SIGTERM with an 8 MiB response in flight); `http_sse` waits for the stream link (raced 6/10 on main); hello bench median ~126k req/s (128k before) | a50bc56 |
 
 ## Browser lane
 

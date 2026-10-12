@@ -1354,6 +1354,20 @@ AYE_RT void aye_stack_guard_main(void) {
     aye_stack_guard(size);
 #endif
 }
+/* std.os.onStop: SIGINT and SIGTERM set a flag that `std.os.stopRequested`
+   reads; the handler does nothing else. Without SA_RESTART, so a thread
+   blocked in `poll` or `accept` when the signal comes returns EINTR. */
+AYE_DATA volatile int aye_stop_flag;
+static __attribute__((unused)) void aye_on_stop(int sig) { (void)sig; aye_stop_flag = 1; }
+AYE_RT void aye_std_on_stop(void) {
+#ifndef __wasm32__
+    aye_sigaction_t sa = {0};
+    sa.action = (void *)aye_on_stop;
+    aye_rt_sigaction(2, &sa, 0);
+    aye_rt_sigaction(15, &sa, 0);
+#endif
+}
+AYE_RT bool aye_std_stop_requested(void) { return __atomic_load_n(&aye_stop_flag, __ATOMIC_RELAXED) != 0; }
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds
