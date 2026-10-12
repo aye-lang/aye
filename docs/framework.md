@@ -273,8 +273,9 @@ read timeouts through `poll`). Options:
   writes, keep-alive with an idle timeout, a cap on connections (503
   past it). Each connection thread has its own `General` (allocators are
   not thread-safe) and makes an `Arena` per request. Shared app state is
-  a module-level `var` behind a `std.sync.Mutex` (globals exist, spec
-  §4; there are no closures to carry it).
+  a module-level `var` behind a `std.sync.Mutex`, itself a global
+  (`var lock = Mutex.init()`, O1.21; globals exist, spec §4; there are
+  no closures to carry it).
 - **B. N threads, each with a kqueue/epoll loop and a `std.coro`
   coroutine per connection.** A read that would block yields to the
   loop. Handlers stay blocking-style code, because the coroutines are
@@ -321,8 +322,8 @@ macOS and Linux). **Recommendation: restart and poll**, as above.
 **Out of the framework's scope.** C libraries are first-class (design
 principle 4): SQLite through `@cimport("sqlite3.h")`, as O3.7 shows in
 `tests/ffi/`, with no framework API around it. The example app keeps its
-posts in a file it reads at start-up and its form submissions in memory
-behind a `Mutex`. A database layer is a later decision, if ever.
+posts in a file it reads on the first request that needs them and its
+form submissions in memory behind a global `Mutex`. A database layer is a later decision, if ever.
 
 ## 7. Testing
 

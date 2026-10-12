@@ -2,11 +2,8 @@
 // `--posts` in the program's arguments (default `posts.json` in the working
 // directory) on the first request that needs them, and the comments, kept in
 // memory. Every request thread shares them, so they sit in module-level
-// storage behind a lock. A global cannot start as `Mutex.init()` (an
-// initializer has no calls), so the first caller makes the lock; `gate` is 0
-// before that, 1 while it is made and 2 after. A file that is missing or
-// malformed is `Error.Internal` and nothing is kept, so the next request
-// reads it again.
+// storage behind a global lock. A file that is missing or malformed is
+// `Error.Internal` and nothing is kept, so the next request reads it again.
 //
 // The file is an array of objects with the strings `slug`, `title` and
 // `body_html` (markup written by the site's authors, shown unescaped).
@@ -19,7 +16,6 @@ import std.list.List
 import std.mem
 import std.mem.Allocator
 import std.os
-import std.sync.Atomic
 import std.sync.Mutex
 import std.text
 import web.Error
@@ -38,25 +34,11 @@ pub struct Comment {
     text: []u8
 }
 
-var gate = Atomic(u32) { value: 0 }
-var lock: ?Mutex = null
+var lock = Mutex.init()
 var heap: ?General = null
 var arena: ?Arena = null
 var loaded: ?[]Post = null
 var notes: ?List(Comment) = null
-
-fn mutex() Mutex {
-    if gate.load() != 2 {
-        if gate.compareSwap(0, 1) {
-            lock = Mutex.init()
-            gate.store(2)
-        } else {
-            while gate.load() != 2 {
-            }
-        }
-    }
-    return lock.?
-}
 
 /// The path after `--posts` in the program's arguments, or `posts.json`.
 fn postsPath(alloc: Allocator) Error![]u8 {
@@ -122,9 +104,8 @@ fn load() Error!void {
 
 /// Every post, in the order of the file. The slice is never freed or changed.
 pub fn all() Error![]Post {
-    let m = mutex()
-    m.lock()
-    defer m.unlock()
+    lock.lock()
+    defer lock.unlock()
     try load()
     return loaded.?
 }
@@ -149,9 +130,8 @@ pub fn addComment(slug: []u8, name: []u8, body: []u8) Error!void {
     if bySlug(slug) == null {
         return Error.NotFound
     }
-    let m = mutex()
-    m.lock()
-    defer m.unlock()
+    lock.lock()
+    defer lock.unlock()
     let alloc = arena.?.allocator()
     let c = Comment { slug: try copy(alloc, slug), name: try copy(alloc, name), text: try copy(alloc, body) }
     notes.?.append(c) catch |e| {
@@ -176,9 +156,8 @@ pub fn checkComment(name: []u8, body: []u8) Error!void {
 
 /// The comments on the post `slug`, oldest first, in a list made in `alloc`.
 pub fn comments(alloc: Allocator, slug: []u8) Error![]Comment {
-    let m = mutex()
-    m.lock()
-    defer m.unlock()
+    lock.lock()
+    defer lock.unlock()
     var out = List(Comment).init(alloc)
     if notes != null {
         for c in notes.?.items() {
