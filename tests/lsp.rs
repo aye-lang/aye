@@ -21,9 +21,17 @@ impl Client {
 
     /// With `cache` as `$AYE_CACHE_DIR`.
     fn start_with(cache: Option<&std::path::Path>) -> Client {
+        match cache {
+            Some(dir) => Client::start_env(&[("AYE_CACHE_DIR", dir)]),
+            None => Client::start_env(&[]),
+        }
+    }
+
+    /// With the environment variables `vars`.
+    fn start_env(vars: &[(&str, &std::path::Path)]) -> Client {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_aye"));
-        if let Some(dir) = cache {
-            cmd.env("AYE_CACHE_DIR", dir);
+        for (k, v) in vars {
+            cmd.env(k, v);
         }
         let mut child = cmd
             .arg("lsp")
@@ -727,6 +735,94 @@ fn definition_in_a_path_dependency() {
     );
 
     c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn hover_and_definition_in_a_url_dependency() {
+    // tests/deps/url: the app and `tinyjson` as a `file://` tarball, fetched
+    // and locked by `aye check` into its own cache.
+    let url = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/deps/url");
+    let (dir, _) = scratch("urldep", "");
+    let app = dir.join("app");
+    let cache = dir.join("cache");
+    std::fs::create_dir_all(&app).unwrap();
+    let tarball = dir.join("tinyjson-1.2.tar.gz");
+    let status = Command::new("tar")
+        .env("COPYFILE_DISABLE", "1")
+        .arg("-czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&url)
+        .arg("tinyjson-1.2")
+        .status()
+        .unwrap();
+    assert!(status.success(), "tar -czf failed");
+    let src = std::fs::read_to_string(url.join("app/main.aye")).unwrap();
+    std::fs::write(app.join("main.aye"), &src).unwrap();
+    let toml = std::fs::read_to_string(url.join("app/aye.toml.in")).unwrap();
+    let toml = toml.replace("@TARBALL@", tarball.to_str().unwrap());
+    std::fs::write(app.join("aye.toml"), toml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_aye"))
+        .current_dir(&app)
+        .env("AYE_CACHE", &cache)
+        .env_remove("XDG_CACHE_HOME")
+        .arg("check")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    // The server must not download: without the tarball, only the cache has
+    // the dependency.
+    std::fs::remove_file(&tarball).unwrap();
+    let hex = std::fs::read_dir(cache.join("sha256"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+
+    let uri = format!("file://{}", app.join("main.aye").display());
+    let mut c = Client::start_env(&[("AYE_CACHE", &cache)]);
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, &src));
+    c.diagnostics();
+
+    // `tinyjson.count`: the top module of the dependency.
+    let h = at(&mut c, 2, "hover", &uri, 6, 23);
+    assert_eq!(hover_text(&h), "```aye\npub fn count(text: []u8) i64\n```");
+    let d = at(&mut c, 3, "definition", &uri, 6, 23);
+    assert_eq!(
+        d.get("uri").and_then(Json::as_str),
+        Some(format!("file://{}", hex.join("tinyjson.aye").display()).as_str())
+    );
+    assert_eq!(
+        d.get("range").unwrap().write(),
+        r#"{"start":{"line":4,"character":7},"end":{"line":4,"character":12}}"#
+    );
+    // `parse.digits`: a submodule, imported as `tinyjson.parse`.
+    let d = at(&mut c, 4, "definition", &uri, 7, 20);
+    assert_eq!(
+        d.get("uri").and_then(Json::as_str),
+        Some(format!("file://{}", hex.join("parse/parse.aye").display()).as_str())
+    );
+    // The module name itself.
+    let d = at(&mut c, 5, "definition", &uri, 2, 9);
+    assert_eq!(
+        d.get("uri").and_then(Json::as_str),
+        Some(format!("file://{}", hex.join("tinyjson.aye").display()).as_str())
+    );
+    c.finish();
+
+    // Not in the cache (and not downloadable): nothing.
+    std::fs::remove_dir_all(&cache).unwrap();
+    let mut c = Client::start_env(&[("AYE_CACHE", &cache)]);
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, &src));
+    c.diagnostics();
+    let d = at(&mut c, 2, "definition", &uri, 6, 23);
+    assert_eq!(d.write(), "null");
+    c.finish();
+    assert!(!cache.join("sha256").exists());
     let _ = std::fs::remove_dir_all(dir);
 }
 
