@@ -128,6 +128,11 @@ pub fn main() !void {
     show(alloc, "big chunks", "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n4\r\nabcd\r\n0\r\n\r\n", small)
     show(alloc, "ok at the limit", "POST / HTTP/1.1\r\nContent-Length: 8\r\n\r\n12345678", small)
     show(alloc, "short body", "POST / HTTP/1.1\r\nContent-Length: 8\r\n\r\n1234", small)
+    // No overflow with the largest limit (any `usize` width).
+    let huge = Limits { maxRequestLine: 8192, maxHeaders: 16384, maxBody: ~(0 as usize) }
+    show(alloc, "huge length", "POST / HTTP/1.1\r\nContent-Length: 999999999999999999999999\r\n\r\n", huge)
+    show(alloc, "huge chunk", "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffffffffffff\r\n", huge)
+    show(alloc, "chunk of usize max", "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n", huge)
 
     // The response writer.
     var out = Builder.init(alloc)

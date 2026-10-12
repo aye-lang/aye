@@ -65,6 +65,15 @@ pub fn scan(alloc: Allocator, root: []u8, rel: []u8, out: *mut List(Page)) ReadD
             }
         }
     }
+    for e in found.items {
+        if e.kind == fs.Kind.File && text.endsWith(e.name, ".aye") && !isRouteFile(e.name) {
+            let stray = path.join(alloc, here, e.name) catch |err| {
+                die("out of memory", "", "")
+                return
+            }
+            die("stray .aye file in a route directory (route files are page.aye, route.aye, layout.aye and not-found.aye; put helpers in a module outside app/, e.g. lib/, and import it)", stray, "")
+        }
+    }
     let layout = hasRole(alloc, here, found.items, "layout.aye", "layout")
     let notFound = hasRole(alloc, here, found.items, "not-found.aye", "notFound")
     if notFound && rel.len > 0 {
@@ -216,6 +225,11 @@ pub fn die(what: []u8, a: []u8, b: []u8) {
     }
     fs.stderr().write("\n") catch |e| {}
     os.exit(1)
+}
+
+// Is `name` one of the four file names a route directory may hold?
+fn isRouteFile(name: []u8) bool {
+    return text.eql(name, "page.aye") || text.eql(name, "route.aye") || text.eql(name, "layout.aye") || text.eql(name, "not-found.aye")
 }
 
 // The last segment of `dir` ("" for ""), the part after `parentOf`.

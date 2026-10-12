@@ -492,7 +492,7 @@ O2) and the tests under `tests/modules/embed*`:
   `otool -L` show).
 
 ## Backlog
-- F1.2b: `web gen` should warn or fail on a stray `.aye` file in a route directory (a `helper.aye` beside `page.aye` is in no module since O1.26). Verify: a gen fixture with a stray file gives a clear message. (O1.26 leftover)
+- F1.2b (done 2026-10-12): `web gen` should warn or fail on a stray `.aye` file in a route directory (a `helper.aye` beside `page.aye` is in no module since O1.26). Verify: a gen fixture with a stray file gives a clear message. (O1.26 leftover)
 - F3.1a (done 2026-10-11, 6a47ded): `web dev <app>` with a relative app path failed with "cannot start the server": `start` in `framework/dev/main.aye` passes `<app>/.web/server` to `std.process.spawn`, which resolves a bare path through PATH. Make the server path absolute (`std.path` join with the cwd, or prefix `./`) before spawning; same for the error-page fallback. Verify: `aye run framework/dev -- framework/examples/pages --port 0` prints `listening on` (found 2026-10-11 by hand; the tests pass absolute paths).
 
 Paused; cards get written if the framework lane is resumed. Source in

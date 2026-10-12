@@ -664,6 +664,8 @@ impl Gen<'_> {
                 match name.as_str() {
                     "size_t" | "uintptr_t" => return Ok("usize".to_string()),
                     "ssize_t" | "ptrdiff_t" | "intptr_t" => return Ok("isize".to_string()),
+                    "int64_t" => return Ok("i64".to_string()),
+                    "uint64_t" => return Ok("u64".to_string()),
                     _ => {}
                 }
                 let decl = self.decl_of(t);
@@ -859,6 +861,8 @@ impl Gen<'_> {
         let ty = match name.as_str() {
             "size_t" | "uintptr_t" => Ok("usize".to_string()),
             "ssize_t" | "ptrdiff_t" | "intptr_t" => Ok("isize".to_string()),
+            "int64_t" => Ok("i64".to_string()),
+            "uint64_t" => Ok("u64".to_string()),
             _ => self.ty(under, true).or_else(|_| self.ty(under, false)),
         };
         match ty {

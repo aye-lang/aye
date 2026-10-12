@@ -2691,6 +2691,40 @@ pub fn main() {
 }
 "#,
 }
+E0124 = 124 {
+    "`match` value where every arm leaves",
+    "A `match` used as a value (such as `let v = match ...`) needs an arm that gives a value. When every arm is a block that ends in `return`, `break` or `continue`, the `match` never produces one. Write the `match` as a statement, or give an arm a value.",
+    r#"fn pick(n: i64) i64 {
+    let v = match n {
+        0 => {
+            return 1
+        }
+        _ => {
+            return 2
+        }
+    }
+    return v
+}
+
+pub fn main() {
+    @println(pick(0))
+}
+"#,
+    r#"fn pick(n: i64) i64 {
+    let v = match n {
+        0 => {
+            return 1
+        }
+        _ => 2,
+    }
+    return v
+}
+
+pub fn main() {
+    @println(pick(0))
+}
+"#,
+}
 }
 
 #[cfg(test)]

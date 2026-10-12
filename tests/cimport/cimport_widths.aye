@@ -1,0 +1,20 @@
+// `size_t`, `long`, `int64_t` and `uint64_t` fields of C structs, with
+// `@sizeOf` each: `size_t` and `long` have the target's width (32 bits on
+// wasm32, `X.wasm32-wasip1.out`), `int64_t` and `uint64_t` are 64 bits
+// everywhere (glibc's `int64_t` is `long`, so without the name mapping it
+// would be 32 bits on wasm32 from a Linux host).
+
+let c = @cimport("cimport_widths.h")
+
+pub fn main() {
+    @println(@sizeOf(c.w_size))
+    @println(@sizeOf(c.w_long))
+    @println(@sizeOf(c.w_int64))
+    @println(@sizeOf(c.w_uint64))
+    @println(@sizeOf(c.widths))
+    var w: c.widths = @zeroed(c.widths)
+    w.s64 = -9223372036854775807 - 1
+    w.big = 18446744073709551615
+    @println(w.s64)
+    @println(w.big)
+}

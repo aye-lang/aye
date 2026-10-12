@@ -25,6 +25,9 @@ big chunks: error BodyTooLarge -> 413
 ok at the limit: POST / HTTP/1.1 consumed 46 of 46
   headers 1, body 8 bytes: [12345678]
 short body: error Incomplete -> 400
+huge length: error BodyTooLarge -> 413
+huge chunk: error BodyTooLarge -> 413
+chunk of usize max: error Incomplete -> 400
 HTTP/1.1 404 Not Found
 Content-Type: text/plain
 Cache-Control: no-store

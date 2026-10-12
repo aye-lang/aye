@@ -95,6 +95,9 @@ imported), so `not-found.aye` is fine. Each role has its own function
 name (`page`, `layout`, `notFound`, `get`, `post`, ...), so the files of
 one directory never clash (#26). A directory with both `page.aye` and a
 `get` in `route.aye` is an error from the generator, as in Next.js.
+Any other `.aye` file in a route directory (a `helper.aye` beside
+`page.aye`) belongs to no module and is an error from the generator; shared
+code goes in a module outside `app/` (`lib/`), imported by the route files.
 
 Options:
 

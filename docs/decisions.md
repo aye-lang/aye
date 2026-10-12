@@ -498,6 +498,7 @@ O2.3 (what the wasip1 branch does, and where it differs from the diagnosis):
 - **`ecvt` stops at 15 digits in wasi-libc**, so `std.json` numbers like 0.30000000000000004 lost their tail: `std.json` calls `aye_std_ecvt`, which is `snprintf("%.*e")` on wasm.
 - **Stack:** wasm-ld's stack is 64 KiB with no guard (`many_instances` overflowed it): wasm links use `-z stack-size=8388608`. A deeper recursion is a `memory access out of bounds` trap, not `panic: stack overflow` (`stack_overflow` is `X.native`).
 - **Runner:** `scripts/wasi-run.mjs` (embedded in the driver), `node --no-warnings --single-threaded-gc`: Node 22.22.2 segfaults (exit 139) in a GC thread once a wasm heap passes 32 MiB (plain C reproduces it; Node 25 does not). Preopens: `.`, the cwd by its path, `/tmp`. An `abort` trap exits 134 after the panic message; any other trap prints the error and exits 1.
+- **O2.6 (stack overflow on wasm):** in debug and safe mode a wasm stack overflow panics with the native text (`panic: stack overflow ...`, exit 134), by two routes. (1) `AYE_STACK_CHECK()` in every function prologue (wasm only; `src/cgen.rs`) compares `__stack_pointer` with the stack, linked first (`-Wl,--stack-first`, `src/driver.rs`; addresses 0 to `__global_base`), and reports the panic within 64 KiB of address 0 or after a wrap; this catches frames large enough to exhaust the 8 MiB shadow stack first. (2) With small frames V8 runs out of its own call stack first (about 10-15k frames) and throws `RangeError: Maximum call stack size exceeded`; the runners (`scripts/wasi-run.mjs`, `tests/wasm/loader.mjs`) map exactly that error to the same panic text and exit 134. It cannot be a program bug, unlike an OOB or `unreachable` trap, which keep their old handling. `stack_overflow` now runs on all three lanes (no `X.native`; `X.freestanding`). Fast-mode wasm builds have no check: a deep overflow of the shadow stack still corrupts memory or traps. Cost on `fib(40)`, wasip1 under Node: debug 1.17 s to 1.17 s; safe 0.51 s to about 0.55-0.85 s (noisy; the `__builtin_frame_address` variant measured 0.66 s).
 - **Goldens:** `tests/cases` and `tests/tests` also run on wasm32-wasip1 (a program that imports a lacked module is skipped by its E0118; `X.native` marks the rest: `c_union` (`c_long` is LP64 in Aye), `extern_struct` and `leak` (sizes with 32-bit pointers), `stack_overflow`). `usize` is 32 bits: Aye code that assumes 8 bytes is the risk.
 
 O2.4 (wasm32-freestanding; the prelude's `#ifdef AYE_FREESTANDING`, set by `aye build`; `-ffreestanding -nostdlib -Wl,--no-entry -Wl,--allow-undefined`):
@@ -658,3 +659,17 @@ Split build in debug mode, measured once: front end 0.5 s, then writing the file
 | user + sys, s | 14.2 / 14.4 / 14.0 | 12.5 / 13.2 / 12.9 (-9%) |
 
 `aye build browser` is unchanged: 26,457,152 bytes of C, 9.6-9.9 s user + sys before and after.
+
+## A stream is counted after its first chunk drains (O3.6e)
+
+Since O3.6d a streaming response writes its body right after the head and
+the worker calls `linkStream` only once that write has drained
+(`std/http/http.aye`, the `stream` branch of the response writer), so a
+`broadcast` never interleaves with the first chunk. The cost is that a
+client can read the first frame and ask `Server.streams()` before the
+worker has linked the stream. The `http_sse` golden printed
+`s.streams()` right after reading `first`, so it depended on the worker
+winning that race; on the 4-vCPU Ubuntu VM the second `/events` case
+lost it every time (`streams: 1`, expected 2). The library order stays;
+the test waits with `waitOpen` (as the `/big` case already did) before
+printing the count.

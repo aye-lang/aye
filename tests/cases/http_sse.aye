@@ -122,7 +122,8 @@ fn readCount(c: Conn, want: usize) !void {
 }
 
 // True when `want` streams are open within 5 s (the worker adds a stream
-// after it writes the last of its first chunk, so the client can be first).
+// after it writes the last of its first chunk, so the client can read that
+// chunk and ask `streams()` first; O3.6e).
 fn waitOpen(s: *mut Server, want: usize) bool {
     for i in 0..100 {
         if s.streams() == want {
@@ -160,6 +161,7 @@ pub fn main() !void {
     let c = try net.connect("127.0.0.1", s.port())
     try c.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
     try readUntil(c, "first\n\n")
+    _ = waitOpen(&mut s, 1)
     @print("streams: ")
     @println(s.streams())
 
@@ -197,6 +199,7 @@ pub fn main() !void {
     let d = try net.connect("127.0.0.1", s.port())
     try d.write("GET /events HTTP/1.1\r\nHost: x\r\n\r\n")
     try readUntil(d, "first\n\n")
+    _ = waitOpen(&mut s, 2)
     @print("streams: ")
     @println(s.streams())
     d.close()
