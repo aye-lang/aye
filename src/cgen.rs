@@ -2002,7 +2002,7 @@ fn mangle(t: &Type) -> String {
         Type::Float(FloatTy::F32) => "f32".into(),
         Type::Float(FloatTy::F64) => "f64".into(),
         Type::Bool => "bool".into(),
-        Type::Void => "void".into(),
+        Type::Void | Type::Never => "void".into(),
         Type::Array(e, n) => format!("A{n}_{}", mangle(e)),
         Type::Simd(e, n) => format!("V{n}_{}", mangle(e)),
         // `[]T` and `[]mut T` share one C type.
@@ -2040,7 +2040,7 @@ fn c_type(t: &Type) -> String {
         Type::Float(FloatTy::F32) => "float".into(),
         Type::Float(FloatTy::F64) => "double".into(),
         Type::Bool => "bool".into(),
-        Type::Void => "void".into(),
+        Type::Void | Type::Never => "void".into(),
         Type::ErrorSet(_) => "uint16_t".into(),
         Type::CPtr(e) | Type::Ptr(e, _) => format!("{}*", c_type(e)),
         Type::Optional(e) if is_ptr_optional(t) => c_type(e),

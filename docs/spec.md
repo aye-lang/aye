@@ -234,14 +234,20 @@ pub fn main() {
   a call to it ends a block like `return`, so `fn check(n: i64) bool`
   may end with `die("negative")` and no `return` after it. Its body must
   end every path with a call to a `noreturn` function (`std.os.exit` is
-  one) or `unreachable`, and has no `return` (E0125).
+  one) or `unreachable`, and has no `return` (E0125). Where a value is
+  expected, such a call gives none and fits any type: `x orelse
+  die("..")`, `x catch die("..")` and `_ => die("..")` in a `match` that
+  produces a value.
 - No overloading, default arguments, variadic Aye functions or closures.
 - Functions may call each other in any order, and recurse.
 - A top-level function that is not generic is a value of type `fn(A, B) R`
   (`fn(A)` without a result). Store it in a variable, field, array, global
   or optional (`?fn(A) R`, nullable), pass it, return it and call it:
   `f(x)`, `s.field(x)` (when `s` has no method of that name), `get()(x)`.
-  Methods and generic functions are not values.
+  Methods and generic functions are not values. A function type may say
+  `noreturn` (`fn([]u8) noreturn`, the type of a `noreturn` function, which
+  is also a `fn([]u8)`): a call through such a value ends a block like a
+  direct call.
 
 ```aye
 struct Button {
