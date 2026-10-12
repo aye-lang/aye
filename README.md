@@ -58,6 +58,11 @@ false, so `aye build --no-link libcurl` makes a server without libcurl (its
 `build -c` compiles to an object file (`<name>.o`) without linking; for a
 Linux target on macOS, where clang has no Linux sysroot to link with, it
 needs none (`aye build --target x86_64-linux -c hello.aye`).
+To link a Linux executable on macOS in one step, set `AYE_SYSROOT` to a
+Linux sysroot of that architecture (clang gets `--sysroot` and links with
+lld, `brew install lld`); `scripts/linux-sysroot.sh amd64 <dir>` copies one
+out of an Ubuntu 24.04 container (`AYE_SYSROOT=<dir> aye build --target
+x86_64-linux hello.aye`).
 
 `aye fmt` works on tokens and keeps every comment and line break; it sets
 indentation (4 spaces) and spacing, keeps at most one blank line in a row and
