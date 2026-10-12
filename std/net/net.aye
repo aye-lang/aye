@@ -30,7 +30,7 @@ pub struct Listener {
                 noSigpipe(fd)
                 return Conn { sock: fd }
             }
-            if aye_std_errno() != EINTR {
+            if errno() != EINTR {
                 return AcceptError.AcceptFailed
             }
         }
@@ -71,7 +71,7 @@ pub struct Listener {
         _ = setsockopt(fd, solSocket(), 2, one[..].ptr, 4)
         _ = setsockopt(fd, solSocket(), SO_REUSEPORT_LINUX, one[..].ptr, 4)
         if bind(fd, addr[..].ptr, len) != 0 || cListen(fd, 128) != 0 {
-            let e = aye_std_errno()
+            let e = errno()
             _ = close(fd)
             if e == eaddrinuse() {
                 return ListenError.AddressInUse
@@ -106,7 +106,7 @@ pub struct Conn {
             if n >= 0 {
                 return n as usize
             }
-            let e = aye_std_errno()
+            let e = errno()
             if e != EINTR {
                 return readError(e)
             }
@@ -126,7 +126,7 @@ pub struct Conn {
             if r == 0 {
                 return ReadError.TimedOut
             }
-            if aye_std_errno() != EINTR {
+            if errno() != EINTR {
                 return ReadError.ReadFailed
             }
         }
@@ -164,7 +164,7 @@ pub struct Conn {
             if n > 0 {
                 return n as usize
             }
-            let e = aye_std_errno()
+            let e = errno()
             if n == 0 || e == EPIPE || e == econnreset() {
                 return WriteError.ConnectionClosed
             }
@@ -249,10 +249,10 @@ fn listenOn(host: []u8, port: u16, shared: bool) ListenError!Listener {
                 // sin_port and sin6_port are both at byte 2
                 return Listener { sock: fd, portNumber: (addr[2] as u16) << 8 | addr[3] as u16 }
             }
-            e = aye_std_errno()
+            e = errno()
             _ = close(fd)
         } else {
-            e = aye_std_errno()
+            e = errno()
         }
         cur = ai.next
     }
@@ -289,10 +289,10 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
                 noSigpipe(fd)
                 return Conn { sock: fd }
             }
-            e = aye_std_errno()
+            e = errno()
             _ = close(fd)
         } else {
-            e = aye_std_errno()
+            e = errno()
         }
         cur = ai.next
     }
@@ -333,7 +333,7 @@ pub fn connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn {
         if fd >= 0 {
             let flags = fcntl(fd, F_GETFL)
             if flags < 0 || fcntl(fd, F_SETFL, flags | pick(0x4, 0x800)) != 0 {
-                e = aye_std_errno()
+                e = errno()
                 _ = close(fd)
                 cur = ai.next
                 continue
@@ -342,24 +342,24 @@ pub fn connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn {
             if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
                 e = 0
             } else {
-                e = aye_std_errno()
+                e = errno()
                 pending = e == einprogress() || e == EINTR
             }
             if pending {
                 var fds = [1]PollFd{PollFd { fd: fd, events: POLLOUT, revents: 0 }}
                 var r = poll(fds[..].ptr, 1, ms as i32)
-                while r < 0 && aye_std_errno() == EINTR {
+                while r < 0 && errno() == EINTR {
                     r = poll(fds[..].ptr, 1, ms as i32)
                 }
                 if r == 0 {
                     e = etimedout()
                 } else if r < 0 {
-                    e = aye_std_errno()
+                    e = errno()
                 } else {
                     var err = @zeroed([4]u8)
                     var len: u32 = 4
                     if getsockopt(fd, solSocket(), pick(0x1007, 4), err[..].ptr, &mut len) != 0 {
-                        e = aye_std_errno()
+                        e = errno()
                     } else {
                         e = (err[0] as i32) | (err[1] as i32) << 8 | (err[2] as i32) << 16 | (err[3] as i32) << 24
                     }
@@ -373,7 +373,7 @@ pub fn connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn {
             }
             _ = close(fd)
         } else {
-            e = aye_std_errno()
+            e = errno()
         }
         cur = ai.next
     }
@@ -506,7 +506,17 @@ fn noSigpipe(fd: i32) {
     }
 }
 
-extern fn aye_std_errno() i32
+// `errno`: `__error()` on macOS, `__errno_location()` on Linux.
+fn errno() i32 {
+    if @targetOs() is .macos {
+        return darwinErrno().*
+    } else {
+        return linuxErrno().*
+    }
+}
+
+extern("__error") fn darwinErrno() *i32
+extern("__errno_location") fn linuxErrno() *i32
 extern("listen") fn cListen(fd: i32, backlog: i32) i32
 extern("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
 extern fn socket(domain: i32, kind: i32, protocol: i32) i32

@@ -16,7 +16,16 @@ struct Client {
 
 impl Client {
     fn start() -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_aye"))
+        Client::start_with(None)
+    }
+
+    /// With `cache` as `$AYE_CACHE_DIR`.
+    fn start_with(cache: Option<&std::path::Path>) -> Client {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_aye"));
+        if let Some(dir) = cache {
+            cmd.env("AYE_CACHE_DIR", dir);
+        }
+        let mut child = cmd
             .arg("lsp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -717,6 +726,47 @@ fn definition_in_a_path_dependency() {
         r#"{"start":{"line":1,"character":7},"end":{"line":1,"character":13}}"#
     );
 
+    c.finish();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn hover_and_definition_of_a_cimport_member() {
+    if !aye::cimport::libclang_available() {
+        println!("skipped: no libclang");
+        return;
+    }
+    let src = "let c = @cimport(\"tiny.h\")\n\npub fn main() {\n    let p = c.tiny_add(1, 2)\n    @println(p)\n}\n";
+    let (dir, uri) = scratch("cimport", src);
+    std::fs::write(
+        dir.join("tiny.h"),
+        "/* A function. */\nint tiny_add(int a, int b);\nstruct tiny_pt { int x; int y; };\n",
+    )
+    .unwrap();
+    let cache = dir.join("cache");
+    let mut c = Client::start_with(Some(&cache));
+    c.initialize();
+    c.notify("textDocument/didOpen", &open(&uri, src));
+    c.diagnostics();
+
+    let h = at(&mut c, 2, "hover", &uri, 3, 15);
+    let text = hover_text(&h);
+    assert!(
+        text.starts_with("```aye\npub extern fn tiny_add(a: c_int, b: c_int) c_int\n```"),
+        "{h:?}"
+    );
+    let d = at(&mut c, 3, "definition", &uri, 3, 15);
+    let target = d.get("uri").and_then(Json::as_str).unwrap().to_string();
+    assert!(target.contains("/cache/cimport/tiny-"), "{target}");
+    let file = target.strip_prefix("file://").unwrap();
+    let gen_src = std::fs::read_to_string(file).unwrap();
+    let line = d
+        .get("range")
+        .and_then(|r| r.get("start"))
+        .and_then(|r| r.get("line"))
+        .and_then(Json::as_i64)
+        .unwrap() as usize;
+    assert!(gen_src.lines().nth(line).unwrap().contains("tiny_add"));
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
