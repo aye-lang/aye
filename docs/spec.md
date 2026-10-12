@@ -933,7 +933,8 @@ Arms are separated by newlines or `,`.
   have the same type. An arm may also be `return [value]`, `break` or
   `continue`: it leaves, so it has no value and takes the type of the
   other arms (`let n = match o { .Some { n } => n, .None => return
-  error.Missing }`).
+  error.Missing }`). At least one arm must give a value: a `match` used
+  as a value whose arms all leave is E0124 (write it as a statement).
 - As a statement, each arm is a block, `return [value]`, `break`,
   `continue` or an expression statement: a call (or builtin), `try`,
   `catch`, `match` or `unreachable` (`.A => try self.f()`). Assignments
