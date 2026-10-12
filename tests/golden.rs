@@ -30,8 +30,9 @@
 //!   so SDL2 needs no display.
 //! - `tests/cimport/X.aye`: programs with `@cimport`, run with `aye run`
 //!   from the crate root with a cache directory of their own: stdout must
-//!   equal `X.out`, and then `aye check` must pass without libclang (the
-//!   cache). If `X.err` exists, `aye check` must fail with exactly that on
+//!   equal `X.out` (and, built for wasm32-wasip1 where the WASI toolchain
+//!   and `node` are there, `X.wasm32-wasip1.out` if it exists), and then
+//!   `aye check` must pass without libclang (the cache). If `X.err` exists, `aye check` must fail with exactly that on
 //!   stderr instead, with the variables of `X.env` (`NAME=value` lines) set.
 //!   `aye cimport tests/cimport/X.h` must print exactly `X.gen` where that
 //!   exists. Skipped without libclang, or when `pkg-config` does not know a
@@ -399,6 +400,18 @@ fn cimport_case(path: &Path, work: &Path) -> Result<(), String> {
             return Err(format!(
                 "`aye run {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"
             ));
+        }
+        // Built for wasm32-wasip1, where `X.wasm32-wasip1.out` exists.
+        if let (Some(want), Some(_)) = (
+            read(&path.with_extension("wasm32-wasip1.out")),
+            wasm_target(),
+        ) {
+            let (out, err, code) = aye_env(&["run", "--target", "wasm32-wasip1", &rel], &env)?;
+            if code != Some(0) || out != want {
+                return Err(format!(
+                    "`aye run --target wasm32-wasip1 {rel}`: status {code:?}, stderr:\n{err}\n--- expected\n{want}--- got\n{out}"
+                ));
+            }
         }
         // From the cache, without libclang.
         env.push((

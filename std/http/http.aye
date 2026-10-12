@@ -477,10 +477,13 @@ fn contentLength(v: []u8, max: usize) ParseError!usize {
         if c < '0' || c > '9' {
             return ParseError.BadRequest
         }
-        n = n * 10 + (c - '0') as usize
-        if n > max {
+        // Checked before the arithmetic, which would overflow a 32-bit
+        // `usize` (wasm32) when `max` is near its top.
+        let d = (c - '0') as usize
+        if n > max / 10 || d > max - n * 10 {
             return ParseError.BodyTooLarge
         }
+        n = n * 10 + d
     }
     return n
 }
@@ -523,10 +526,10 @@ fn readChunked(buf: []u8, from: usize, limits: Limits, out: *mut Builder) ParseE
         var size: usize = 0
         for c in sizeLine {
             let d = hexValue(c) orelse return ParseError.BadRequest
-            size = size * 16 + d
-            if size > limits.maxBody {
+            if size > limits.maxBody / 16 || d > limits.maxBody - size * 16 {
                 return ParseError.BodyTooLarge
             }
+            size = size * 16 + d
         }
         pos = end + 2
         if size == 0 {
@@ -552,10 +555,10 @@ fn readChunked(buf: []u8, from: usize, limits: Limits, out: *mut Builder) ParseE
                 }
             }
         }
-        if out.len() + size > limits.maxBody {
+        if size > limits.maxBody - out.len() {
             return ParseError.BodyTooLarge
         }
-        if buf.len - pos < size + 2 {
+        if buf.len - pos < 2 || buf.len - pos - 2 < size {
             return ParseError.Incomplete
         }
         if buf[pos + size] != '\r' || buf[pos + size + 1] != '\n' {
