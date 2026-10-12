@@ -49,6 +49,39 @@ pub struct Listener {
         return self.portNumber
     }
 
+    /// Another listener on the same address and port, for a listener from
+    /// `listenShared` on Linux, where the kernel spreads the new
+    /// connections over them (`SO_REUSEPORT`). Elsewhere (macOS does not
+    /// spread them), or for a listener from `listen`, it is ListenFailed or
+    /// AddressInUse.
+    pub fn again(self: Self) ListenError!Listener {
+        if isDarwin() {
+            return ListenError.ListenFailed
+        }
+        var addr = @zeroed([128]u8)
+        var len: u32 = 128
+        if getsockname(self.sock, addr[..].ptr, &mut len) != 0 {
+            return ListenError.ListenFailed
+        }
+        // Linux's sa_family is a u16 at byte 0.
+        let fd = socket(addr[0] as i32 | (addr[1] as i32) << 8, SOCK_STREAM, 0)
+        if fd < 0 {
+            return ListenError.ListenFailed
+        }
+        var one = [4]u8{1, 0, 0, 0}
+        _ = setsockopt(fd, solSocket(), 2, one[..].ptr, 4)
+        _ = setsockopt(fd, solSocket(), SO_REUSEPORT_LINUX, one[..].ptr, 4)
+        if bind(fd, addr[..].ptr, len) != 0 || cListen(fd, 128) != 0 {
+            let e = aye_std_errno()
+            _ = close(fd)
+            if e == eaddrinuse() {
+                return ListenError.AddressInUse
+            }
+            return ListenError.ListenFailed
+        }
+        return Listener { sock: fd, portNumber: self.portNumber }
+    }
+
     /// Stops listening and releases the port.
     pub fn close(self: Self) {
         _ = close(self.sock)
@@ -167,6 +200,18 @@ pub struct Conn {
 /// that does not resolve is UnknownHost; an empty or over-long one is
 /// InvalidAddress.
 pub fn listen(host: []u8, port: u16) ListenError!Listener {
+    return listenOn(host, port, false)
+}
+
+/// `listen` that lets `Listener.again` open more listeners on the same
+/// address (O3.9c). On Linux it sets `SO_REUSEPORT`, so another
+/// `listenShared` of the same user on that port succeeds too and the kernel
+/// spreads the new connections over all of them; elsewhere it is `listen`.
+pub fn listenShared(host: []u8, port: u16) ListenError!Listener {
+    return listenOn(host, port, true)
+}
+
+fn listenOn(host: []u8, port: u16, shared: bool) ListenError!Listener {
     var head: ?*mut AddrInfo = null
     var name = host
     if text.eql(host, "localhost") {
@@ -190,6 +235,9 @@ pub fn listen(host: []u8, port: u16) ListenError!Listener {
                 reuse = 4
             }
             _ = setsockopt(fd, solSocket(), reuse, one[..].ptr, 4)
+            if shared && !isDarwin() {
+                _ = setsockopt(fd, solSocket(), SO_REUSEPORT_LINUX, one[..].ptr, 4)
+            }
             if bind(fd, sockAddr(ai), ai.addrlen) == 0 && cListen(fd, 128) == 0 {
                 var addr = @zeroed([128]u8)
                 var len: u32 = 128
@@ -443,6 +491,8 @@ fn pick(mac: i32, linux: i32) i32 {
 }
 
 fn solSocket() i32 { return pick(0xffff, 1) }
+// Linux's SO_REUSEPORT (`listenShared`).
+let SO_REUSEPORT_LINUX: i32 = 15
 fn econnrefused() i32 { return pick(61, 111) }
 fn econnreset() i32 { return pick(54, 104) }
 fn eaddrinuse() i32 { return pick(48, 98) }

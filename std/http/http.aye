@@ -644,7 +644,7 @@ fn withConnection(alloc: Allocator, res: Response, value: []u8) AllocError!Respo
 /// Listens on `host:port` (port 0 lets the system pick one) for a
 /// context of type `T`; `ctx` must stay valid until `run` has returned.
 pub fn listen(comptime T: type, host: []u8, port: u16, ctx: *mut T, handler: fn(*mut T, *Request, *mut Response, Allocator)) ListenError!Server {
-    let l = try net.listen(host, port)
+    let l = try net.listenShared(host, port)
     var lo: []u8 = "127.0.0.1"
     if mem.indexOf(host, ':') != null {
         lo = "::1"
@@ -708,6 +708,14 @@ fn defaultWorkers() u32 {
 /// serves them from then on, so a slow handler holds up only its own
 /// connection. With `workers = 1` there is no other worker to take them.
 ///
+/// New connections (O3.9c): on Linux each worker has a listener of its own
+/// on the port (`SO_REUSEPORT`, `net.listenShared`), so the kernel hands a
+/// new connection to one worker and wakes only that one; the connections
+/// waiting on the listener of a worker whose handler is slow are taken
+/// with its other connections. On macOS, which does not spread connections
+/// over such listeners, the workers share one. Because of `SO_REUSEPORT`, a
+/// second server of the same user on the same port does not fail on Linux.
+///
 /// Server-sent events (O3.6b): a handler that calls `res.stream()` makes its
 /// connection a stream, which `broadcast` writes events to from any thread.
 /// Threading: the worker that accepted the connection owns it (it reads
@@ -735,7 +743,7 @@ pub struct Server {
     /// holds up only its own connection (see `Server`).
     workers: u32
     stopped: Atomic(u32)
-    // 1 while a worker accepts (`tryAccept`).
+    // 1 while a worker accepts from `listener` (`acceptOn`).
     accepting: Atomic(u32)
     loopback: []u8
     // Guards `streamHead` and the writes to the streams on it.
@@ -757,8 +765,8 @@ pub struct Server {
 
     /// Serves until `stop` (or SIGINT or SIGTERM after `std.os.onStop()`):
     /// starts `workers - 1` threads and serves on this one too. Each worker
-    /// waits (`poll`) on the listener and on the connections it has
-    /// accepted, and answers the requests that arrive; the kernel spreads
+    /// waits (`poll`) on its listener (see `Server`) and on the connections
+    /// it has accepted, and answers the requests that arrive; the kernel spreads
     /// the connections over the workers. Then it finishes the answered
     /// responses (see `stop`), closes the open connections, waits for the
     /// workers and closes the listener. `alloc` is used only by this
@@ -771,14 +779,25 @@ pub struct Server {
         if n > 64 {
             n = 64
         }
-        let crew = try alloc.alloc(Worker { s: self, open: List(*mut Open).init(alloc), current: null, state: Atomic(u32).init(0), since: Atomic(u64).init(0), moved: false, lastLook: 0 }, n as usize)
+        let crew = try alloc.alloc(Worker { s: self, open: List(*mut Open).init(alloc), current: null, state: Atomic(u32).init(0), since: Atomic(u64).init(0), moved: false, lastLook: 0, listener: self.listener, own: false, accepting: Atomic(u32).init(0) }, n as usize)
         defer alloc.free(crew)
         self.crew = crew
         var none: ?Thread = null
         let threads = try alloc.alloc(none, (n - 1) as usize)
         defer alloc.free(threads)
         for i in 0..threads.len {
-            threads[i] = thread.spawn(Worker, workerMain, &mut crew[i + 1]) catch |e| {
+            let w = &mut crew[i + 1]
+            // O3.9c: on Linux each worker gets a listener of its own, so a
+            // new connection wakes one worker; else they share `listener`.
+            if self.listener.again() |l| {
+                w.listener = l
+                w.own = true
+            } else |e| {}
+            threads[i] = thread.spawn(Worker, workerMain, w) catch |e| {
+                if w.own {
+                    w.listener.close()
+                    w.own = false
+                }
                 break
             }
         }
@@ -786,6 +805,11 @@ pub struct Server {
         for i in 0..threads.len {
             if threads[i] |t| {
                 t.join()
+            }
+        }
+        for w in crew {
+            if w.own {
+                w.listener.close()
             }
         }
         self.listener.close()
@@ -897,24 +921,6 @@ pub struct Server {
             return
         }
         c.close()
-    }
-
-    // Accepts a waiting connection, or gives null. One worker accepts at a
-    // time, and only after a `poll` that does not wait shows a connection,
-    // so `accept` never blocks a worker that holds other connections.
-    fn tryAccept(self: *mut Self) ?Conn {
-        if !self.accepting.compareSwap(0, 1) {
-            return null
-        }
-        defer self.accepting.store(0)
-        var fds = [1]PollFd{PollFd { fd: self.listener.fd(), events: POLLIN, revents: 0 }}
-        if poll(fds[..].ptr, 1, 0) <= 0 {
-            return null
-        }
-        let c = self.listener.accept() catch |e| {
-            return null
-        }
-        return c
     }
 
     // Reads what the peer of `o` has sent (a `poll` said it is there) and
@@ -1162,6 +1168,50 @@ struct Worker {
     moved: bool
     // When it last looked for a slow worker.
     lastLook: u64
+    // The listener it accepts from: its own when `own` (O3.9c, Linux), else
+    // the server's, which the workers share under `Server.accepting`.
+    listener: Listener
+    own: bool
+    // 1 while a worker accepts from the own listener.
+    accepting: Atomic(u32)
+}
+
+// Accepts a waiting connection on the listener of `w`, or gives null. One
+// worker accepts from a listener at a time, and only after a `poll` that
+// does not wait shows a connection, so `accept` never blocks a worker that
+// holds other connections.
+fn acceptOn(w: *mut Worker) ?Conn {
+    var gate = &mut w.s.accepting
+    if w.own {
+        gate = &mut w.accepting
+    }
+    if !gate.compareSwap(0, 1) {
+        return null
+    }
+    defer gate.store(0)
+    var fds = [1]PollFd{PollFd { fd: w.listener.fd(), events: POLLIN, revents: 0 }}
+    if poll(fds[..].ptr, 1, 0) <= 0 {
+        return null
+    }
+    let c = w.listener.accept() catch |e| {
+        return null
+    }
+    return c
+}
+
+// Adds a new connection to the list of `me`; false when it was closed instead.
+fn adopt(me: *mut Worker, c: Conn, now: u64) bool {
+    _ = c.setNonBlocking()
+    let made = makeOpen(me.s, c, now)
+    if made |o| {
+        me.open.append(o) catch |e| {
+            closeOpen(me.s, o)
+            return false
+        }
+        return true
+    }
+    c.close()
+    return false
 }
 
 // How long a handler may run before the other connections of its worker
@@ -1169,7 +1219,8 @@ struct Worker {
 let SLOW_MS: u64 = 20
 
 // Takes the connections of each other worker whose handler has run for more
-// than SLOW_MS, all but the one the handler runs for.
+// than SLOW_MS, all but the one the handler runs for, and the connections
+// waiting on its own listener (O3.9c).
 fn rescue(me: *mut Worker, now: u64) {
     let s = me.s
     for k in 0..s.crew.len {
@@ -1197,6 +1248,15 @@ fn rescue(me: *mut Worker, now: u64) {
             w.moved = true
         }
         w.state.store(1)
+        if w.own {
+            while s.stopped.load() == 0 {
+                if acceptOn(w) |c| {
+                    _ = adopt(me, c, now)
+                } else {
+                    break
+                }
+            }
+        }
     }
 }
 
@@ -1232,7 +1292,7 @@ fn workerMain(w: *mut Worker) {
         tick = s.idleMs as i32
     }
     while s.stopped.load() == 0 {
-        pollSet(&mut fds, s.listener, &w.open) catch |e| {
+        pollSet(&mut fds, w.listener, &w.open) catch |e| {
             break
         }
         let r = poll(fds.items().ptr, fds.len() as u64, tick)
@@ -1284,21 +1344,12 @@ fn workerMain(w: *mut Worker) {
             rescue(w, now)
         }
         if r > 0 && fds.items()[0].revents != 0 {
-            if s.tryAccept() |c| {
+            if acceptOn(w) |c| {
                 if s.stopped.load() != 0 {
                     c.close()
                     break
                 }
-                _ = c.setNonBlocking()
-                let made = makeOpen(s, c, now)
-                if made |o| {
-                    w.open.append(o) catch |e| {
-                        closeOpen(s, o)
-                        continue
-                    }
-                } else {
-                    c.close()
-                }
+                _ = adopt(w, c, now)
             }
         }
     }

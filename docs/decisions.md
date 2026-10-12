@@ -703,6 +703,35 @@ data; `readError` maps EAGAIN) and `Listener.fd()`/`Conn.fd()`; the field
 is `sock` now, since a struct cannot have a field and a method of one
 name (E0015).
 
+## One listener per `std.http` worker on Linux (O3.9c)
+
+Since O3.9 every worker `poll`s the one listener, so each new connection
+woke all of them and one accepted (O3.9b: without `-k`, 4 workers 9.4k
+req/s, 1 worker 16.1k). Two designs: (a) one listening socket per worker
+with `SO_REUSEPORT`, where Linux hands each connection to one socket, or
+(b) one acceptor thread that passes descriptors to the workers over a
+queue. (b) is portable but costs a hand-off per connection (a lock, a
+write to a wake pipe in each worker's `poll` set, a read), an extra
+thread on a 4-CPU machine, and its own slow-handler rule for the queue of
+a busy worker. (a) is smaller and chosen: `net.listenShared` sets
+`SO_REUSEPORT` on Linux (elsewhere it is `listen`), and
+`Listener.again()` binds another socket to the address `getsockname`
+gives (ListenFailed on macOS, where `SO_REUSEPORT` does not balance).
+`Server.run` gives each worker it spawns its own listener when `again`
+succeeds; worker 0 and any worker without one share `Server.listener`
+under `Server.accepting` as before, so macOS keeps the single listener
+(the check is `net`'s run-time `uname`, as for its other constants).
+Each listener has its own accept gate (one accepter at a time, after a
+`poll` that does not wait), because a slow handler's connections that
+wait on its own listener are taken by the worker that `rescue`s it
+(within its 10 ms look, or the 100 ms `poll` tick when idle, as for the
+other connections). Costs: with `SO_REUSEPORT` a second server of the
+same user on the same port does not fail with AddressInUse on Linux (the
+`Server` docs say so), and keep-alive connections are spread by hash, not
+by which worker is idle. Measured (docs/aye-bench.md, O3.9c): without
+`-k` 9138 → 12482 req/s (+37%), `ab -k -c 64` 103002 → 93543 (-9.2%,
+passes disagree in sign). `Server` is unchanged.
+
 ## A global `Mutex` (O1.21)
 
 - **Option (a), with `Mutex.init()` made constant.** A global's initializer may call, without arguments, a function whose body is one `return` of a constant; sema checks that body and folds the returned value (`fold_init` in `src/sema.rs`), so cgen emits a static initializer as for any other constant and no code runs before `main`. Option (b), a `Mutex.INIT` constant, needs a constant inside a struct, which the language does not have (a module-level `MUTEX_INIT` would work but reads worse than the call every other user already writes). Both options need the same runtime change, since the old `init` called `aye_mutex_new`; (a) adds about 40 lines to sema and keeps one spelling for locals, fields and globals. Calls with arguments stay E0089: folding them means substituting parameters, which waits for a use.
