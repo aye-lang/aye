@@ -1,0 +1,6 @@
+file file true
+dir dir true
+link symlink true
+followed file true
+device other true
+false
