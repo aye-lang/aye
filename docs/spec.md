@@ -2249,6 +2249,7 @@ binds 127.0.0.1. Writes never raise SIGPIPE.
 ```
 std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system picks one
 std.net.connect(host: []u8, port: u16) ConnectError!Conn
+std.net.connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn   connect, TimedOut after ms (per address)
 Listener.accept(self: Self) AcceptError!Conn   waits for the next connection
 Listener.port(self: Self) u16                  the port it listens on
 Listener.fd(self: Self) i32                    its file descriptor, for poll (do not close it)
