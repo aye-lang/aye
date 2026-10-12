@@ -144,7 +144,7 @@ brackets.
 - O1.23 `aye build --no-link <lib>` (repeatable): an optional library (`@linkOptional`) is treated as not installed, so `@hasLink` is false and it is not linked; `std.http` links libcurl whenever it is installed, which a production server (framework F5.3) does not want. A name that no `@linkOptional` declares is E0100. Verify: a golden builds the hello server with `--no-link libcurl` where libcurl is installed, `otool -L`/`ldd` of the result lists no libcurl, it answers a request, and `std.http.get("https://...")` returns the missing-TLS error.
 - O1.20 `aye check <missing file>` says to write the file first (eval: http_hello probes `aye check` on a missing file every run; low value). Verify: a CLI golden.
 - O1.17c `virtual_clock.html` is 22% of `jsdom_gc_stress` CPU; make the page cheaper under GC stress without losing what it tests.
-- O3.6 superseded: query/form/cookies are O3.6a (done); server-sent events are O3.6b (card below); streamed responses and graceful stop stay here as O3.6c. Verify: a golden per feature.
+- O3.6c (done 2026-10-12, a50bc56) graceful stop, the rest of O3.6 (O3.6a query/form/cookies, O3.6b server-sent events and O3.6d streamed responses are done): `std.os.onStop()`/`stopRequested()`, `Server.run` stops on SIGINT/SIGTERM and writes answered responses whole before closing. Verify: golden `http_stop`.
 - O3.6b `std.http` server-sent events (what is left of O3.6 after O3.6a; framework F3.5): a handler can keep its response open as a stream (`res.events()` writes the headers `Content-Type: text/event-stream` and `Cache-Control: no-cache` without `Content-Length`; the server holds the connection in its `poll` set instead of a blocked handler), the server can send `data:` frames to the open streams (`Server.broadcast` or a handle kept by the handler), and `stop` closes them within `idleMs`. Verify: a golden (`http_sse`) where a client reads the first frame, then a frame sent later from another thread, a second request on another connection is answered meanwhile, and `stop` returns with the stream closed.
 - O3.7 SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms.
@@ -158,7 +158,6 @@ brackets.
 - O1.11b `scripts/eval.py --tasks a,b` rewrites the whole results table in `docs/aye-eval.md` with only the tasks it ran (O7.2 report); merge per task instead. Verify: a `--tasks rest_json` run keeps the other rows.
 - O1.11c the eval harness `SYSTEM_PROMPT` lists `aye spec`, `aye check`, `aye explain` but not `aye doc --signatures <module>` (O7.2 report; O13 names it). Add it. Verify: a run's transcript shows the agent found `aye doc` from the system prompt.
 - `std.fs.symlink` and `readLink` (framework F1.2, `docs/framework.md` need 6).
-- Signals for graceful stop (framework F3, need 10).
 
 ## Reference
 
