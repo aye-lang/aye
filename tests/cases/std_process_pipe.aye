@@ -11,7 +11,8 @@ pub fn main() !void {
     defer gpa.deinit()
     let alloc = gpa.allocator()
 
-    let argv = [_][]u8{"/bin/true"}
+    // `true` through PATH: macOS has only /usr/bin/true, Linux has both.
+    let argv = [_][]u8{"true"}
     var child = try process.spawn(alloc, argv[..], Stdio.Pipe, Stdio.Inherit, Stdio.Inherit)
     // Wait without closing our end of the pipe.
     var raw: i32 = 0
