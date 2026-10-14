@@ -38,9 +38,10 @@ anyknown#1 moved its gap file's "## Open" to empty. O6.1c (lsp end spans)
 merged from the cloud.
 
 Anyknown maintenance the same day, each a PR merged on anyknown's own CI
-(macOS + ubuntu): #2 and #4 fix both known flaky tests (image load/error
-fired in the finishing task; a dropped in-flight load is held, one fetch
-per document), #3 O1.17c, #5 O1.14c (`@targetOs()` in the browser), #6
+(macOS + ubuntu): #2, #4 and #8 fix the three known flaky image tests
+(image load/error fired in the finishing task; a dropped in-flight load
+is held, one fetch per document; the test server's `/held-now` waits for
+every named image), #3 O1.17c, #5 O1.14c (`@targetOs()` in the browser), #6
 P8.x (`std.fs.readDir` in archive.aye). `tests/downstream/ANYKNOWN_REV`
 points at anyknown main after these. Framework browser checks (island,
 dev reload) passed in headless `agent-browser` (plans/framework.md F3,
