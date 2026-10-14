@@ -935,6 +935,30 @@ mod tests {
     }
 
     #[test]
+    fn hover_does_not_move_the_last_change() {
+        let mut server = Server {
+            out: Vec::new(),
+            docs: HashMap::new(),
+            pending: Vec::new(),
+            last_change: None,
+            shutdown: false,
+        };
+        let uri = "file:///debounce/main.aye";
+        let change = format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{uri}","version":2}},"contentChanges":[{{"text":"fn main() {{}}\n"}}]}}}}"#
+        );
+        server.handle(&Json::parse(&change).unwrap()).unwrap();
+        let changed = server.last_change.expect("didChange sets the last change");
+        assert_eq!(server.pending, [uri]);
+        let hover = format!(
+            r#"{{"jsonrpc":"2.0","id":7,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":3}}}}}}"#
+        );
+        server.handle(&Json::parse(&hover).unwrap()).unwrap();
+        assert_eq!(server.last_change, Some(changed));
+        assert_eq!(server.pending, [uri]);
+    }
+
+    #[test]
     fn columns_count_utf16_units() {
         assert_eq!(utf16_col("a\u{1f600}b", 2), 3);
         assert_eq!(token_len("let x = \"hi\"", 8), 4);
