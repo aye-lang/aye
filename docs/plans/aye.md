@@ -76,14 +76,14 @@ built-in database and cloud clients (`@cimport` covers them).
 
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
-| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: O3 (gaps #50, #52, #53) |
+| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | done 2026-10-14: O3 gaps 49–56 fixed or declined (O1.14, O1.28, O1.29, decisions.md round 2); anyknown#1 updates the gap file |
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | done 2026-10-10 |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | done 2026-10-10 (O6 holds) |
-| O2.x | Targets incl. wasm32 (O8) | the O8 check | current |
-| O5.x | `aye test` maturity (O9) | `aye test browser` (downstream check) | backlog |
-| O4.x | Dependencies (O7) | the O7 check | backlog |
-| O6.x | LSP and HTML docs (O10) | the O10 check | backlog |
-| O7.x | Numbers and the gate (O11–O13) | the O11–O13 checks | backlog |
+| O2.x | Targets incl. wasm32 (O8) | the O8 check | done (O8 holds 2026-10-11) |
+| O5.x | `aye test` maturity (O9) | `aye test browser` (downstream check) | done (O9 holds; O5.1b, O5.2b, O5.2f 2026-10-14) |
+| O4.x | Dependencies (O7) | the O7 check | done (O7 holds) |
+| O6.x | LSP and HTML docs (O10) | the O10 check | done (O10 holds); O6.1c polish in the cloud |
+| O7.x | Numbers and the gate (O11–O13) | the O11–O13 checks | done (O11–O13 hold 2026-10-11) |
 
 Steps that add std functions touch `docs/spec.md` §15 and the std
 sources `tests/spec.rs` reads; they merge one after the other.

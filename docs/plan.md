@@ -8,55 +8,61 @@ is the language's biggest integration test, run as the downstream check. The fra
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-12 night, written 2026-10-13 00:50 +08)
+## Resume here (handoff 2026-10-14, written 13:10 +08)
 
 A new session starts in `~/Documents/ayelang/aye`. Cloud is the
-integrator since 2026-10-12 (rule 7): each step runs as a one-time cloud
-routine (`RemoteTrigger`, environment `env_01CZsU4Eo82wo62Hpf2skA2q`,
-Ubuntu 24.04 x86_64) that merges `main` in, runs the Linux suite in
-foreground chunks, and fast-forwards `main`; GitHub CI
-(`.github/workflows/ci.yml`, Linux and macOS, the repo is public) is the
-full-suite gate. The local Mac pulls, does macOS-only work, runs
-`sh scripts/downstream.sh` after std/src changes, and opens a PR when a
-change needs CI before it lands.
+integrator (rule 7): each step runs as a one-time cloud routine
+(`RemoteTrigger`, environment `env_01CZsU4Eo82wo62Hpf2skA2q`, Ubuntu
+24.04 x86_64) that merges `main` in, runs the Linux suite in foreground
+chunks, and fast-forwards `main`; GitHub CI is the full-suite gate. The
+local Mac pulls, does macOS-only work through PRs (merged with
+`gh pr merge --squash` once all six CI jobs pass; the repo has no branch
+protection, so never use `--auto`), and runs `sh scripts/downstream.sh`
+after std/src changes.
 
-Main at handoff: 9fd0f63 (plan commit on top of 6647d34). Local macOS
-golden was green (610/119/93) and downstream green at 49beddb. Merged on
-2026-10-12 (all in `plans/done.md`): F1.2b, O3.6c, O2.8a, F3.8, O3.6e,
-O2.5e, O1.11b/c, O1.19a, O2.5a, O2.6, O1.27, O6.2a, O6.1a, O3.9b,
-O1.22a/b/c, O3.4c, O1.6a, O3.1c, O1.21, O3.7, O3.3b, F3.2a, O3.9c, O6.1b,
-O2.6a, O1.14, O6.2b, O1.14b, O2.6b; O3.9d closed by measurement (no code).
+CI since 2026-10-14 (#13): `golden` runs in three shards per OS
+(`AYE_GOLDEN_SHARD=i/3`, tests/golden.rs; shard 1 also runs the other
+test targets), wasi-sdk is cached, and a push that changes only docs
+(everything under `docs/` except `docs/spec.md`, root `*.md`) runs no CI.
+A run takes about 4 minutes (was 7.5).
 
-Still running in the cloud at handoff (they merge to main on their own;
-check `gh run list` and the origin/main log first, and the remote
-branch list for a pushed-but-unmerged `<step>-<slug>` branch, which
-means the session stopped under a stop rule: read its last commit
-message): O6.2c (lsp URL deps), O3.2a (parseHttp lenient + Date), O3.1b
-(json asInt), O1.21a (fold constant-arg calls). Local: O5.2b (warm the
-test binary before `-j` fan-out) was told to commit WIP on branch
-`o5-2b-warm-test-binary` in worktree `../wt-o52b`; continue it there.
+Merged on 2026-10-14 (all in `plans/done.md`): O1.28 (`Type.m` as a
+function value, gap 52), O1.29 (generic methods, gap 53b), O3.5a
+(`std.net.wait`, TLS waits on the active socket, `http.lastError`),
+O3.9e (wrk: no keep-alive skew, no code), O5.2b and O5.1b (warm each
+root's test executable: 450 ms to 5 ms), O5.2f (`aye test` without `-g`:
+-14% wall on `aye test browser`), CI sharding (#13), the lsp debounce
+test made deterministic (#11, #14). Criterion O3: gaps 49-56 fixed or
+declined (decisions.md "Compiler gaps closed out, round 2 (O3)"); the
+anyknown side is PR aye-lang/anyknown#1 (docs only), which waits for the
+user (their repo). After it merges, move `tests/downstream/ANYKNOWN_REV`
+to the merged rev. Downstream green at a067dfd.
+
+Still running in the cloud at handoff: O6.1c (lsp end spans for the
+remaining codes). Check `gh run list`, the origin/main log, and remote
+branches named `<step>-<slug>` (a pushed-but-unmerged branch means the
+session stopped under a stop rule: read its last commit).
 
 Cloud-prompt rules (learned): the session ends when its turn ends, so
 every long command runs in the foreground with a 10 minute timeout,
-split into chunks; start by resetting the local main to origin/main (the
-VM's local main can be stale: O6.2b branched 89 commits behind); source
-`/etc/profile.d/aye-wasi.sh`; `cargo fmt` before committing;
+split into chunks; start by resetting the local main to origin/main;
+source `/etc/profile.d/aye-wasi.sh`; `cargo fmt` before committing;
 `scripts/downstream.sh` cannot reach the private anyknown repo from the
 VM (skipped, say so; the Mac runs it). The scheduler fires `run_once_at`
 routines up to 30 min late; a manual `run` makes a late one fire twice.
 Sessions often leave their merged branch on origin: prune them.
 
-Next from the backlog in `plans/aye.md`: O3.5a (std.net poll export,
-log debug), O3.9e (measure with `wrk` first), O5.1b/O5.2f (local macOS),
-O1.17c; anyknown follow-ups (O1.14c `isDarwin`/`clock()`, P8.x, P-flaky)
-live in the user's aye-lang/anyknown repo. Framework: the Chrome manual
-checks (dev reload, island) need the user.
+Left in the backlog (`plans/aye.md`): O1.17c (anyknown test page,
+user's repo); anyknown follow-ups (`isDarwin`/`clock()` to
+`@targetOs()`, P8.x, P-flaky) live in aye-lang/anyknown. Framework: the
+Chrome manual checks (dev reload, island) need the user. All criteria
+O1-O13 hold on main once anyknown#1 merges (O3's file lives there).
 
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O6–O13 all hold (2026-10-11); backlog and performance | O3.9b, O6.2a, O6.1a next; site deploy needs `site/build.sh` first | local; cloud routines for Linux |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O1–O13 hold (2026-10-14; O3 pending anyknown#1); backlog nearly empty | O6.1c (cloud); anyknown#1 then ANYKNOWN_REV | cloud routines; local Mac for macOS-only PRs |
 | Browser ([`plans/anyknown.md`](plans/anyknown.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/anyknown` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the anyknown repo | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F3 (dev server) done 2026-10-11; F4 islands next (F4.1 spike first) | local or cloud |
 
