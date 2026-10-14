@@ -1,0 +1,11 @@
+generic_method.aye:5:35: error[E0076]: an interface method cannot have `comptime` parameters (a `dyn` call has one function per method)
+generic_method.aye:15:37: error[E0076]: a `comptime` parameter must have type `type` (other compile-time values are not supported)
+generic_method.aye:19:51: error[E0076]: `U` is not a `comptime` parameter of `Counter.other`
+generic_method.aye:23:18: error[E0078]: `T` is a `comptime` type: its fields are not known (use the methods of a `where` constraint)
+generic_method.aye:26:54: error[E0076]: a generic function must spell out its error set: write `ErrorSet!T`, not `!T`
+generic_method.aye:47:7: error[E0079]: `bool` does not satisfy `where T: Integer` of `Counter.add` at 11:59: it is not an integer type
+generic_method.aye:48:11: error[E0080]: expected a type for `comptime T`, found an expression
+generic_method.aye:49:7: error[E0029]: method `Counter.add` takes 2 argument(s) but 1 were given
+generic_method.aye:51:24: error[E0023]: mismatched types: expected `fn(i64) i32`, found `fn(i64) f64`
+generic_method.aye:52:26: error[E0023]: mismatched types: expected `*Box(i64)`, found `Box(i64)`
+generic_method.aye:53:15: error[E0029]: method `Box(i64).map` takes 2 argument(s) but 3 were given
