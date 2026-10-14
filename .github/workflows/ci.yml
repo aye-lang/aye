@@ -1,12 +1,27 @@
-# Full suite on Linux and macOS (docs/plan.md rule 7). The macOS job only
-# runs while the repo is public: Actions minutes are free there, and on a
-# private repo macOS minutes count ten times.
+# Full suite on Linux and macOS (docs/plan.md rule 7), `golden` split in
+# three shards per OS (AYE_GOLDEN_SHARD, tests/golden.rs): shard 1 runs the
+# whole `cargo test --release`, shards 2 and 3 only `--test golden`. The
+# macOS jobs only run while the repo is public: Actions minutes are free
+# there, and on a private repo macOS minutes count ten times. A push or PR
+# that changes only docs (everything under docs/ except docs/spec.md, which
+# is compiled in, and root-level *.md) does not run it: the last matching
+# `paths` pattern wins.
 name: ci
 
 on:
   push:
     branches: [main]
+    paths:
+      - '**'
+      - '!docs/**'
+      - 'docs/spec.md'
+      - '!*.md'
   pull_request:
+    paths:
+      - '**'
+      - '!docs/**'
+      - 'docs/spec.md'
+      - '!*.md'
   workflow_dispatch:
 
 concurrency:
@@ -15,23 +30,52 @@ concurrency:
 
 jobs:
   linux:
+    name: linux (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       AYE_WASI_CLANG: /opt/wasi-sdk/bin/clang
       AYE_WASI_SYSROOT: /opt/wasi-sdk/share/wasi-sysroot
       AYE_WASI_RESOURCE_DIR: /opt/wasi-sdk/resource
+      AYE_GOLDEN_SHARD: ${{ matrix.shard }}/3
     steps:
       - uses: actions/checkout@v4
-      - run: sudo sh scripts/setup-ubuntu.sh
+      # scripts/setup-ubuntu.sh skips the wasi-sdk download when
+      # /opt/wasi-sdk/bin/clang exists, and Node when `node` is v22.
+      - id: wasi
+        run: echo "version=$(sed -n 's/^WASI_SDK=//p' scripts/setup-ubuntu.sh)" >> "$GITHUB_OUTPUT"
+      - run: sudo mkdir -p /opt/wasi-sdk && sudo chown "$USER" /opt/wasi-sdk
+      - uses: actions/cache@v4
+        with:
+          path: /opt/wasi-sdk
+          key: wasi-sdk-${{ runner.arch }}-${{ steps.wasi.outputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo env "PATH=$PATH" sh scripts/setup-ubuntu.sh
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - run: cargo test --release
+        with:
+          key: shard-${{ matrix.shard }}
+      - if: ${{ matrix.shard == 1 }}
+        run: cargo test --release
+      - if: ${{ matrix.shard != 1 }}
+        run: cargo test --release --test golden
 
   macos:
+    name: macos (shard ${{ matrix.shard }}/3)
     if: ${{ !github.event.repository.private }}
     runs-on: macos-15
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      AYE_GOLDEN_SHARD: ${{ matrix.shard }}/3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,5 +83,9 @@ jobs:
           node-version: 22
       - run: brew install llvm lld wasi-libc wasi-runtimes sdl2 freetype
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - run: cargo test --release
+        with:
+          key: shard-${{ matrix.shard }}
+      - if: ${{ matrix.shard == 1 }}
+        run: cargo test --release
+      - if: ${{ matrix.shard != 1 }}
+        run: cargo test --release --test golden
