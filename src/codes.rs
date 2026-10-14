@@ -1470,7 +1470,7 @@ test "make" {
 }
 E0076 = 76 {
     "invalid generic declaration",
-    "A `comptime` parameter has type `type` (`comptime T: type`); stage0 has no other compile-time values. A type function (returning `type`) takes only `comptime` parameters, and only top-level functions have them. A `where` constraint names a `comptime` parameter and an interface (`where T: Shape`). A generic function spells out its error set (`E!T`).",
+    "A `comptime` parameter has type `type` (`comptime T: type`); stage0 has no other compile-time values. A type function (returning `type`) takes only `comptime` parameters. Top-level functions and methods have them (a generic method, `fn map(self: *Self, comptime U: type, f: fn(T) U) Box(U)`); interface methods do not, since a `dyn` call has one function per method. A `where` constraint names a `comptime` parameter and an interface (`where T: Shape`). A generic function or method spells out its error set (`E!T`).",
     r#"fn first(comptime n: i64, xs: []i64) i64 {
     return xs[0]
 }
