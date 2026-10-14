@@ -1,0 +1,29 @@
+struct Point {
+    x: f64
+
+    fn len(self: *Self) f64 {
+        return self.x
+    }
+
+    fn add(self: *Self, comptime T: type, n: T) f64 where T: Integer {
+        return self.x + n as f64
+    }
+}
+
+fn Box(comptime T: type) type {
+    return struct {
+        value: T
+
+        fn map(self: *Self, comptime U: type, f: fn(T) U) U {
+            return f(self.value)
+        }
+    }
+}
+
+pub fn main() {
+    let p = Point { x: 1.0 }
+    let f = p.len
+    let g = Point.add
+    let h = p.add
+    let m = Box(i32).map
+}
