@@ -660,6 +660,8 @@ Split build in debug mode, measured once: front end 0.5 s, then writing the file
 
 `aye build browser` is unchanged: 26,457,152 bytes of C, 9.6-9.9 s user + sys before and after.
 
+**What landed (O5.2f, card 2):** `aye test` builds its executable without `-g` (and so without `dsymutil`) unless `--cflags` is given, because no code in `src` reads DWARF and test failure positions are constants; on top of O5.2e and O5.2h `aye test browser` went from 3.12-3.28 s to 2.69-2.79 s wall (user 8.9-9.0 s to 6.2-6.6 s, macOS, load 7-9, interleaved runs, identical output), less than the -45% of the one-file clang because the 8 parts already run at once and 2.4 s of the wall is running the tests.
+
 ## A stream is counted after its first chunk drains (O3.6e)
 
 Since O3.6d a streaming response writes its body right after the head and
