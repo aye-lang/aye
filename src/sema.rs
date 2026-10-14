@@ -6322,6 +6322,11 @@ impl<'a> Checker<'a> {
                 let ename = &ename;
                 let def = &self.enums[ename];
                 let Some(index) = def.variants.iter().position(|v| v.name == *name) else {
+                    if self.fns.contains_key(&format!("{ename}.{name}")) {
+                        let t = Type::Enum(ename.clone());
+                        let (kind, ty) = self.method_value(&t, name, span)?;
+                        return Ok(TExpr { kind, ty, span });
+                    }
                     return err(
                         E0041,
                         span,
@@ -6345,6 +6350,13 @@ impl<'a> Checker<'a> {
                     Type::Enum(ename.clone()),
                 )
             }
+            // `Type.method`: the method as a function value.
+            ExprKind::Field { base, name }
+                if matches!(&base.kind, ExprKind::Ident(_) | ExprKind::Call { .. })
+                    && let Some(t) = self.static_type(base)? =>
+            {
+                self.method_value(&t, name, span)?
+            }
             ExprKind::Field { base, name } => {
                 let mut b = self.value(base, None)?;
                 // Field access dereferences one pointer level.
@@ -6365,7 +6377,7 @@ impl<'a> Checker<'a> {
                                     E0038,
                                     span,
                                     format!(
-                                        "`{name}` is a method of struct `{sname}`, not a field: call it with `.{name}(...)`"
+                                        "`{name}` is a method of struct `{sname}`, not a field: call it with `.{name}(...)`, or write `{sname}.{name}` for the method as a function value (a method bound to a value would need a closure)"
                                     ),
                                 );
                             }
@@ -6816,20 +6828,13 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// `base.name(args)`: a static call `Type.name(args)`, a method call on a
-    /// struct, a call through a `dyn`, or an allocator method.
-    fn method_call(
-        &mut self,
-        base: &ast::Expr,
-        name: &str,
-        args: &[ast::Expr],
-        span: Span,
-    ) -> Result<TExpr> {
-        // A type: a type name, a `comptime` parameter, or `F(T)`.
-        let static_ty = match &base.kind {
+    /// The type `base` names when it is a type, not a value: a type name,
+    /// a `comptime` parameter, an alias, or `F(T)`.
+    fn static_type(&mut self, base: &ast::Expr) -> Result<Option<Type>> {
+        Ok(match &base.kind {
             ExprKind::Ident(tn) if self.lookup(tn).is_none() && self.is_type_name(tn) => {
-                if let Some(Type::Builtin(b)) = Type::from_name(tn, self.layout) {
-                    return self.builtin_static(b, name, args, span);
+                if let Some(t @ Type::Builtin(_)) = Type::from_name(tn, self.layout) {
+                    return Ok(Some(t));
                 }
                 match (
                     self.env.iter().find(|(n, ..)| n == tn),
@@ -6838,13 +6843,7 @@ impl<'a> Checker<'a> {
                 ) {
                     (Some((_, t, _)), ..) => Some(t.clone()),
                     (None, "Self", Some(s)) => Some(self.named(s)),
-                    _ if self.alias_decls.contains_key(tn) => {
-                        let t = self.alias(tn, base.span)?;
-                        if let Type::Builtin(b) = t {
-                            return self.builtin_static(b, name, args, span);
-                        }
-                        Some(t)
-                    }
+                    _ if self.alias_decls.contains_key(tn) => Some(self.alias(tn, base.span)?),
                     _ => Some(self.named(tn)),
                 }
             }
@@ -6854,7 +6853,63 @@ impl<'a> Checker<'a> {
                 Some(self.type_arg(base, None)?)
             }
             _ => None,
+        })
+    }
+
+    /// `Type.name` without a call: the method as a function value, of type
+    /// `fn(<self param>, A...) R`.
+    fn method_value(&mut self, t: &Type, name: &str, span: Span) -> Result<(TExprKind, Type)> {
+        let tn = match t {
+            Type::Struct(n) | Type::Enum(n) => n.clone(),
+            _ => return err(E0071, span, format!("type `{t}` has no method `{name}`")),
         };
+        let key = format!("{tn}.{name}");
+        let Some(sig) = self.fns.get(&key).cloned() else {
+            let what = if matches!(t, Type::Enum(_)) {
+                "enum"
+            } else {
+                "struct"
+            };
+            return err(E0071, span, format!("{what} `{t}` has no method `{name}`"));
+        };
+        if let Some(ctx) = self.fn_decls.get(key.as_str())
+            && !ctx.decl.is_pub
+            && ctx.module(&key) != self.module
+        {
+            let module = ctx.module(&key);
+            return err(
+                E0082,
+                span,
+                format!("method `{key}` is not `pub` in module `{module}`"),
+            );
+        }
+        if let Type::ErrorUnion(set, _) = &sig.ret
+            && set.starts_with(INFERRED)
+        {
+            self.ensure_body(&key, span)?;
+        }
+        self.note_method(span, &key);
+        let kind = TExprKind::FnRef {
+            name: sig.c_key(&key),
+            is_extern: sig.is_extern,
+        };
+        let ret = if sig.noreturn { Type::Never } else { sig.ret };
+        Ok((kind, Type::Fn(sig.params, Box::new(ret))))
+    }
+
+    /// `base.name(args)`: a static call `Type.name(args)`, a method call on a
+    /// struct, a call through a `dyn`, or an allocator method.
+    fn method_call(
+        &mut self,
+        base: &ast::Expr,
+        name: &str,
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Result<TExpr> {
+        let static_ty = self.static_type(base)?;
+        if let Some(Type::Builtin(b)) = static_ty {
+            return self.builtin_static(b, name, args, span);
+        }
         if let Some(t) = static_ty {
             if let Type::Param(..) = t {
                 return err(

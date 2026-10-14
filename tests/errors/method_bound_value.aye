@@ -1,0 +1,12 @@
+struct Point {
+    x: f64
+
+    fn len(self: *Self) f64 {
+        return self.x
+    }
+}
+
+pub fn main() {
+    let p = Point { x: 1.0 }
+    let f = p.len
+}

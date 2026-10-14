@@ -244,7 +244,11 @@ pub fn main() {
   (`fn(A)` without a result). Store it in a variable, field, array, global
   or optional (`?fn(A) R`, nullable), pass it, return it and call it:
   `f(x)`, `s.field(x)` (when `s` has no method of that name), `get()(x)`.
-  Methods and generic functions are not values. A function type may say
+  A method is a value too, written `Type.m` (a generic struct with its
+  type arguments: `Box(i32).get`): its type is `fn(<self param type>, A...)
+  R`, so `Point.len` with `self: *Self` is a `fn(*Point) f64`. `x.m`
+  without a call is an error (a method bound to a value would need a
+  closure). Generic functions are not values. A function type may say
   `noreturn` (`fn([]u8) noreturn`, the type of a `noreturn` function, which
   is also a `fn([]u8)`): a call through such a value ends a block like a
   direct call.
@@ -271,6 +275,23 @@ pub fn main() {
     if g |h| {
         @println(apply(h, 5))
     }
+}
+```
+
+```aye
+struct Point {
+    x: f64
+    y: f64
+
+    fn len(self: *Self) f64 {
+        return self.x * self.x + self.y * self.y
+    }
+}
+
+pub fn main() {
+    let p = Point { x: 3.0, y: 4.0 }
+    let f: fn(*Point) f64 = Point.len
+    @println(f(&p) == p.len())
 }
 ```
 

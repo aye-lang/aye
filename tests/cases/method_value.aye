@@ -1,0 +1,57 @@
+// A method is a function value: `Type.m` has the type
+// `fn(<self param type>, A...) R` and is a C function pointer like a
+// top-level function. `x.m` without a call is an error (a method bound to
+// a value would need a closure).
+
+struct Point {
+    x: f64
+    y: f64
+
+    fn len(self: *Self) f64 {
+        return self.x * self.x + self.y * self.y
+    }
+
+    fn scaled(self: Self, k: f64) Point {
+        return Point { x: self.x * k, y: self.y * k }
+    }
+
+    fn origin() Point {
+        return Point { x: 0.0, y: 0.0 }
+    }
+}
+
+struct Metric {
+    name: []u8
+    measure: fn(*Point) f64
+}
+
+fn Box(comptime T: type) type {
+    return struct {
+        value: T
+
+        fn get(self: *Self) T {
+            return self.value
+        }
+    }
+}
+
+fn applyTwice(f: fn(Point, f64) Point, p: Point, k: f64) Point {
+    return f(f(p, k), k)
+}
+
+pub fn main() {
+    let p = Point { x: 3.0, y: 4.0 }
+    let f: fn(*Point) f64 = Point.len
+    let m = Metric { name: "len", measure: Point.len }
+    @println(f(&p))
+    @println(m.measure(&p))
+    @println(f(&p) == p.len())
+    @println(m.measure(&p) == p.len())
+    let q = applyTwice(Point.scaled, p, 2.0)
+    @println(q.x)
+    let o: fn() Point = Point.origin
+    @println(o().y)
+    let b = Box(i32) { value: 7 }
+    let g: fn(*Box(i32)) i32 = Box(i32).get
+    @println(g(&b))
+}

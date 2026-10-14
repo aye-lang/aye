@@ -1,6 +1,8 @@
 // Acceptance (O3.7): SQLite through `@cimport("sqlite3.h")`, no
 // hand-written declarations. An in-memory database, a table, two rows
-// inserted and read back with a prepared statement.
+// inserted and read back with a prepared statement, then again through
+// `sqlite3_exec` with a method as its C callback (O1.28): `Report.row` has
+// no `self` because C passes the callback's context as `void *`.
 @link("sqlite3")
 
 let c = @cimport("sqlite3.h")
@@ -10,6 +12,14 @@ extern fn strlen(s: [*]u8) usize
 fn text(p: ?[*]u8) []u8 {
     let q = p orelse return ""
     return q[0..strlen(q)]
+}
+
+struct Report {
+    fn row(arg: ?[*]u8, ncol: i32, vals: ?*mut ?[*]u8, names: ?*mut ?[*]u8) i32 {
+        let v = vals orelse return 1
+        @println(text(v.*))
+        return 0
+    }
 }
 
 fn exec(db: *mut c.sqlite3, sql: []u8) {
@@ -45,5 +55,9 @@ pub fn main() {
     }
     @println(rows)
     c.sqlite3_finalize(st)
+    let sel = "SELECT name FROM users ORDER BY id"
+    if c.sqlite3_exec(db, sel.ptr, Report.row, null, null) != c.SQLITE_OK {
+        @println("sqlite3_exec failed")
+    }
     c.sqlite3_close(db)
 }
