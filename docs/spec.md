@@ -1656,7 +1656,7 @@ std.diag      Diagnostics: coded messages over byte ranges, lineCol          bel
 std.os        args, getenv, exit, cpuCount, onStop/stopRequested (signals)  below
 std.process   child processes: spawn/spawnWith (env, cwd), wait, kill, killHard   aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
-std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn, wait (HTTP: std.http)  below
+std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn, wait      below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON: parse, get, asString, asNumber, at; write, stringify     below
 std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
@@ -1680,8 +1680,7 @@ a cookie as sent; each gives null when missing. The client is `http.get(arena,
 "http://host:8080/path")` (also `post`, `request`, `requestWith`): a
 `Response` with `status`, `headers`, `body` and `header(name)`, allocated
 in the arena; redirects are followed only on request; `https://` goes
-through libcurl (`HttpsUnsupported` where it is not linked), and
-`http.lastError(alloc)` gives libcurl's text for the last failed connect.
+through libcurl (`HttpsUnsupported` where it is not linked).
 
 ```aye
 import std.heap.General
