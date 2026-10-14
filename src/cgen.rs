@@ -1827,7 +1827,8 @@ fn extern_symbol(name: &str) -> &str {
     name.rsplit("::").next().unwrap()
 }
 
-/// C name of the Aye function `name`: `f`, `Struct.method` or `test#N`.
+/// C name of the Aye function `name`: `f`, `Struct.method`, an instance
+/// (`max(i64)`, `Box(i64).map(f64)`) or `test#N`.
 fn fn_name(name: &str) -> String {
     if let Some(n) = name
         .rsplit("::")
@@ -1836,10 +1837,20 @@ fn fn_name(name: &str) -> String {
     {
         return format!("aye_t_{n}");
     }
-    match name.rsplit_once('.') {
+    // The last `.` outside parentheses: `Box(i64).map(std.fs.File)`.
+    let mut depth = 0i32;
+    let dot = name.char_indices().rev().find(|&(_, c)| {
+        match c {
+            ')' => depth += 1,
+            '(' => depth -= 1,
+            _ => {}
+        }
+        c == '.' && depth == 0
+    });
+    match dot.map(|(i, _)| (&name[..i], &name[i + 1..])) {
         Some((s, m)) => {
             let s = c_name(s);
-            format!("aye_m_{}{s}_{m}", s.len())
+            format!("aye_m_{}{s}_{}", s.len(), c_name(m))
         }
         None => format!("aye_f_{}", c_name(name)),
     }

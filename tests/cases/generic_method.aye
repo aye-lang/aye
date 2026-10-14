@@ -1,0 +1,86 @@
+// A method with its own `comptime` parameters, on a plain struct and on a
+// type function's struct, instantiated per use like a generic function.
+
+interface Show {
+    fn show(self: *Self) i64
+}
+
+struct Num {
+    n: i64
+
+    fn show(self: *Self) i64 {
+        return self.n * 10
+    }
+}
+
+struct Counter {
+    count: i64
+
+    // A generic method on a plain struct.
+    pub fn add(self: *mut Self, comptime T: type, x: T) where T: Integer {
+        self.count += x as i64
+    }
+
+    pub fn shown(self: *Self, comptime T: type, x: *T) i64 where T: Show {
+        return self.count + x.show()
+    }
+}
+
+pub fn Box(comptime T: type) type {
+    return struct {
+        value: T
+
+        pub fn get(self: *Self) T {
+            return self.value
+        }
+
+        // A generic method on a type function's struct.
+        pub fn map(self: *Self, comptime U: type, f: fn(T) U) Box(U) {
+            return Box(U) { value: f(self.value) }
+        }
+
+        pub fn pair(self: *Self, comptime U: type, other: U) Pair(T, U) {
+            return Pair(T, U) { a: self.value, b: other }
+        }
+    }
+}
+
+pub fn Pair(comptime A: type, comptime B: type) type {
+    return struct {
+        a: A
+        b: B
+    }
+}
+
+fn half(x: i64) f64 {
+    return x as f64 / 2.0
+}
+
+fn positive(x: i64) bool {
+    return x > 0
+}
+
+fn negate(x: bool) bool {
+    return !x
+}
+
+pub fn main() {
+    var c = Counter { count: 1 }
+    c.add(u8, 200)
+    c.add(i32, -50)
+    Counter.add(&mut c, u8, 9)
+    @println(c.count)
+    let n = Num { n: 4 }
+    @println(c.shown(Num, &n))
+
+    let b = Box(i64) { value: 7 }
+    let h = b.map(f64, half)
+    @println(h.get())
+    let p = b.map(bool, positive)
+    @println(p.get())
+    let q = Box(i64).map(&b, bool, positive)
+    @println(q.map(bool, negate).value)
+    let pr = b.pair(bool, true)
+    @println(pr.a)
+    @println(pr.b)
+}

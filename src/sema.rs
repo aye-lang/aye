@@ -928,6 +928,22 @@ struct FnCtx<'a> {
     generic: Option<String>,
 }
 
+/// A method with its own `comptime` parameters (a generic method) of the
+/// struct or enum `owner`: instantiated per call like a generic function.
+#[derive(Clone)]
+struct GenericMethod<'a> {
+    decl: &'a ast::FnDecl,
+    owner: String,
+    /// The type function whose instance `owner` is, and its `comptime`
+    /// parameters with the types they stand for.
+    generic: Option<String>,
+    env: Vec<(String, Type, Span)>,
+    /// The name of the generic: `Point.map`, or `Box.map` for every instance
+    /// of the type function `Box`. Its own parameters are `Type::Param`s of
+    /// this name.
+    id: String,
+}
+
 impl FnCtx<'_> {
     /// The module of the function `key` with this context.
     fn module(&self, key: &str) -> String {
@@ -975,6 +991,11 @@ struct Checker<'a> {
     /// Generic functions (with `comptime` parameters) and type functions
     /// (returning `type`), by name.
     generics: HashMap<String, &'a ast::FnDecl>,
+    /// Generic methods by method key (`Point.map`, `Box(i64).map`), and
+    /// their declarations and receivers by generic name (`GenericMethod::id`).
+    generic_methods: HashMap<String, GenericMethod<'a>>,
+    method_generics: HashMap<String, &'a ast::FnDecl>,
+    method_recvs: HashMap<String, Recv>,
     /// Instances, memoized: (generic, type arguments) to the struct name of
     /// a type function's instance, or the key of a generic function's.
     instances: HashMap<(String, Vec<Type>), String>,
@@ -1114,6 +1135,9 @@ fn run(
         failures: 0,
         quiet: false,
         generics: HashMap::new(),
+        generic_methods: HashMap::new(),
+        method_generics: HashMap::new(),
+        method_recvs: HashMap::new(),
         instances: HashMap::new(),
         instance_structs: Vec::new(),
         instance_depth: HashMap::new(),
@@ -1950,11 +1974,17 @@ impl<'a> Checker<'a> {
             }
         }
         for (key, f, owner) in &decls {
+            if f.params.iter().any(|p| p.comptime)
+                && let Some(owner) = owner
+            {
+                self.generic_method(key, f, owner, None, true);
+                continue;
+            }
             if let Some(p) = f.params.iter().find(|p| p.comptime) {
                 self.report(Error::new(
                     E0076,
                     p.span,
-                    "only a top-level function can have `comptime` parameters",
+                    "only a top-level function or a method can have `comptime` parameters",
                 ));
             }
             let sig = self.register(key, f, owner.clone(), None);
@@ -2078,7 +2108,7 @@ impl<'a> Checker<'a> {
         self.queue.extend(
             decls
                 .iter()
-                .filter(|(_, f, _)| f.body.is_some())
+                .filter(|(k, f, _)| f.body.is_some() && !self.generic_methods.contains_key(k))
                 .map(|(k, ..)| k.clone()),
         );
         let own: Vec<String> = self
@@ -2647,9 +2677,9 @@ impl<'a> Checker<'a> {
         }
         let f = self.generics[g];
         let failures = self.failures;
-        self.generic_decl(f);
+        self.generic_decl(g, f);
         if !f.is_extern {
-            let own = self.own_params(f);
+            let own = self.own_params(g, f);
             if is_type_fn(f) {
                 let _ = self.instantiate_type(g, own, f.span);
             } else {
@@ -2672,8 +2702,7 @@ impl<'a> Checker<'a> {
     /// Check the declaration of the generic `f`: its `comptime` parameters,
     /// its `where` constraints (which are recorded) and, for a type
     /// function, the form of its body.
-    fn generic_decl(&mut self, f: &'a ast::FnDecl) {
-        let g = &f.name;
+    fn generic_decl(&mut self, g: &str, f: &'a ast::FnDecl) {
         if f.is_extern {
             self.report(
                 Error::new(
@@ -2744,7 +2773,7 @@ impl<'a> Checker<'a> {
                 ));
             } else {
                 self.bounds
-                    .entry((g.clone(), b.param.clone()))
+                    .entry((g.to_string(), b.param.clone()))
                     .or_default()
                     .push(b.iface.clone());
             }
@@ -2805,11 +2834,11 @@ impl<'a> Checker<'a> {
     }
 
     /// The generic `f`'s own `comptime` parameters, as abstract types.
-    fn own_params(&self, f: &ast::FnDecl) -> Vec<Type> {
+    fn own_params(&self, g: &str, f: &ast::FnDecl) -> Vec<Type> {
         f.params
             .iter()
             .filter(|p| p.comptime)
-            .map(|p| Type::Param(f.name.clone(), p.name.clone()))
+            .map(|p| Type::Param(g.to_string(), p.name.clone()))
             .collect()
     }
 
@@ -2913,7 +2942,12 @@ impl<'a> Checker<'a> {
                 .push((g.to_string(), args.to_vec(), span));
             return Ok(());
         }
-        let decl = self.generics[g];
+        let decl = self
+            .generics
+            .get(g)
+            .or(self.method_generics.get(g))
+            .copied()
+            .unwrap();
         let params: Vec<&ast::Param> = decl.params.iter().filter(|p| p.comptime).collect();
         for b in &decl.bounds {
             let Some(i) = params.iter().position(|p| p.name == b.param) else {
@@ -3024,7 +3058,7 @@ impl<'a> Checker<'a> {
                 is_union: false,
             },
         );
-        let identity = key.1 == self.own_params(decl);
+        let identity = key.1 == self.own_params(g, decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
         if is_abstract {
             self.abstract_structs.insert(name.clone());
@@ -3078,15 +3112,9 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             }
-            if let Some(p) = m.params.iter().find(|p| p.comptime) {
-                self.report(
-                    Error::new(
-                        E0076,
-                        p.span,
-                        "only a top-level function can have `comptime` parameters",
-                    )
-                    .ending(p.name_end),
-                );
+            if m.params.iter().any(|p| p.comptime) {
+                self.generic_method(&key, m, &name, Some(g), identity);
+                continue;
             }
             self.register(&key, m, Some(name.clone()), Some(g.to_string()));
             keys.push(key);
@@ -3122,7 +3150,7 @@ impl<'a> Checker<'a> {
             self.instance_sites.insert(name.clone(), span);
         }
         self.instances.insert(key.clone(), name.clone());
-        let identity = key.1 == self.own_params(decl);
+        let identity = key.1 == self.own_params(g, decl);
         let is_abstract = key.1.iter().any(|t| self.has_param(t));
         let env = Self::comptime_env(decl, &key.1);
         let saved = (std::mem::replace(&mut self.env, env), self.quiet);
@@ -3135,6 +3163,133 @@ impl<'a> Checker<'a> {
             self.queue.push(name.clone());
         }
         Ok(name)
+    }
+
+    /// Record the generic method `f` of `owner` as the method `key`, with
+    /// the `comptime` parameters of `owner`'s type function `generic` in
+    /// `self.env`. For a plain struct, and for a type function's instance
+    /// for its own parameters, check its declaration and make its instance
+    /// for its own parameters, through which its definition is checked once.
+    fn generic_method(
+        &mut self,
+        key: &str,
+        f: &'a ast::FnDecl,
+        owner: &str,
+        generic: Option<&str>,
+        define: bool,
+    ) {
+        let id = generic.map_or(key.to_string(), |g| format!("{g}.{}", f.name));
+        self.generic_methods.insert(
+            key.to_string(),
+            GenericMethod {
+                decl: f,
+                owner: owner.to_string(),
+                generic: generic.map(str::to_string),
+                env: self.env.clone(),
+                id: id.clone(),
+            },
+        );
+        self.method_generics.insert(id.clone(), f);
+        if define && self.defined.insert(id.clone()) {
+            let failures = self.failures;
+            self.generic_decl(&id, f);
+            let own = self.own_params(&id, f);
+            if let Ok(k) = self.instantiate_method(key, own, f.span)
+                && let Some(&r) = self.recvs.get(&k)
+            {
+                self.method_recvs.insert(id.clone(), r);
+            }
+            if self.failures > failures {
+                self.failed.insert(id.clone());
+            }
+        }
+    }
+
+    /// The function key of the generic method `key` for the type arguments
+    /// `args` (memoized), registered and queued like `instantiate_fn`.
+    fn instantiate_method(&mut self, key: &str, args: Vec<Type>, span: Span) -> Result<String> {
+        let m = self.generic_methods[key].clone();
+        self.check_bounds(&m.id, &args, span)?;
+        let ikey = (key.to_string(), args);
+        if let Some(k) = self.instances.get(&ikey) {
+            return Ok(k.clone());
+        }
+        self.instance_depth(&m.id, &ikey.1, span)?;
+        let name = self.instance_name(key, &ikey.1);
+        self.instance_names.insert(name.clone());
+        let is_abstract =
+            self.abstract_structs.contains(&m.owner) || ikey.1.iter().any(|t| self.has_param(t));
+        if !is_abstract {
+            self.instance_sites.insert(name.clone(), span);
+        }
+        self.instances.insert(ikey.clone(), name.clone());
+        let identity = ikey.1 == self.own_params(&m.id, m.decl)
+            && m.env.iter().all(|(n, t, _)| {
+                matches!(t, Type::Param(g, p) if Some(g) == m.generic.as_ref() && p == n)
+            });
+        let failed = self.failed.contains(&m.id)
+            || m.generic.as_ref().is_some_and(|g| self.failed.contains(g));
+        let mut env = m.env.clone();
+        env.extend(Self::comptime_env(m.decl, &ikey.1));
+        let saved = (std::mem::replace(&mut self.env, env), self.quiet);
+        if !identity && failed {
+            self.quiet = true;
+        }
+        self.register(&name, m.decl, Some(m.owner.clone()), Some(m.id.clone()));
+        (self.env, self.quiet) = saved;
+        if identity || !is_abstract {
+            self.queue.push(name.clone());
+        }
+        Ok(name)
+    }
+
+    /// A call of the generic method `key`, with the receiver `recv` of
+    /// `x.m(...)` (`None` for `Type.m(x, ...)`). The arguments of its
+    /// `comptime` parameters are types; they select the instance that is
+    /// called with the other arguments.
+    fn generic_method_call(
+        &mut self,
+        key: &str,
+        recv: Option<TExpr>,
+        args: &[ast::Expr],
+        span: Span,
+    ) -> Result<TExpr> {
+        let f = self.generic_methods[key].decl;
+        // The receiver is the first parameter that is not `comptime`.
+        let skip = recv
+            .is_some()
+            .then(|| f.params.iter().position(|p| !p.comptime))
+            .flatten();
+        let params: Vec<&ast::Param> = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != skip)
+            .map(|(_, p)| p)
+            .collect();
+        if args.len() != params.len() {
+            return err(
+                E0029,
+                span,
+                format!(
+                    "method `{key}` takes {} argument(s) but {} were given",
+                    params.len(),
+                    args.len()
+                ),
+            );
+        }
+        let mut types = Vec::new();
+        let mut values = Vec::new();
+        for (p, a) in params.iter().zip(args) {
+            if p.comptime {
+                types.push(self.type_arg(a, Some(&p.name))?);
+            } else {
+                values.push(a.clone());
+            }
+        }
+        let instance = self.instantiate_method(key, types, span)?;
+        self.note_method(span, &instance);
+        self.call(&instance, recv, &values, span)
     }
 
     /// Resolve the signature of `f` and register it as the function `key`
@@ -3245,7 +3400,7 @@ impl<'a> Checker<'a> {
                     Error::new(
                         E0076,
                         p.span,
-                        "only a top-level function can have `comptime` parameters",
+                        "an interface method cannot have `comptime` parameters (a `dyn` call has one function per method)",
                     )
                     .ending(p.name_end),
                 );
@@ -6875,6 +7030,9 @@ impl<'a> Checker<'a> {
                 Type::Enum(_) => "enum",
                 _ => "type",
             };
+            if what != "type" && self.generic_methods.contains_key(&key) {
+                return self.generic_method_call(&key, None, args, span);
+            }
             if what == "type" || !self.fns.contains_key(&key) {
                 return err(
                     E0071,
@@ -6904,7 +7062,11 @@ impl<'a> Checker<'a> {
         match inner {
             Type::Struct(s) | Type::Enum(s) => {
                 let key = format!("{s}.{name}");
-                let Some(&r) = self.recvs.get(&key) else {
+                let generic = self
+                    .generic_methods
+                    .get(&key)
+                    .and_then(|m| self.method_recvs.get(&m.id));
+                let Some(&r) = self.recvs.get(&key).or(generic) else {
                     let Some(def) = self.structs.get(&s) else {
                         return err(E0071, span, format!("enum `{s}` has no method `{name}`"));
                     };
@@ -6938,7 +7100,9 @@ impl<'a> Checker<'a> {
                         format!("struct `{s}` has no method `{name}`{hint}"),
                     );
                 };
-                self.note_method(span, &key);
+                if generic.is_none() {
+                    self.note_method(span, &key);
+                }
                 let recv = match r {
                     Recv::Static => {
                         return err(
@@ -6950,6 +7114,9 @@ impl<'a> Checker<'a> {
                     Recv::Value => deref(recv),
                     Recv::Ptr(m) => self.receiver_ptr(recv, m, name)?,
                 };
+                if self.generic_methods.contains_key(&key) {
+                    return self.generic_method_call(&key, Some(recv), args, span);
+                }
                 self.call(&key, Some(recv), args, span)
             }
             Type::Dyn(iface) => {
