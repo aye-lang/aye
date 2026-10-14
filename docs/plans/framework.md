@@ -53,9 +53,9 @@ first part of FD1/FD2 (literal routes, a page, the 404).
 | F0 | Design | `docs/framework.md` answers the open choices | done (user questions open) |
 | F1 | Hello-world route served by an Aye HTTP server | `cargo test --release --test framework` | done (F1.1, 2026-10-10) |
 | F2 | Routing, pages, API routes, static files (FD1–FD4) | example app checks | resumed 2026-10-11: F1.1b/c, F1.2, F1.3, F2.1, F2.2 done; F1.2a, F1.3a, F2.2a, F2.1a done; F2 complete except FD7 `@embedFile` (production) |
-| F3 | Dev server (FD5) | edit → new response, scripted | F3.1–F3.7 and F2.3 done 2026-10-11 (Chrome by hand still open); next F4/F5 cards |
-| F4 | Client code (FD6) | an island under Node 22 and in Chrome | cards written (F4.1 to F4.5; Chrome by hand) |
-| F5 | Production build, numbers, the example app (FD7–FD9) | FD7–FD9 checks | cards written (F5.1 to F5.9; F5.3 waits for O1.23) |
+| F3 | Dev server (FD5) | edit → new response, scripted | done: F3.1–F3.7 and F2.3 2026-10-11; browser check 2026-10-14 (headless `agent-browser` on a copy of `examples/pages`: an edit to `about/page.aye` reloads the open page by itself in ~3 s, a compile error shows the error page, the fix brings the page back) |
+| F4 | Client code (FD6) | an island under Node 22 and in Chrome | done: F4.1–F4.5; browser check 2026-10-14 (`/counter` server-renders `Count: 3`, two clicks give `Count: 5`, `counter.wasm` and `/_web/events` load, no console errors) |
+| F5 | Production build, numbers, the example app (FD7–FD9) | FD7–FD9 checks | done: F5.1–F5.9 |
 
 ## Cards: F1
 

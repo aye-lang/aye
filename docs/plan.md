@@ -33,15 +33,19 @@ O3.9e (wrk: no keep-alive skew, no code), O5.2b and O5.1b (warm each
 root's test executable: 450 ms to 5 ms), O5.2f (`aye test` without `-g`:
 -14% wall on `aye test browser`), CI sharding (#13), the lsp debounce
 test made deterministic (#11, #14). Criterion O3: gaps 49-56 fixed or
-declined (decisions.md "Compiler gaps closed out, round 2 (O3)"); the
-anyknown side is PR aye-lang/anyknown#1 (docs only), which waits for the
-user (their repo). After it merges, move `tests/downstream/ANYKNOWN_REV`
-to the merged rev. Downstream green at a067dfd.
+declined (decisions.md "Compiler gaps closed out, round 2 (O3)"), and
+anyknown#1 moved its gap file's "## Open" to empty. O6.1c (lsp end spans)
+merged from the cloud.
 
-Still running in the cloud at handoff: O6.1c (lsp end spans for the
-remaining codes). Check `gh run list`, the origin/main log, and remote
-branches named `<step>-<slug>` (a pushed-but-unmerged branch means the
-session stopped under a stop rule: read its last commit).
+Anyknown maintenance the same day, each a PR merged on anyknown's own CI
+(macOS + ubuntu): #2 and #4 fix both known flaky tests (image load/error
+fired in the finishing task; a dropped in-flight load is held, one fetch
+per document), #3 O1.17c, #5 O1.14c (`@targetOs()` in the browser), #6
+P8.x (`std.fs.readDir` in archive.aye). `tests/downstream/ANYKNOWN_REV`
+points at anyknown main after these. Framework browser checks (island,
+dev reload) passed in headless `agent-browser` (plans/framework.md F3,
+F4); the no-browser hook allows that shim, so such checks are agent
+work. Check `gh run list` and remote `<step>-<slug>` branches on resume.
 
 Cloud-prompt rules (learned): the session ends when its turn ends, so
 every long command runs in the foreground with a 10 minute timeout,
@@ -52,17 +56,17 @@ VM (skipped, say so; the Mac runs it). The scheduler fires `run_once_at`
 routines up to 30 min late; a manual `run` makes a late one fire twice.
 Sessions often leave their merged branch on origin: prune them.
 
-Left in the backlog (`plans/aye.md`): O1.17c (anyknown test page,
-user's repo); anyknown follow-ups (`isDarwin`/`clock()` to
-`@targetOs()`, P8.x, P-flaky) live in aye-lang/anyknown. Framework: the
-Chrome manual checks (dev reload, island) need the user. All criteria
-O1-O13 hold on main once anyknown#1 merges (O3's file lives there).
+State: all criteria O1–O13 hold; the Aye backlog in `plans/aye.md` has
+no open card; framework F0–F5 are done. Next, per the goal at the top:
+resume the anyknown browser in its own repo (its `docs/plans/browser.md`
+backlog: P3.63, P1.6, P1.14, ...), with this repo in maintenance and
+performance mode (new cards from downstream needs or measurements).
 
 ## Lanes
 
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
-| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O1–O13 hold (2026-10-14; O3 pending anyknown#1); backlog nearly empty | O6.1c (cloud); anyknown#1 then ANYKNOWN_REV | cloud routines; local Mac for macOS-only PRs |
+| Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O1–O13 hold (2026-10-14); backlog empty | maintenance; cards from downstream needs | cloud routines; local Mac for macOS-only PRs |
 | Browser ([`plans/anyknown.md`](plans/anyknown.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/anyknown` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the anyknown repo | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F3 (dev server) done 2026-10-11; F4 islands next (F4.1 spike first) | local or cloud |
 
