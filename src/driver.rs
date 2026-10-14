@@ -513,9 +513,10 @@ pub struct CProgram {
     pub links: Vec<String>,
     /// More flags for clang (`--cflags`), such as `-fsanitize=thread`.
     pub cflags: Vec<String>,
-    /// Run `dsymutil` after the link on macOS when the flags give debug
-    /// information (a `.dSYM` next to the executable).
-    pub dsym: bool,
+    /// Keep the `-g` of the mode's flags (and run `dsymutil` after the link
+    /// on macOS, a `.dSYM` next to the executable). `aye test` leaves it
+    /// out unless `--cflags` is given.
+    pub debug: bool,
     pub target: &'static Target,
 }
 
@@ -550,7 +551,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         parts,
         links,
         cflags: Vec::new(),
-        dsym: true,
+        debug: true,
         target,
     })
 }
@@ -669,7 +670,7 @@ pub fn compile_tests_to_c(
             parts,
             links,
             cflags: Vec::new(),
-            dsym: true,
+            debug: true,
             target,
         },
         typed.tests,
@@ -843,8 +844,9 @@ pub fn run_tests(
         };
         c.cflags = cflags.to_vec();
         // The failure positions of a test come from constants, not from
-        // DWARF; only `--cflags` (a sanitizer's report) needs the symbols.
-        c.dsym = !cflags.is_empty();
+        // DWARF; only `--cflags` (a sanitizer's report) needs the symbols,
+        // and `-g` is 45% of the compile time of a big test executable.
+        c.debug = !cflags.is_empty();
         let mut todo = Vec::new();
         for (i, mut test) in tests.into_iter().enumerate() {
             let at =
@@ -1353,7 +1355,7 @@ fn compile_parts(
         // clang runs `dsymutil` itself only when it also compiles: without
         // it, the debug information stays in the objects, which are
         // removed.
-        if p.dsym && p.target.os == Os::Macos && debug_info(mode, &p.cflags) {
+        if p.debug && p.target.os == Os::Macos && debug_info(mode, &p.cflags) {
             let status = Command::new("dsymutil")
                 .arg(out)
                 .status()
@@ -1447,7 +1449,7 @@ fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
         cmd.args(cross_link_args(p.target, host_target(), sysroot.as_deref()));
     }
     cmd.arg("-Wno-incompatible-library-redeclaration")
-        .args(mode.clang_flags())
+        .args(mode.clang_flags().iter().filter(|f| p.debug || **f != "-g"))
         .args(&p.cflags);
     Ok(cmd)
 }

@@ -76,14 +76,14 @@ built-in database and cloud clients (`@cimport` covers them).
 
 | Phase | Goal | Exit check | Status |
 |---|---|---|---|
-| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | open: O3 (gaps #50, #52, #53) |
+| P2 | Stage0 close-out (O1–O5) | the O1–O5 checks | done 2026-10-14: O3 gaps 49–56 fixed or declined (O1.14, O1.28, O1.29, decisions.md round 2); anyknown#1 updates the gap file |
 | O1.x | Server basics: conformance harness, `std.net`, `std.http` server, fs/path, process | `cargo test --release --test conformance` prints the table; a hello-world `std.http` golden answers | done 2026-10-10 |
 | O3.x | std breadth: JSON, time, crypto, HTTP client (O6) | the O6 check | done 2026-10-10 (O6 holds) |
-| O2.x | Targets incl. wasm32 (O8) | the O8 check | current |
-| O5.x | `aye test` maturity (O9) | `aye test browser` (downstream check) | backlog |
-| O4.x | Dependencies (O7) | the O7 check | backlog |
-| O6.x | LSP and HTML docs (O10) | the O10 check | backlog |
-| O7.x | Numbers and the gate (O11–O13) | the O11–O13 checks | backlog |
+| O2.x | Targets incl. wasm32 (O8) | the O8 check | done (O8 holds 2026-10-11) |
+| O5.x | `aye test` maturity (O9) | `aye test browser` (downstream check) | done (O9 holds; O5.1b, O5.2b, O5.2f 2026-10-14) |
+| O4.x | Dependencies (O7) | the O7 check | done (O7 holds) |
+| O6.x | LSP and HTML docs (O10) | the O10 check | done (O10 holds); O6.1c polish in the cloud |
+| O7.x | Numbers and the gate (O11–O13) | the O11–O13 checks | done (O11–O13 hold 2026-10-11) |
 
 Steps that add std functions touch `docs/spec.md` §15 and the std
 sources `tests/spec.rs` reads; they merge one after the other.
@@ -162,7 +162,7 @@ brackets.
 - O3.7 (done 2026-10-12) SQLite through `@cimport("sqlite3.h")` as a `tests/ffi` program (Bun table).
 - O5.1b the first test of each root takes ~500 ms on macOS (first-exec cost, O5.1 report); measure and, if it is the exe's first launch, start the timer after a warm-up `--list` run. Verify: `treetests` first-test time drops below 50 ms. Done 2026-10-14 by O5.2b: each root is warmed before its tests, first test 5 ms.
 - P-tmp (done 2026-10-13: 7406 folders removed, no old binary running) about 7000 stale `aye-run-*.dSYM`/`aye-test-*.dSYM` folders sit in `$TMPDIR` from before O5.2g; delete them once no agent runs an old binary (`rm -rf $TMPDIR/aye-run-*.dSYM $TMPDIR/aye-test-*.dSYM`).
-- O5.2f drop `-g` for `aye test` executables unless `--cflags` is given (−45% on top of O5.2e; no code reads DWARF). Decide after O5.2e.
+- O5.2f drop `-g` for `aye test` executables unless `--cflags` is given (−45% on top of O5.2e; no code reads DWARF). Decide after O5.2e. Done (2026-10-14, local): `run_tests` clears `CProgram.debug` unless `--cflags` is given, so `clang_cmd` leaves `-g` out of the mode's flags (and `dsymutil` is skipped); `build`/`run` unchanged; `aye test browser` (macOS, 10 cores, load 7-9, interleaved 3 runs): wall 3.12/3.21/3.28 s → 2.75/2.79/2.69 s, user 8.9-9.0 s → 6.2-6.6 s, output identical; golden 618/121/93, lib 54.
 - O5.2b per-test `ms` is inflated under `-j` by the first-exec cost of a fresh binary (~0.5 s on macOS, same cause as O1.17b and O5.1b); warm the binary once before fanning out. Verify: `treetests` times under 50 ms after the first. Done 2026-10-14 (local, PR): `warm_up(target, exe)` in `src/driver.rs` runs each root's test executable once (no arguments, native only) before `run_parallel`; `treetests -j 4` 450 ms → 5 ms per test.
 - O6.2a lsp navigation leftovers (O6.2 report): done: member accesses through sema types (`x.method()`, fields, chains), path deps of `aye.toml`, past-the-end cursor, block scopes (sibling blocks and loops), one declaration renderer (`doc::render_decl`) for `aye doc --signatures` and hover. Left: `@cimport` modules (hover/definition of C declarations; sema records no member access on them) and URL deps outside sema. Verify: tests/lsp.rs cases.
 - O6.3a (done 2026-10-11, 025ae16) `aye doc --html` leftovers (O6.3 report): struct member `///` comments stay inside the signature block instead of becoming paragraphs; root page name is the path stem (`index` → `index_module.html`); the website (X3, `site/`) should use it for the std reference. Verify: a `shapes` fixture change plus the site build.
