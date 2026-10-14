@@ -874,15 +874,7 @@ pub fn run_tests(
             remove_dsym(&exe);
             return Err(TestError::Run(e));
         }
-        // The first launch of a new executable is slow on macOS (`syspolicyd`
-        // assesses it, ~0.5 s): one launch without arguments (it exits at
-        // once) before the timed test processes.
-        if !c.target.is_wasm() {
-            let _ = Command::new(&exe)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        warm_up(c.target, &exe);
         let done = run_parallel(jobs, todo.len(), |k| {
             let (i, name, _) = &todo[k];
             run_one(c.target, &exe, *i, name.clone(), &files, time_limit)
@@ -956,6 +948,20 @@ const SIGXCPU: i32 = 24;
 /// limit): the kernel kills it at that limit (`RLIMIT_CPU`). It is also
 /// killed after 10 times the limit (at least 60 s) of wall time, so that a
 /// test that sleeps cannot hang the run.
+/// The first launch of a new executable is slow on macOS (`syspolicyd`
+/// assesses it, ~0.5 s): one launch without arguments (it exits at once)
+/// before the timed test processes. Native targets only; wasm runs under
+/// node.
+fn warm_up(target: &Target, exe: &Path) {
+    if !target.is_wasm() {
+        let _ = target
+            .run_command(exe)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 fn run_one(
     target: &Target,
     exe: &Path,
@@ -1509,6 +1515,27 @@ fn clang_failed(p: &CProgram, link: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warm_up_launches_a_native_executable_once_and_skips_wasm() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aye-warm-up-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("exe");
+        let log = dir.join("launches");
+        std::fs::write(
+            &exe,
+            format!("#!/bin/sh\necho \"$#\" >> '{}'\nexit 2\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        warm_up(find_target("wasm32-wasip1").unwrap(), &exe);
+        assert!(!log.exists(), "wasm runs under node: no warm-up launch");
+        warm_up(find_target("aarch64-macos").unwrap(), &exe);
+        // One launch, with no arguments (a test index would run a test).
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "0\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn cross_link_args_for_linux_from_macos() {
