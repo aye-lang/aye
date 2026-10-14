@@ -192,6 +192,34 @@ pub struct Conn {
     }
 }
 
+/// What `wait` waits for: data to read (or the peer closing), or room to
+/// write.
+pub enum Ready { Read, Write }
+
+/// Waits at most `ms` milliseconds until the socket `fd` (`Conn.fd()`,
+/// `Listener.fd()`, or a socket from a C library) is ready: readable for
+/// `Ready.Read` (a listener: a connection to accept), writable for
+/// `Ready.Write`. True when it is, also when the socket failed or the peer
+/// hung up, so that the next read or write reports it; false when `ms`
+/// passed first. `ms` 0 only checks.
+pub fn wait(fd: i32, ready: Ready, ms: u32) bool {
+    var ev = POLLIN
+    if ready == Ready.Write {
+        ev = POLLOUT
+    }
+    var fds = [1]PollFd{PollFd { fd: fd, events: ev, revents: 0 }}
+    while true {
+        let r = poll(fds[..].ptr, 1, ms as i32)
+        if r >= 0 {
+            return r > 0
+        }
+        if errno() != EINTR {
+            return true
+        }
+    }
+    unreachable
+}
+
 /// Listens on `host` at `port`; port 0 lets the system pick one
 /// (`Listener.port`). `host` is a dotted IPv4 address, an IPv6 address
 /// (`::1`, `::` for every interface), a host name (`getaddrinfo`), or

@@ -1,0 +1,28 @@
+// O3.5a: `net.wait` waits for a socket to be ready, with a timeout. A
+// listener with no client times out; once a client connects it is ready.
+// A connection with no data times out for reading and is ready for
+// writing; after the peer writes it is ready for reading.
+
+import std.net
+import std.net.Ready
+import std.time
+
+pub fn main() !void {
+    let l = try net.listen("127.0.0.1", 0)
+    defer l.close()
+    let t0 = time.monotonicMs()
+    @println(net.wait(l.fd(), Ready.Read, 50))
+    @println(time.monotonicMs() - t0 >= 40)
+    let c = try net.connect("127.0.0.1", l.port())
+    defer c.close()
+    @println(net.wait(l.fd(), Ready.Read, 5000))
+    let s = try l.accept()
+    defer s.close()
+    @println(net.wait(s.fd(), Ready.Read, 20))
+    @println(net.wait(c.fd(), Ready.Write, 5000))
+    try c.write("hi")
+    @println(net.wait(s.fd(), Ready.Read, 5000))
+    var buf = @zeroed([4]u8)
+    let n = try s.read(buf[..])
+    @println(buf[0..n])
+}

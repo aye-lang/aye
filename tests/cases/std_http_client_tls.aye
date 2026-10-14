@@ -2,7 +2,8 @@
 // mode). It generates a self-signed certificate for localhost, starts
 // `openssl s_server` as a local TLS server, fetches a page with the
 // certificate as `caFile`, and shows that a fetch without it, or with a
-// missing CA file, fails with TlsFailed. The harness skips this case when
+// missing CA file, fails with TlsFailed (and `http.lastError` keeps
+// libcurl's text). The harness skips this case when
 // `openssl` or libcurl is missing (`std_http_client_tls.needs` and
 // `.tools`).
 
@@ -108,6 +109,9 @@ fn run(alloc: Allocator, dir: []u8, port: u16) {
     fetch(alloc, "127.0.0.1 with caFile", with, url(alloc, "127.0.0.1", port))
     fetch(alloc, "without caFile", without, url(alloc, "localhost", port))
     fetch(alloc, "missing caFile", missing, url(alloc, "localhost", port))
+    let why: []u8 = http.lastError(alloc) catch ""
+    @print("lastError names the host and libcurl: ")
+    @println(text.startsWith(why, "https connect to localhost:") && text.indexOf(why, "failed (libcurl ") != null)
     if http.post(alloc, url(alloc, "localhost", port), "text/plain", "x") |r| {
         @println("post: unexpected success")
     } else |e| {

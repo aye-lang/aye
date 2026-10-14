@@ -1,0 +1,16 @@
+import std.net
+
+pub fn main() !void {
+    let l = try net.listen("127.0.0.1", 0)
+    defer l.close()
+    @println(net.wait(l.fd(), net.Ready.Read, 0))
+    let c = try net.connect("127.0.0.1", l.port())
+    @println(net.wait(l.fd(), net.Ready.Read, 5000))
+    let s = try l.accept()
+    @println(net.wait(s.fd(), net.Ready.Read, 0))
+    c.close()
+    @println(net.wait(s.fd(), net.Ready.Read, 5000))
+    var buf = @zeroed([4]u8)
+    @println(s.read(buf[..]) catch 99)
+    s.close()
+}

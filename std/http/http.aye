@@ -1443,9 +1443,67 @@ extern fn sched_yield() i32
 // TLS handshake, the certificate check and the host-name check; the bytes
 // then move with `curl_easy_send` and `curl_easy_recv`. The request writer
 // and the response parser are the same for both. Without libcurl, an
-// `https://` URL is `HttpsUnsupported`. When the environment variable
-// `AYE_HTTP_DEBUG` is set, a failed connect logs libcurl's text with
-// `std.log.info`.
+// `https://` URL is `HttpsUnsupported`. A failed https connect keeps
+// libcurl's text for `lastError`.
+
+// The text of the last failed https connect (`lastError`), shared by
+// every thread of the program.
+var lastErrLock = Mutex.init()
+var lastErrBuf = [320]u8{0, ..}
+var lastErrLen: usize = 0
+
+/// What libcurl said about the most recent `https://` connect of this
+/// program that failed (any thread): "https connect to <host:port> failed
+/// (libcurl <code>): <text>", a copy in `alloc`; "" when none failed. The
+/// error tag (`TlsFailed`, `ConnectFailed`, ...) is what to act on; this
+/// text is for a log line or a bug report.
+pub fn lastError(alloc: Allocator) AllocError![]mut u8 {
+    lastErrLock.lock()
+    defer lastErrLock.unlock()
+    let out = try alloc.alloc(0 as u8, lastErrLen)
+    mem.copy(out, lastErrBuf[0..lastErrLen])
+    return out
+}
+
+// Keeps the text `lastError` gives, cut to 320 bytes.
+fn keepError(authority: []u8, code: i32, detail: []u8) {
+    var digits = [12]u8{0, ..}
+    var n: usize = 0
+    var v = code as i64
+    if v < 0 {
+        v = 0
+    }
+    while true {
+        digits[n] = (48 + v % 10) as u8
+        n += 1
+        v = v / 10
+        if v == 0 {
+            break
+        }
+    }
+    lastErrLock.lock()
+    defer lastErrLock.unlock()
+    lastErrLen = 0
+    keepBytes("https connect to ")
+    keepBytes(authority)
+    keepBytes(" failed (libcurl ")
+    while n > 0 {
+        n -= 1
+        keepBytes(digits[n..n + 1])
+    }
+    keepBytes("): ")
+    keepBytes(detail)
+}
+
+// Appends what fits of `b` to the `lastError` text (lock held).
+fn keepBytes(b: []u8) {
+    var i: usize = 0
+    while i < b.len && lastErrLen < lastErrBuf.len {
+        lastErrBuf[lastErrLen] = b[i]
+        lastErrLen += 1
+        i += 1
+    }
+}
 
 /// Why a client call gave no response. `InvalidUrl`, `UnsupportedScheme`
 /// (not http or https) come from the URL; `HttpsUnsupported` is an
@@ -1762,13 +1820,15 @@ fn writeRequest(out: *mut Builder, u: Url, method: []u8, headers: []Header, body
 struct Stream {
     conn: ?Conn
     curl: ?*mut Curl
+    // The socket of `curl` (CURLINFO_ACTIVESOCKET), for `net.wait`.
+    sock: i32
 
     // Waits at most `ms` for data: the number of bytes read, 0 when the
     // peer has closed.
     fn read(self: Self, buf: []mut u8, ms: u32) ClientError!usize {
         if self.curl |h| {
             if @hasLink("libcurl") {
-                return tlsRead(h, buf, ms)
+                return tlsRead(h, self.sock, buf, ms)
             } else {
                 return ClientError.HttpsUnsupported
             }
@@ -1788,7 +1848,7 @@ struct Stream {
     fn write(self: Self, bytes: []u8, ms: u32) ClientError!void {
         if self.curl |h| {
             if @hasLink("libcurl") {
-                return tlsWrite(h, bytes, ms)
+                return tlsWrite(h, self.sock, bytes, ms)
             } else {
                 return ClientError.HttpsUnsupported
             }
@@ -1814,7 +1874,12 @@ fn openStream(alloc: Allocator, opts: ClientOptions, u: Url) ClientError!Stream 
     if u.https {
         if @hasLink("libcurl") {
             let h = try tlsConnect(alloc, opts, u)
-            return Stream { conn: null, curl: h }
+            var sock: i32 = -1
+            if curl_easy_getinfo(h, CURLINFO_ACTIVESOCKET, &mut sock) != 0 || sock < 0 {
+                curl_easy_cleanup(h)
+                return ClientError.ConnectFailed
+            }
+            return Stream { conn: null, curl: h, sock: sock }
         } else {
             return ClientError.HttpsUnsupported
         }
@@ -1829,7 +1894,7 @@ fn openStream(alloc: Allocator, opts: ClientOptions, u: Url) ClientError!Stream 
             .ConnectFailed => ClientError.ConnectFailed
         }
     }
-    return Stream { conn: conn, curl: null }
+    return Stream { conn: conn, curl: null, sock: -1 }
 }
 
 // One request on its own connection.
@@ -2015,6 +2080,7 @@ extern fn curl_easy_send(h: *mut Curl, buf: [*]u8, n: usize, sent: *mut usize) i
 extern fn curl_easy_recv(h: *mut Curl, buf: [*]u8, n: usize, got: *mut usize) i32
 extern fn curl_easy_cleanup(h: *mut Curl)
 extern fn curl_easy_strerror(code: i32) [*]u8
+extern fn curl_easy_getinfo(h: *mut Curl, info: i32, ...) i32
 extern fn strlen(s: [*]u8) usize
 
 let CURLOPT_URL: i32 = 10002
@@ -2027,6 +2093,8 @@ let CURLOPT_HTTP_VERSION: i32 = 84
 // CURL_HTTP_VERSION_1_1: no ALPN offer of h2.
 let CURL_HTTP_VERSION_1_1: i64 = 2
 let CURLE_AGAIN: i32 = 81
+// CURLINFO_SOCKET (0x500000) + 44; the value is a curl_socket_t (an int).
+let CURLINFO_ACTIVESOCKET: i32 = 5242924
 
 // The error tag of a failed connect (`curl_easy_perform` result `code`).
 fn tlsConnectError(code: i32) ClientError {
@@ -2074,36 +2142,31 @@ fn tlsConnect(alloc: Allocator, opts: ClientOptions, u: Url) ClientError!*mut Cu
     // `err` ends with this call: libcurl must not keep the pointer.
     curl_easy_setopt(h, CURLOPT_ERRORBUFFER, 0 as i64)
     if code != 0 {
-        if os.getenv("AYE_HTTP_DEBUG") |_| {
-            var detail = err[0..strlen(err[..].ptr)]
-            if detail.len == 0 {
-                let t = curl_easy_strerror(code)
-                detail = t[0..strlen(t)]
-            }
-            std.log.info("std.http: https connect to {} failed (libcurl {}): {}", u.authority, code, detail)
+        var detail = err[0..strlen(err[..].ptr)]
+        if detail.len == 0 {
+            let t = curl_easy_strerror(code)
+            detail = t[0..strlen(t)]
         }
+        keepError(u.authority, code, detail)
         return tlsConnectError(code)
     }
     return h
 }
 
 // libcurl has no blocking mode here: `curl_easy_recv` and `curl_easy_send`
-// give CURLE_AGAIN when the socket is not ready. This sleeps a little
-// (1 ms, doubling to 20 ms) and says TimedOut once `ms` have passed since
-// `start` (`time.monotonicMs`).
-fn pause(start: u64, ms: u32, step: *mut u64) ClientError!void {
-    if time.monotonicMs() - start >= ms as u64 {
+// give CURLE_AGAIN when the socket is not ready. This waits for `sock` (its
+// CURLINFO_ACTIVESOCKET) with `net.wait` and says TimedOut once `ms` have
+// passed since `start` (`time.monotonicMs`).
+fn pause(sock: i32, ready: net.Ready, start: u64, ms: u32) ClientError!void {
+    let spent = time.monotonicMs() - start
+    if spent >= ms as u64 {
         return ClientError.TimedOut
     }
-    time.sleep(step.*)
-    if step.* < 20 {
-        step.* = step.* * 2
-    }
+    _ = net.wait(sock, ready, ms - spent as u32)
 }
 
-fn tlsRead(h: *mut Curl, buf: []mut u8, ms: u32) ClientError!usize {
+fn tlsRead(h: *mut Curl, sock: i32, buf: []mut u8, ms: u32) ClientError!usize {
     let start = time.monotonicMs()
-    var step: u64 = 1
     while true {
         var got: usize = 0
         let code = curl_easy_recv(h, buf.ptr, buf.len, &mut got)
@@ -2113,24 +2176,22 @@ fn tlsRead(h: *mut Curl, buf: []mut u8, ms: u32) ClientError!usize {
         if code != CURLE_AGAIN {
             return ClientError.ConnectionClosed
         }
-        try pause(start, ms, &mut step)
+        try pause(sock, net.Ready.Read, start, ms)
     }
     unreachable
 }
 
-fn tlsWrite(h: *mut Curl, bytes: []u8, ms: u32) ClientError!void {
+fn tlsWrite(h: *mut Curl, sock: i32, bytes: []u8, ms: u32) ClientError!void {
     var off: usize = 0
     var start = time.monotonicMs()
-    var step: u64 = 1
     while off < bytes.len {
         var sent: usize = 0
         let code = curl_easy_send(h, bytes[off..].ptr, bytes.len - off, &mut sent)
         if code == 0 {
             off += sent
             start = time.monotonicMs()
-            step = 1
         } else if code == CURLE_AGAIN {
-            try pause(start, ms, &mut step)
+            try pause(sock, net.Ready.Write, start, ms)
         } else {
             return ClientError.ConnectionClosed
         }

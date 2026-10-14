@@ -1656,7 +1656,7 @@ std.diag      Diagnostics: coded messages over byte ranges, lineCol          bel
 std.os        args, getenv, exit, cpuCount, onStop/stopRequested (signals)  below
 std.process   child processes: spawn/spawnWith (env, cwd), wait, kill, killHard   aye doc --signatures std.process
 std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye doc --signatures std.path
-std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn (HTTP: std.http)  below
+std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn, wait (HTTP: std.http)  below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON: parse, get, asString, asNumber, at; write, stringify     below
 std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
@@ -1680,7 +1680,8 @@ a cookie as sent; each gives null when missing. The client is `http.get(arena,
 "http://host:8080/path")` (also `post`, `request`, `requestWith`): a
 `Response` with `status`, `headers`, `body` and `header(name)`, allocated
 in the arena; redirects are followed only on request; `https://` goes
-through libcurl (`HttpsUnsupported` where it is not linked).
+through libcurl (`HttpsUnsupported` where it is not linked), and
+`http.lastError(alloc)` gives libcurl's text for the last failed connect.
 
 ```aye
 import std.heap.General
@@ -2301,6 +2302,8 @@ std.net.listen(host: []u8, port: u16) ListenError!Listener   port 0: the system 
 std.net.listenShared(host: []u8, port: u16) ListenError!Listener   listen; on Linux SO_REUSEPORT, for Listener.again
 std.net.connect(host: []u8, port: u16) ConnectError!Conn
 std.net.connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn   connect, TimedOut after ms (per address)
+std.net.wait(fd: i32, ready: Ready, ms: u32) bool   poll one socket: Ready.Read or Ready.Write; false after ms
+enum Ready { Read, Write }
 Listener.accept(self: Self) AcceptError!Conn   waits for the next connection
 Listener.port(self: Self) u16                  the port it listens on
 Listener.fd(self: Self) i32                    its file descriptor, for poll (do not close it)
