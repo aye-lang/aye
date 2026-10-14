@@ -1,1 +1,4 @@
-method_bound_value.aye:11:15: error[E0038]: `len` is a method of struct `Point`, not a field: call it with `.len(...)`, or write `Point.len` for the method as a function value (a method bound to a value would need a closure)
+method_bound_value.aye:25:15: error[E0038]: `len` is a method of struct `Point`, not a field: call it with `.len(...)`, or write `Point.len` for the method as a function value (a method bound to a value would need a closure)
+method_bound_value.aye:26:19: error[E0074]: the generic method `Point.add` is not a value (call it with its type arguments)
+method_bound_value.aye:27:15: error[E0038]: `add` is a generic method of struct `Point`, not a field: call it with `.add(...)` and its type arguments
+method_bound_value.aye:28:22: error[E0074]: the generic method `Box(i32).map` is not a value (call it with its type arguments)

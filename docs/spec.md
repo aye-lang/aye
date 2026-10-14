@@ -248,7 +248,7 @@ pub fn main() {
   type arguments: `Box(i32).get`): its type is `fn(<self param type>, A...)
   R`, so `Point.len` with `self: *Self` is a `fn(*Point) f64`. `x.m`
   without a call is an error (a method bound to a value would need a
-  closure). Generic functions are not values. A function type may say
+  closure). Generic functions and generic methods are not values. A function type may say
   `noreturn` (`fn([]u8) noreturn`, the type of a `noreturn` function, which
   is also a `fn([]u8)`): a call through such a value ends a block like a
   direct call.
@@ -1434,9 +1434,42 @@ pub fn main() {
     @println(countAbove(u8, b[..], 150))
 }
 ```
-- Generic functions and methods of a type function's struct must spell out
-  their error sets (`E!T`). A top-level `let P = Pair(i64)` names an
-  instance (a type alias, section 4).
+- A method can have `comptime` parameters of its own, written like a
+  generic function's after `self`: a generic method, on a plain struct or
+  on a type function's struct. Each call names its type arguments, `x.m(U,
+  ...)` or `Type.m(x, U, ...)`, and makes an instance like a generic
+  function's (with its `where` constraints checked there). An interface
+  method has none (a `dyn` call has one function per method), and a
+  generic method is not a function value.
+- Generic functions, generic methods and methods of a type function's
+  struct must spell out their error sets (`E!T`). A top-level `let P =
+  Pair(i64)` names an instance (a type alias, section 4).
+
+```aye
+pub fn Box(comptime T: type) type {
+    return struct {
+        value: T
+
+        pub fn map(self: *Self, comptime U: type, f: fn(T) U) Box(U) {
+            return Box(U) { value: f(self.value) }
+        }
+    }
+}
+
+fn half(x: i64) f64 {
+    return x as f64 / 2.0
+}
+
+fn positive(x: i64) bool {
+    return x > 0
+}
+
+pub fn main() {
+    let b = Box(i64) { value: 7 }
+    @println(b.map(f64, half).value)
+    @println(Box(i64).map(&b, bool, positive).value)
+}
+```
 
 ## 12. Modules and imports
 
