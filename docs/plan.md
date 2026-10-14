@@ -8,7 +8,7 @@ is the language's biggest integration test, run as the downstream check. The fra
 as the acceptance test of `std.http`. Finished steps are in
 [`plans/done.md`](plans/done.md).
 
-## Resume here (handoff 2026-10-12)
+## Resume here (handoff 2026-10-12 night, written 2026-10-13 00:50 +08)
 
 A new session starts in `~/Documents/ayelang/aye`. Cloud is the
 integrator since 2026-10-12 (rule 7): each step runs as a one-time cloud
@@ -16,33 +16,41 @@ routine (`RemoteTrigger`, environment `env_01CZsU4Eo82wo62Hpf2skA2q`,
 Ubuntu 24.04 x86_64) that merges `main` in, runs the Linux suite in
 foreground chunks, and fast-forwards `main`; GitHub CI
 (`.github/workflows/ci.yml`, Linux and macOS, the repo is public) is the
-full-suite gate. The local Mac pulls, does macOS-only work and
-housekeeping, and opens a PR when a change needs CI before it lands.
-Main was green on both CI jobs at baa9db4; ca6576e (O1.27) was in CI at
-handoff. Merged on 2026-10-12: F1.2b, O3.6c, O2.8a (PR #6), F3.8 (PR #7),
-O3.6e (PR #8), O2.5e (PR #9), O1.11b, O1.11c, O1.19a, O2.5a, O2.6, O1.27
-(`plans/done.md`).
+full-suite gate. The local Mac pulls, does macOS-only work, runs
+`sh scripts/downstream.sh` after std/src changes, and opens a PR when a
+change needs CI before it lands.
 
-Cloud-prompt rules that matter (learned today): the session ends when
-its turn ends, so every long command runs in the foreground with a 10
-minute timeout, split into chunks (no `run_in_background`, no
-`Monitor`); source `/etc/profile.d/aye-wasi.sh` so the wasip1 golden
-lane is not skipped; `cargo fmt` before committing; `scripts/downstream.sh`
-cannot reach the private anyknown repo from the VM (skipped, say so).
+Main at handoff: 9fd0f63 (plan commit on top of 6647d34). Local macOS
+golden was green (610/119/93) and downstream green at 49beddb. Merged on
+2026-10-12 (all in `plans/done.md`): F1.2b, O3.6c, O2.8a, F3.8, O3.6e,
+O2.5e, O1.11b/c, O1.19a, O2.5a, O2.6, O1.27, O6.2a, O6.1a, O3.9b,
+O1.22a/b/c, O3.4c, O1.6a, O3.1c, O1.21, O3.7, O3.3b, F3.2a, O3.9c, O6.1b,
+O2.6a, O1.14, O6.2b, O1.14b, O2.6b; O3.9d closed by measurement (no code).
 
-Next, from the backlog in `plans/aye.md`, in this order: O3.9b (worker
-follow-ups; `O7.5` needs an 8-core box, skip), O6.2a, O6.1a, O6.3a,
-O1.22a, O1.24, O1.6a, O3.4b, O3.5a, the rest. Framework
-(`plans/framework.md`): the Chrome manual checks (dev reload, island)
-need the user; otherwise F5 is done. Open points: fast-mode wasm
-`stack_overflow.aye` hangs instead of trapping (O2.6 report; card it as
-O2.6a if it matters); the anyknown browser test
-`window_relayout_after_image_load` looked flaky under load on macOS
-(O2.5a downstream run), which is the user's repo.
+Still running in the cloud at handoff (they merge to main on their own;
+check `gh run list` and the origin/main log first, and the remote
+branch list for a pushed-but-unmerged `<step>-<slug>` branch, which
+means the session stopped under a stop rule: read its last commit
+message): O6.2c (lsp URL deps), O3.2a (parseHttp lenient + Date), O3.1b
+(json asInt), O1.21a (fold constant-arg calls). Local: O5.2b (warm the
+test binary before `-j` fan-out) was told to commit WIP on branch
+`o5-2b-warm-test-binary` in worktree `../wt-o52b`; continue it there.
 
-Notes: `web dev` needs `aye` on `PATH` (or `AYE=`); the macOS first-exec
-stall (O1.17b) is unchanged; a worktree is created per local step and
-removed after the merge.
+Cloud-prompt rules (learned): the session ends when its turn ends, so
+every long command runs in the foreground with a 10 minute timeout,
+split into chunks; start by resetting the local main to origin/main (the
+VM's local main can be stale: O6.2b branched 89 commits behind); source
+`/etc/profile.d/aye-wasi.sh`; `cargo fmt` before committing;
+`scripts/downstream.sh` cannot reach the private anyknown repo from the
+VM (skipped, say so; the Mac runs it). The scheduler fires `run_once_at`
+routines up to 30 min late; a manual `run` makes a late one fire twice.
+Sessions often leave their merged branch on origin: prune them.
+
+Next from the backlog in `plans/aye.md`: O3.5a (std.net poll export,
+log debug), O3.9e (measure with `wrk` first), O5.1b/O5.2f (local macOS),
+O1.17c; anyknown follow-ups (O1.14c `isDarwin`/`clock()`, P8.x, P-flaky)
+live in the user's aye-lang/anyknown repo. Framework: the Chrome manual
+checks (dev reload, island) need the user.
 
 ## Lanes
 

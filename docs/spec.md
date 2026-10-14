@@ -305,9 +305,11 @@ pub fn main() {
 - `let NAME = value` at the top level is a constant, `var name = value` a
   global variable. The value is computed by the compiler: literals, other
   `let` constants, operators, `as`, array, struct and enum literals, and a
-  call without arguments to a function whose body is one `return` of such
-  a value (`var lock = Mutex.init()`). No other calls and no `var`
-  globals; overflow there is a compile error. A global is initialized
+  call to a function whose body is one `return` of such a value (`var lock
+  = Mutex.init()`). The call's arguments must be constants too: the
+  compiler substitutes them for the parameters, and calls in that `return`
+  fold the same way, at most 16 deep (`var buf = Buffer.init(16)`). No
+  other calls and no `var` globals; overflow there is a compile error. A global is initialized
   before `main` runs, in any declaration order.
 - As for a local `let`, an untyped integer gives `i64`: write `let N:
   usize = 4` for an index bound.

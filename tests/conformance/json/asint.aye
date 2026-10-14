@@ -1,0 +1,46 @@
+// asInt: the exact i64 of an integer literal, also above 2^53; null otherwise.
+
+import std.heap.Arena
+import std.heap.General
+import std.json
+import std.json.Value
+
+fn show(a: *mut Arena, src: []u8) {
+    let v = json.parse(a, src) catch |e| {
+        @println(@tagName(e))
+        return
+    }
+    if v.asInt() |n| {
+        @println(n)
+    } else {
+        @println("null")
+    }
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    var arena = Arena.init(gpa.allocator())
+    defer arena.deinit()
+    show(&mut arena, "12345678901234567890")
+    show(&mut arena, "9007199254740993")
+    show(&mut arena, "-9007199254740993")
+    show(&mut arena, "9223372036854775807")
+    show(&mut arena, "9223372036854775808")
+    show(&mut arena, "-9223372036854775808")
+    show(&mut arena, "-9223372036854775809")
+    show(&mut arena, "-1")
+    show(&mut arena, "0")
+    show(&mut arena, "-0")
+    show(&mut arena, "1.0")
+    show(&mut arena, "1e2")
+    show(&mut arena, "1E2")
+    show(&mut arena, "\"7\"")
+    show(&mut arena, "true")
+    show(&mut arena, "[1]")
+    let v = json.parse(&mut arena, "[9007199254740993, 5]") catch return
+    let first = v.at(0) orelse return
+    @println(first.asNumber() orelse 0.0)
+    let second = v.at(1) orelse return
+    @println(second.asInt() orelse -1)
+}

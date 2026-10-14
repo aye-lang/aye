@@ -223,24 +223,71 @@ pub fn parseRfc3339(s: []u8) ParseError!DateTime {
     return fromUnixMs(ms)
 }
 
-/// Parses an HTTP IMF-fixdate (RFC 7231, section 7.1.1.1), exactly
-/// `Sat, 10 Oct 2026 07:20:00 GMT`: two-digit day, `GMT`, and a weekday
-/// that matches the date. The obsolete RFC 850 and asctime forms are not
-/// accepted. Anything else: `Invalid`.
+/// Parses an HTTP date (RFC 7231, section 7.1.1.1): the IMF-fixdate
+/// `Sat, 10 Oct 2026 07:20:00 GMT`, and the two obsolete forms a recipient
+/// must still accept: RFC 850 `Sunday, 06-Nov-94 08:49:37 GMT` (a two-digit
+/// year: 50 to 99 is 19xx, 00 to 49 is 20xx) and asctime
+/// `Sun Nov  6 08:49:37 1994` (space-padded day, taken as GMT). The weekday
+/// must match the date. Anything else: `Invalid`.
 pub fn parseHttp(s: []u8) ParseError!DateTime {
-    if s.len != 29 {
-        return ParseError.Invalid
+    if s.len == 29 {
+        if !text.eql(s[3..5], ", ") || s[7] != ' ' || s[11] != ' ' || s[16] != ' ' || s[19] != ':' || s[22] != ':' || !text.eql(s[25..29], " GMT") {
+            return ParseError.Invalid
+        }
+        let wd = nameIndex(weekdays, s[0..3]) orelse return ParseError.Invalid
+        let month = (nameIndex(months, s[8..11]) orelse return ParseError.Invalid) + 1
+        let day = digits(s, 5, 2) orelse return ParseError.Invalid
+        let year = digits(s, 12, 4) orelse return ParseError.Invalid
+        return httpFields(wd, year, month, day, digits(s, 17, 2), digits(s, 20, 2), digits(s, 23, 2))
     }
-    if !text.eql(s[3..5], ", ") || s[7] != ' ' || s[11] != ' ' || s[16] != ' ' || s[19] != ':' || s[22] != ':' || !text.eql(s[25..29], " GMT") {
+    if s.len == 24 {
+        if s[3] != ' ' || s[7] != ' ' || s[10] != ' ' || s[13] != ':' || s[16] != ':' || s[19] != ' ' {
+            return ParseError.Invalid
+        }
+        let wd = nameIndex(weekdays, s[0..3]) orelse return ParseError.Invalid
+        let month = (nameIndex(months, s[4..7]) orelse return ParseError.Invalid) + 1
+        var day: i64 = 0
+        if s[8] == ' ' {
+            day = digits(s, 9, 1) orelse return ParseError.Invalid
+        } else {
+            day = digits(s, 8, 2) orelse return ParseError.Invalid
+        }
+        let year = digits(s, 20, 4) orelse return ParseError.Invalid
+        return httpFields(wd, year, month, day, digits(s, 11, 2), digits(s, 14, 2), digits(s, 17, 2))
+    }
+    // RFC 850: the full weekday name, then `, dd-Mon-yy hh:mm:ss GMT`.
+    var c: usize = 0
+    while c < s.len && s[c] != ',' {
+        c += 1
+    }
+    if c < 6 || c > 9 || s.len != c + 24 || s[c + 1] != ' ' {
         return ParseError.Invalid
     }
     let wd = nameIndex(weekdays, s[0..3]) orelse return ParseError.Invalid
-    let month = (nameIndex(months, s[8..11]) orelse return ParseError.Invalid) + 1
-    let day = digits(s, 5, 2) orelse return ParseError.Invalid
-    let year = digits(s, 12, 4) orelse return ParseError.Invalid
-    let hour = digits(s, 17, 2) orelse return ParseError.Invalid
-    let minute = digits(s, 20, 2) orelse return ParseError.Invalid
-    let second = digits(s, 23, 2) orelse return ParseError.Invalid
+    if !text.eql(s[0..c], fullWeekday(wd)) {
+        return ParseError.Invalid
+    }
+    let r = c + 2
+    if s[r + 2] != '-' || s[r + 6] != '-' || s[r + 9] != ' ' || s[r + 12] != ':' || s[r + 15] != ':' || !text.eql(s[r + 18..r + 22], " GMT") {
+        return ParseError.Invalid
+    }
+    let month = (nameIndex(months, s[r + 3..r + 6]) orelse return ParseError.Invalid) + 1
+    let day = digits(s, r, 2) orelse return ParseError.Invalid
+    var year = digits(s, r + 7, 2) orelse return ParseError.Invalid
+    if year >= 50 {
+        year += 1900
+    } else {
+        year += 2000
+    }
+    return httpFields(wd, year, month, day, digits(s, r + 10, 2), digits(s, r + 13, 2), digits(s, r + 16, 2))
+}
+
+// The date of parsed HTTP fields (null digits are `Invalid`), checking the
+// ranges and that the weekday `wd` matches.
+fn httpFields(wd: i64, year: i64, month: i64, day: i64, h: ?i64, m: ?i64, sec: ?i64) ParseError!DateTime {
+    let hour = h orelse return ParseError.Invalid
+    let minute = m orelse return ParseError.Invalid
+    let second = sec orelse return ParseError.Invalid
     if !validDate(year, month, day) || hour > 23 || minute > 59 || second > 59 {
         return ParseError.Invalid
     }
@@ -249,6 +296,18 @@ pub fn parseHttp(s: []u8) ParseError!DateTime {
         return ParseError.Invalid
     }
     return d
+}
+
+fn fullWeekday(i: i64) []u8 {
+    return match i {
+        0 => "Sunday"
+        1 => "Monday"
+        2 => "Tuesday"
+        3 => "Wednesday"
+        4 => "Thursday"
+        5 => "Friday"
+        _ => "Saturday"
+    }
 }
 
 let weekdays = "SunMonTueWedThuFriSat"

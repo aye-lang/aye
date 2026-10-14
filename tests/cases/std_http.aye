@@ -150,4 +150,10 @@ pub fn main() !void {
     @print(http.reason(299))
     @print("]")
     @println()
+    // The Date header helper (fixed instant: 2026-10-10 07:20:00 UTC).
+    let dh = try http.dateHeader(alloc, 1791616800000)
+    defer alloc.free(dh.value)
+    @print(dh.name)
+    @print(": ")
+    @println(dh.value)
 }

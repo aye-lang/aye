@@ -63,6 +63,10 @@ pub enum Value {
     Null
     Bool { value: bool }
     Number { value: f64 }
+    /// A number written as an integer literal that fits `i64`: `int` is its
+    /// exact value, `value` the same number as an `f64`. Only `parse` makes
+    /// one; `asNumber`, `equals` and `write` treat it like a `Number`.
+    Integer { value: f64, int: i64 }
     String { value: []u8 }
     Array { items: []Value }
     Object { members: []Member }
@@ -114,6 +118,23 @@ pub enum Value {
         match self.* {
             .Number { value } => {
                 return value
+            }
+            .Integer { value, int } => {
+                return value
+            }
+            _ => {}
+        }
+        return null
+    }
+
+    /// The exact integer of a number written as an integer literal (no
+    /// fraction, no exponent) that fits `i64`, also above 2^53 where
+    /// `asNumber` rounds; null for any other value, for `1.0`, `1e2`, and
+    /// for a literal outside `i64`.
+    pub fn asInt(self: *Self) ?i64 {
+        match self.* {
+            .Integer { value, int } => {
+                return int
             }
             _ => {}
         }
@@ -218,9 +239,11 @@ struct Parser {
     /// Where and why the parse failed, set by `fail`.
     at: usize
     msg: []u8
+    /// The exact value of the number `number` read last, when it is an `i64` literal.
+    lastInt: ?i64
 
     fn init(a: Allocator, src: []u8) Parser {
-        return Parser { a: a, src: src, pos: 0, scratch: Builder.init(a), at: 0, msg: "" }
+        return Parser { a: a, src: src, pos: 0, scratch: Builder.init(a), at: 0, msg: "", lastInt: null }
     }
 
     fn fail(self: *mut Self, at: usize, msg: []u8) {
@@ -258,6 +281,9 @@ struct Parser {
         }
         if c == '-' || (c >= '0' && c <= '9') {
             let n = try self.number()
+            if self.lastInt |i| {
+                return Value.Integer { value: n, int: i }
+            }
             return Value.Number { value: n }
         }
         if c == 't' {
@@ -511,6 +537,7 @@ struct Parser {
 
     fn number(self: *mut Self) ParseError!f64 {
         let start = self.pos
+        self.lastInt = null
         if self.src[self.pos] == '-' {
             self.pos += 1
         }
@@ -531,16 +558,22 @@ struct Parser {
             self.fail(self.pos, "expected a digit")
             return ParseError.InvalidNumber
         }
+        var hasFracOrExp = false
         if self.pos < self.src.len && self.src[self.pos] == '.' {
+            hasFracOrExp = true
             self.pos += 1
             try self.needDigits()
         }
         if self.pos < self.src.len && (self.src[self.pos] == 'e' || self.src[self.pos] == 'E') {
+            hasFracOrExp = true
             self.pos += 1
             if self.pos < self.src.len && (self.src[self.pos] == '+' || self.src[self.pos] == '-') {
                 self.pos += 1
             }
             try self.needDigits()
+        }
+        if !hasFracOrExp {
+            self.lastInt = parseI64(self.src[start..self.pos])
         }
         // The syntax is checked; strtod needs a NUL-terminated copy.
         self.scratch.clear()
@@ -569,6 +602,34 @@ struct Parser {
     }
 }
 
+// The `i64` an integer literal (`-?digits`, syntax already checked) names;
+// null when it is out of range. Accumulates negatively to reach i64's min.
+fn parseI64(t: []u8) ?i64 {
+    var i: usize = 0
+    var neg = false
+    if t[0] == '-' {
+        neg = true
+        i = 1
+    }
+    var acc: i64 = 0
+    let lim: i64 = -9223372036854775807 - 1
+    while i < t.len {
+        let d: i64 = (t[i] - '0') as i64
+        if acc < (lim + d) / 10 {
+            return null
+        }
+        acc = acc * 10 - d
+        i += 1
+    }
+    if !neg {
+        if acc == lim {
+            return null
+        }
+        return 0 - acc
+    }
+    return acc
+}
+
 fn isDigit(c: u8) bool {
     return c >= '0' && c <= '9'
 }
@@ -589,6 +650,7 @@ pub fn write(b: *mut Builder, v: *Value) AllocError!void {
             }
         }
         .Number { value } => try writeNumber(b, value)
+        .Integer { value, int } => try writeNumber(b, value)
         .String { value } => try writeString(b, value)
         .Array { items } => {
             try b.appendByte('[')
@@ -684,6 +746,11 @@ pub fn equals(a: *Value, b: *Value) bool {
             }
         }
         .Number { value } => {
+            if b.asNumber() |o| {
+                return o == value
+            }
+        }
+        .Integer { value, int } => {
             if b.asNumber() |o| {
                 return o == value
             }

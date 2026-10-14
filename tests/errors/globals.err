@@ -1,4 +1,4 @@
-globals.aye:5:14: error[E0089]: `seven` does not return a constant: a global's initializer can call only a function whose body is one `return` of a constant
+globals.aye:5:14: error[E0089]: `seven` cannot be computed when the program is compiled: a global's initializer can call a function only with constant arguments, and only one whose body is one `return` of a constant built from its parameters
 globals.aye:7:9: error[E0089]: `B` is defined in terms of itself
 globals.aye:9:9: error[E0089]: `counter` is a `var`: a global's initializer can use only `let` constants
 globals.aye:10:17: error[E0089]: integer overflow in a constant: `300` does not fit in `u8`

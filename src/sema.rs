@@ -331,6 +331,16 @@ impl fmt::Display for Type {
 
 pub type VarId = usize;
 
+/// A call being folded in a global's initializer (O1.21a): its
+/// parameters' values, and how many calls enclose it.
+struct FoldFrame {
+    args: HashMap<VarId, ConstVal>,
+    depth: usize,
+}
+
+/// How deeply the calls in a global's initializer may nest.
+const FOLD_DEPTH: usize = 16;
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub structs: Vec<StructDef>,
@@ -2275,53 +2285,112 @@ impl<'a> Checker<'a> {
         Ok((ty, decl.mutable))
     }
 
-    /// The value of a global's initializer `e`: a constant, or a call
-    /// without arguments to a function whose body is one `return` of a
-    /// constant (`Mutex.init()`, O1.21).
+    /// The value of a global's initializer `e`: a constant, where a call
+    /// with constant arguments to a function whose body is one `return`
+    /// is folded by substituting its parameters (`Mutex.init()`, O1.21;
+    /// `Thing.init(16)`, O1.21a).
     fn fold_init(&mut self, e: &TExpr) -> Result<ConstVal> {
-        if let TExprKind::Call {
-            name,
-            is_extern: false,
-            args,
-        } = &e.kind
-            && args.is_empty()
-            && let Some(ctx) = self.fn_decls.get(name)
-            && let Some(body) = &ctx.decl.body
-            && let [
-                ast::Stmt {
-                    kind: StmtKind::Return(Some(_)),
-                    ..
-                },
-            ] = body.stmts.as_slice()
-        {
-            let name = name.clone();
-            self.ensure_body(&name, e.span)?;
-            if let Some(Some(def)) = self.bodies.get(&name)
-                && let [
-                    TStmt {
-                        kind: TStmtKind::Return(Some(r)),
-                        ..
-                    },
-                ] = def.body.as_slice()
-            {
-                let r = r.clone();
-                return self.fold(&r).map_err(|x| match x.code {
-                    E0089 => Error::new(
-                        E0089,
-                        e.span,
-                        format!("`{name}` does not return a constant: a global's initializer can call only a function whose body is one `return` of a constant"),
-                    ),
-                    _ => x,
-                });
-            }
-        }
-        self.fold(e)
+        let top = FoldFrame {
+            args: HashMap::new(),
+            depth: 0,
+        };
+        self.fold_in(e, Some(&top))
     }
 
-    /// The value of `e`, a global's initializer, computed now.
-    fn fold(&self, e: &TExpr) -> Result<ConstVal> {
+    /// The value of the call `e` in a global's initializer, inside `frame`:
+    /// its arguments folded, then the one `return` of its body with the
+    /// parameters bound to them.
+    fn fold_call(&mut self, e: &TExpr, frame: &FoldFrame) -> Result<ConstVal> {
+        let TExprKind::Call { name, args, .. } = &e.kind else {
+            unreachable!()
+        };
+        let not_foldable = || {
+            Error::new(
+                E0089,
+                e.span,
+                format!(
+                    "`{name}` cannot be computed when the program is compiled: a global's initializer can call a function only with constant arguments, and only one whose body is one `return` of a constant built from its parameters"
+                ),
+            )
+        };
+        if frame.depth == FOLD_DEPTH {
+            return err(
+                E0089,
+                e.span,
+                format!("calls nest more than {FOLD_DEPTH} deep at `{name}`"),
+            );
+        }
+        let one_return = self
+            .fn_decls
+            .get(name)
+            .and_then(|c| c.decl.body.as_ref())
+            .is_some_and(|b| {
+                matches!(
+                    b.stmts.as_slice(),
+                    [ast::Stmt {
+                        kind: StmtKind::Return(Some(_)),
+                        ..
+                    }]
+                )
+            });
+        if !one_return {
+            return Err(not_foldable());
+        }
+        let vals = args
+            .iter()
+            .map(|a| self.fold_in(a, Some(frame)))
+            .collect::<Result<Vec<_>>>()?;
+        self.ensure_body(name, e.span)?;
+        let Some(Some(def)) = self.bodies.get(name) else {
+            return Err(silent());
+        };
+        let [
+            TStmt {
+                kind: TStmtKind::Return(Some(r)),
+                ..
+            },
+        ] = def.body.as_slice()
+        else {
+            return Err(not_foldable());
+        };
+        let r = r.clone();
+        let inner = FoldFrame {
+            args: def.params.iter().copied().zip(vals).collect(),
+            depth: frame.depth + 1,
+        };
+        // A part of the body that does not fold is reported at the call in
+        // the initializer, naming the function it calls.
+        self.fold_in(&r, Some(&inner)).map_err(|x| {
+            if frame.depth > 0 || x.code != E0089 {
+                x
+            } else if x.msg.contains("global's initializer") {
+                not_foldable()
+            } else if x.msg.starts_with("calls nest more than") {
+                Error::new(
+                    E0089,
+                    e.span,
+                    format!("`{name}` nests calls more than {FOLD_DEPTH} deep: a global's initializer folds at most {FOLD_DEPTH} nested calls"),
+                )
+            } else {
+                x
+            }
+        })
+    }
+
+    /// The value of `e`, a constant, computed now: calls are not folded.
+    fn fold(&mut self, e: &TExpr) -> Result<ConstVal> {
+        self.fold_in(e, None)
+    }
+
+    /// The value of `e`, computed now. With a `frame` (a global's
+    /// initializer), calls fold and the frame's parameters have values.
+    fn fold_in(&mut self, e: &TExpr, frame: Option<&FoldFrame>) -> Result<ConstVal> {
         let span = e.span;
         Ok(match &e.kind {
+            TExprKind::Var(id) if let Some(v) = frame.and_then(|f| f.args.get(id)) => v.clone(),
+            TExprKind::Call {
+                is_extern: false, ..
+            } if let Some(f) = frame => self.fold_call(e, f)?,
             TExprKind::Int(v) => ConstVal::Int(*v),
             TExprKind::Float(v) => ConstVal::Float(round_float(*v, &e.ty)),
             TExprKind::Bool(b) => ConstVal::Bool(*b),
@@ -2331,7 +2400,7 @@ impl<'a> Checker<'a> {
             TExprKind::FnRef { name, is_extern } => ConstVal::Fn(name.clone(), *is_extern),
             TExprKind::Zeroed => zero_of(&e.ty),
             TExprKind::ErrorValue(v) => ConstVal::Error(*v),
-            TExprKind::Some(x) => ConstVal::Some(Box::new(self.fold(x)?)),
+            TExprKind::Some(x) => ConstVal::Some(Box::new(self.fold_in(x, frame)?)),
             TExprKind::Global(n) => match self.globals.get(n) {
                 Some(g) if g.mutable => {
                     return err(
@@ -2348,12 +2417,12 @@ impl<'a> Checker<'a> {
             TExprKind::StructLit(inits) if matches!(&e.ty, Type::Struct(n) if self.structs[n].is_union) =>
             {
                 let (i, x) = &inits[0];
-                ConstVal::Union(*i, Box::new(self.fold(x)?))
+                ConstVal::Union(*i, Box::new(self.fold_in(x, frame)?))
             }
             TExprKind::StructLit(inits) | TExprKind::Variant { fields: inits, .. } => {
                 let mut vals = inits
                     .iter()
-                    .map(|(i, x)| Ok((*i, self.fold(x)?)))
+                    .map(|(i, x)| Ok((*i, self.fold_in(x, frame)?)))
                     .collect::<Result<Vec<_>>>()?;
                 vals.sort_by_key(|(i, _)| *i);
                 let vals = vals.into_iter().map(|(_, v)| v).collect();
@@ -2362,15 +2431,18 @@ impl<'a> Checker<'a> {
                     _ => ConstVal::Agg(vals),
                 }
             }
-            TExprKind::ArrayLit(elems) => {
-                ConstVal::Agg(elems.iter().map(|x| self.fold(x)).collect::<Result<_>>()?)
-            }
-            TExprKind::ArrayRepeat(x) => match (&e.ty, self.fold(x)?) {
+            TExprKind::ArrayLit(elems) => ConstVal::Agg(
+                elems
+                    .iter()
+                    .map(|x| self.fold_in(x, frame))
+                    .collect::<Result<_>>()?,
+            ),
+            TExprKind::ArrayRepeat(x) => match (&e.ty, self.fold_in(x, frame)?) {
                 (_, ConstVal::Zeroed) => ConstVal::Zeroed,
                 (Type::Array(_, n) | Type::Simd(_, n), v) => ConstVal::Agg(vec![v; *n as usize]),
                 _ => unreachable!(),
             },
-            TExprKind::Field { base, index } => match self.fold(base)? {
+            TExprKind::Field { base, index } => match self.fold_in(base, frame)? {
                 ConstVal::Agg(mut fields) => fields.swap_remove(*index),
                 ConstVal::Zeroed => zero_of(&e.ty),
                 ConstVal::Union(i, v) if i == *index => *v,
@@ -2384,7 +2456,9 @@ impl<'a> Checker<'a> {
                 _ => unreachable!(),
             },
             TExprKind::Index { base, index } if let Type::Array(_, n) = base.ty => {
-                let (b, ConstVal::Int(i)) = (self.fold(base)?, self.fold(index)?) else {
+                let (b, ConstVal::Int(i)) =
+                    (self.fold_in(base, frame)?, self.fold_in(index, frame)?)
+                else {
                     unreachable!()
                 };
                 if i >= n as i128 {
@@ -2399,7 +2473,7 @@ impl<'a> Checker<'a> {
                     _ => zero_of(&e.ty),
                 }
             }
-            TExprKind::Unary { op, expr } => match (op, self.fold(expr)?, &e.ty) {
+            TExprKind::Unary { op, expr } => match (op, self.fold_in(expr, frame)?, &e.ty) {
                 (UnOp::Not, ConstVal::Bool(b), _) => ConstVal::Bool(!b),
                 (UnOp::Neg, ConstVal::Float(f), _) => ConstVal::Float(-f),
                 (UnOp::Neg, ConstVal::Int(v), Type::Int(it)) => {
@@ -2411,7 +2485,7 @@ impl<'a> Checker<'a> {
                 _ => unreachable!(),
             },
             TExprKind::Binary { op, lhs, rhs } => {
-                let (l, r) = (self.fold(lhs)?, self.fold(rhs)?);
+                let (l, r) = (self.fold_in(lhs, frame)?, self.fold_in(rhs, frame)?);
                 let op = *op;
                 let cmp = |o: std::cmp::Ordering| match op {
                     BinOp::Eq => o.is_eq(),
@@ -2470,7 +2544,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            TExprKind::Cast(x) => match (self.fold(x)?, &e.ty) {
+            TExprKind::Cast(x) => match (self.fold_in(x, frame)?, &e.ty) {
                 (ConstVal::Bool(b), _) => ConstVal::Int(b as i128),
                 (ConstVal::Int(v), Type::Int(it)) => {
                     ConstVal::Int(fits(v, *it, self.layout, span)?)
@@ -2495,7 +2569,7 @@ impl<'a> Checker<'a> {
                 return err(
                     E0089,
                     span,
-                    "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, array, struct and enum literals, and a call without arguments to a function that returns one (no other calls)",
+                    "a global's initializer must be a constant: literals, `let` constants, operators, `as` casts, array, struct and enum literals, and and a call with constant arguments to a function whose body is one `return` of such a value (no other calls)",
                 );
             }
         })
