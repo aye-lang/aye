@@ -256,6 +256,12 @@ other agents' builds on the Mac.
   once (2026-10-10: two agents' full suites beside main's pushed the
   load average to 13 on 10 cores and one run took over 34 minutes;
   alone, the suite takes about 10 minutes).
+- Test env vars: `AYE_TEST_JOBS=n` sets the worker threads of `golden`,
+  `conformance` and the browser runners (default: cores, times 2 for
+  `golden`); `AYE_GOLDEN_SHARD=i/n` (1-based) makes `golden` run one of `n`
+  slices of its job list (job index mod `n`), for CI, which runs three in
+  parallel; unset runs everything. The summary lines carry
+  `[shard i/n]` and count that slice only.
 - `sh scripts/downstream.sh; echo $?` → 0 when the merge touches `src/`
   or `std/` (clones `aye-lang/anyknown` at `tests/downstream/ANYKNOWN_REV`
   into `target/downstream/`, runs `aye check browser`, `aye test browser`

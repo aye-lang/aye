@@ -89,6 +89,13 @@
 //!   under ThreadSanitizer without a report (skipped where ThreadSanitizer
 //!   does not run; Homebrew's LLVM is tried when the clang on `PATH` has
 //!   none).
+//!
+//! `AYE_GOLDEN_SHARD=i/n` (1-based, `i <= n`) runs only the jobs whose
+//! position in the full job list, taken modulo `n`, is `i - 1`, so `n`
+//! processes with `i = 1..=n` run every job exactly once. The summary lines
+//! then name the shard (`golden [shard 2/3]: N passed; 0 failed`) and
+//! count that shard's jobs only; the per-lane counts of all shards add up
+//! to those of an unsharded run. CI runs three shards in parallel.
 
 use aye::diag::Diag;
 use aye::driver::{self, Mode, Root, Target};
@@ -100,6 +107,19 @@ mod common;
 
 /// How many wasm32-wasip1 jobs skipped themselves.
 static WASM_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+
+/// `AYE_GOLDEN_SHARD=i/n`: the shard (`i`, `n`) this process runs, if set.
+fn shard() -> Option<(usize, usize)> {
+    let v = std::env::var("AYE_GOLDEN_SHARD").ok()?;
+    let parsed = v.split_once('/').and_then(|(i, n)| {
+        let (i, n) = (i.parse::<usize>().ok()?, n.parse::<usize>().ok()?);
+        (1 <= i && i <= n).then_some((i, n))
+    });
+    match parsed {
+        Some(s) => Some(s),
+        None => panic!("AYE_GOLDEN_SHARD must be i/n with 1 <= i <= n, got {v:?}"),
+    }
+}
 
 /// The wasm32-wasip1 target, if programs can be built and run for it here
 /// (the WASI toolchain and `node`).
@@ -2069,6 +2089,8 @@ fn main() {
     };
     let wasm = wasm_target();
     let freestanding = freestanding_target();
+    let shard = shard();
+    let tag = shard.map_or(String::new(), |(i, n)| format!(" [shard {i}/{n}]"));
     type Job<'a> = Box<dyn FnOnce() -> Result<(), String> + Send + 'a>;
     fn add<'a>(
         jobs: &mut Vec<(String, Job<'a>)>,
@@ -2265,6 +2287,14 @@ fn main() {
             "tests/tree_shake: the test C".to_string(),
             tree_shake_tests,
         );
+        if let Some((i, n)) = shard {
+            jobs = jobs
+                .into_iter()
+                .enumerate()
+                .filter(|(k, _)| k % n == i - 1)
+                .map(|(_, j)| j)
+                .collect();
+        }
         // At most `common::jobs_for(2)` cases run at once.
         let queue = std::sync::Mutex::new(jobs.into_iter().enumerate());
         let done = std::sync::Mutex::new(Vec::new());
@@ -2298,7 +2328,7 @@ fn main() {
         }
     }
     println!(
-        "\ngolden: {} passed; {failed} failed",
+        "\ngolden{tag}: {} passed; {failed} failed",
         results.len() - failed
     );
     if wasm.is_some() {
@@ -2312,7 +2342,7 @@ fn main() {
             .count();
         let skipped = WASM_SKIPPED.load(Ordering::Relaxed);
         println!(
-            "golden (wasm32-wasip1): {} passed; {skipped} skipped; {bad} failed",
+            "golden (wasm32-wasip1){tag}: {} passed; {skipped} skipped; {bad} failed",
             total - bad - skipped
         );
     }
@@ -2326,7 +2356,7 @@ fn main() {
             .filter(|(n, r)| n.starts_with("freestanding/") && r.is_err())
             .count();
         println!(
-            "golden (wasm32-freestanding): {} passed; {bad} failed",
+            "golden (wasm32-freestanding){tag}: {} passed; {bad} failed",
             total - bad
         );
     }
