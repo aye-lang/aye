@@ -4,5 +4,6 @@ localhost with caFile: 200 body has marker=true
 127.0.0.1 with caFile: 200 body has marker=true
 without caFile: error TlsFailed
 missing caFile: error TlsFailed
+lastError names the host and libcurl: true
 post without caFile: error TlsFailed
 done
