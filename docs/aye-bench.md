@@ -1,13 +1,55 @@
 # Aye benchmarks (O7.1, criterion O12)
 
-Measured 2026-10-11 on a cloud VM (Claude cloud session), commit `7babce6`.
+Measured 2026-10-14 on a cloud VM (Claude cloud session), commit `0e7463d` (O7.5a). Since the 2026-10-11 table below, `std.http` got
+a worker pool (O3.9), one arena per keep-alive connection (O7.4a), slow-handler give-away (O3.9b) and a `SO_REUSEPORT` listener
+per worker (O3.9c).
 
-- Machine: Intel Xeon @ 2.80GHz, 4 cores (1 thread each), 15 GiB RAM, Ubuntu 24.04, Linux 6.18.
-- Tools: Node v22.22.0, Go 1.24.7, ApacheBench 2.3, clang from `scripts/setup-ubuntu.sh`.
-- All three servers and `ab` ran on this same VM (127.0.0.1), one server at a time. `ab` is single-threaded and shares the 4 cores with the server, so absolute numbers are lower than a dedicated load generator would give; the comparison is what counts.
+- Machine: Intel Xeon @ 2.80GHz (`lscpu`), `nproc` 4 (1 thread per core), 15 GiB RAM, Ubuntu 24.04, Linux 6.18.44 (Firecracker microVM). Load average 0.3 before, 1.7 to 2.9 during (this session only; no steal time in `vmstat`).
+- Tools: Node v22.22.0, Go 1.24.7, ApacheBench 2.3, `wrk` 4.1.0 (Ubuntu package), clang from `scripts/setup-ubuntu.sh`.
+- All three servers and the client ran on this same VM (127.0.0.1), one server at a time, 1000 `ab -k -c 64` warm-up requests after start. The client shares the 4 cores with the server, so absolute numbers are lower than a dedicated load generator would give; the comparison is what counts. The same VM label (2.80 GHz) as the 2026-10-11 table, but every server is slower here than on the 2.10 GHz VM of F5.9 (Go 68k vs 126k under `ab`), so compare rows within one table only.
 
 ## Requests per second
 
+### `ab` (the `scripts/bench/run.sh` commands)
+
+`ab -k -c 64 -n 200000` three times (median shown, runs in the table), `-c 1` is `-n 50000` once. Two passes: aye, node, go,
+then go, node, aye; the second pass is in brackets. Unpinned. No failed requests.
+
+| server | -c 64 req/s (median of 3) | runs | mean latency (ms) | -c 1 req/s | -c 1 mean (ms) |
+|---|---|---|---|---|---|
+| Aye `std.http`, `--mode fast` | 80378 [80926] | 82351 / 80378 / 79330 [80926 / 82851 / 77756] | 0.796 | 15936 [14830] | 0.063 |
+| Node 22 `http` | 7393 [7649] | 7236 / 7793 / 7393 [7401 / 7649 / 7752] | 8.657 | 4301 [4313] | 0.233 |
+| Go 1.24 `net/http` | 67592 [69938] | 67592 / 68869 / 60563 [69938 / 73319 / 65381] | 0.947 | 7685 [7766] | 0.130 |
+
+### `wrk` (multi-threaded client)
+
+`ab` is single-threaded and was the limit in O3.9d and O3.9e, so the same servers were also measured with
+`wrk -t2 -c64 -d10s --latency http://127.0.0.1:<port>/` (keep-alive), three runs per server, median shown; latency columns are
+from the median run. No socket errors, no non-2xx.
+
+| server | req/s (median of 3) | runs | p50 | p99 |
+|---|---|---|---|---|
+| Aye `std.http`, `--mode fast` | 145966 | 135443 / 145966 / 146872 | 0.224 ms | 3.92 ms |
+| Node 22 `http` | 16556 | 15419 / 16569 / 16556 | 3.52 ms | 8.56 ms |
+| Go 1.24 `net/http` | 70270 | 70270 / 71822 / 69976 | 0.593 ms | 7.69 ms |
+
+Pinned with `taskset` (server on CPUs 0-1, `wrk` on 2-3), three runs:
+
+| server | req/s (median of 3) | runs | p50 | p99 |
+|---|---|---|---|---|
+| Aye `std.http`, `--mode fast` | 146931 | 146931 / 156117 / 146250 | 0.238 ms | 6.31 ms |
+| Node 22 `http` | 15663 | 15419 / 15663 / 18501 | 3.70 ms | 9.98 ms |
+| Go 1.24 `net/http` | 51944 | 51944 / 43065 / 54406 | 1.16 ms | 5.02 ms |
+
+Pinning did not make the passes steadier here (Aye 146k to 156k pinned vs 135k to 147k unpinned; Go 43k to 54k pinned vs 70k to
+72k unpinned) and costs Go, which loses two of its four cores, so the unpinned table is the headline.
+
+Script used (not committed): start the server, `curl` once, the warm-up, then the `ab` or `wrk` runs above, then SIGTERM.
+
+## 2026-10-11 table (thread per connection, commit `7babce6`)
+
+Measured 2026-10-11 on a cloud VM, before O3.9: `std.http.Server` started a thread per connection.
+Machine: Intel Xeon @ 2.80GHz, 4 cores (1 thread each), 15 GiB RAM, Ubuntu 24.04, Linux 6.18. Node v22.22.0, Go 1.24.7, ApacheBench 2.3.
 `ab -k -c 64 -n 200000` three times after 1000 warm-up requests (median shown; runs in the table note); `-c 1` is `-n 50000` once.
 
 | server | -c 64 req/s (median of 3) | runs | mean latency (ms) | -c 1 req/s | -c 1 mean (ms) | failed |
@@ -61,6 +103,8 @@ cargo build --release
 target/release/aye build --mode fast scripts/bench/hello_http.aye -o target/hello_aye
 go build -o target/hello_go scripts/bench/hello_go.go
 scripts/bench/run.sh            # ab output lands in target/ab_*.txt
+sudo apt-get install -y wrk     # the wrk table: one server at a time
+wrk -t2 -c64 -d10s --latency http://127.0.0.1:8081/
 time target/release/aye build browser -o target/anyknown_debug
 time target/release/aye build --mode fast browser -o target/anyknown_fast
 ```
@@ -71,19 +115,25 @@ All answer `GET /` with `hello\n` and a `Content-Type: text/plain` header.
 
 ## O12
 
-O12 holds on this machine: the Aye `--mode fast` hello server does 39.1k req/s at `-c 64`
-against 10.7k for Node 22 (3.7x), with a mean latency of 1.6 ms against 6.0 ms, and 16.0k against 5.4k req/s at `-c 1`.
-Against the second reference, Go `net/http`, Aye is behind at `-c 64` (39.1k vs 99.3k, 0.4x) but ahead at `-c 1` (16.0k vs 8.4k, a lower latency floor).
+O12 holds on this machine (2026-10-14, `0e7463d`): the Aye `--mode fast` hello server does 146.0k req/s under `wrk -t2 -c64`
+against 16.6k for Node 22 (8.8x) and 70.3k for Go `net/http` (2.1x), with a p50 latency of 0.22 ms against 3.5 ms and 0.59 ms.
+Under `ab -k -c 64` (the criterion's tool) it is 80.4k against 7.4k for Node (10.9x) and 67.6k for Go (1.19x), and at `-c 1`
+15.9k against 4.3k and 7.7k req/s. Aye is now ahead of Go at `-c 64` too, where the 2026-10-11 table had it at 0.4x.
 
-Why Go wins under concurrency: `std.http.Server` starts a thread per connection (`std/http/http.aye`, `Server.run`) and
-allocates a job and an arena per connection and request, while Go multiplexes goroutines over an epoll loop.
-With 64 keep-alive connections on 4 cores shared with `ab`, 64 OS threads cost context switches. This is a single-VM, single-shape measurement (4 cores, loopback, tiny body), not a general claim.
+Why it changed: the 2026-10-11 server started a thread per connection (64 OS threads on 4 cores shared with `ab`); O3.9 replaced
+that with a pool of one worker per CPU, O7.4a reuses one arena per connection and O3.9c gives each worker its own listener. With
+`ab` the Aye number is `ab`'s single thread (O3.9d: `ab` at 97% of one CPU), which is why `wrk` shows 1.8x more from the same
+server; Node and Go also gain under `wrk` (2.2x, 1.04x). This is a single-VM, single-shape measurement (4 cores, loopback,
+tiny body, client on the same cores), not a general claim.
+
+2026-10-11 analysis, kept for history: Go won under concurrency because `std.http.Server` started a thread per connection and
+allocated a job and an arena per connection and request, while Go multiplexes goroutines over an epoll loop.
 
 Follow-up cards (proposed):
 - O7.2: profile `std.http` at `-c 64` (`perf`), count context switches and per-request allocations.
 - O7.3: `std.http` accept loop with a fixed worker pool instead of a thread per connection.
 - O7.4: reuse the per-request arena across keep-alive requests on one connection.
-- O7.5: rerun this file on a machine with 8+ cores and a separate load generator.
+- O7.5: rerun this file on a machine with 8+ cores and a separate load generator. The 4-core cloud VM part is done (O7.5a, 2026-10-14, the table at the top); the 8+ core machine with a separate load generator stays open (the cloud VM has 4 cores and no second machine).
 
 ## 2026-10-11 worker pool (macOS, local)
 
@@ -116,7 +166,7 @@ before, after, Go, after, before:
 | Go `net/http` | 168947 / 312386 / 305329 | | 305329 | 18548 |
 
 On Linux the pool is 1.7x the thread per connection at `-c 64` (about 0.8x Go, from 0.45x), and `-c 1` is unchanged. The cloud VM rerun
-(4 cores, the table at the top) is still to do.
+(4 cores, the table at the top) is done (O7.5a, 2026-10-14).
 
 2026-10-11 O7.4a (macOS, local, load 5 to 8): one arena per keep-alive connection, reset after each request, instead of one per request. `ab -k -c 64 -n 100000`, median of 3, over 3 to 4 rounds: before 119k req/s (rounds 116.6k to 121.8k), after 124k (123.6k to 125.3k; one round at 66k while another job ran); `-c 1`: 48.0k to 48.9k before, 43.2k to 48.4k after. Within the noise: the hello handler allocates little, so the saving is not visible here.
 
