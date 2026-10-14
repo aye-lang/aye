@@ -5,7 +5,7 @@ Aye in the spirit of Next.js, under `framework/` (new). **F1.1 is done
 (2026-10-10, ef6f47b):** the hello-world route was the acceptance test of
 `std.http`. Everything after it is paused. The design is
 [`docs/framework.md`](../framework.md) (F0.1, it answers the open
-choices); gaps go to `browser/COMPILER_GAPS.md` (in aye-lang/anyknown) with the F step under
+choices); gaps go to `browser/COMPILER_GAPS.md` (in aye-lang/dweller) with the F step under
 **Hit by**. Finished steps: [`done.md`](done.md).
 
 ## Done criteria
@@ -31,8 +31,8 @@ choices); gaps go to `browser/COMPILER_GAPS.md` (in aye-lang/anyknown) with the 
 - FD8: a hello page's requests per second in `docs/aye-bench.md` next
   to `std.http`'s own number (O12).
 - FD9: an example app (a blog: list and detail pages, an API route, a
-  form POST, one island) passes its scripted checks, and the anyknown
-  browser shows its text (`anyknown dump --md`).
+  form POST, one island) passes its scripted checks, and the dweller
+  browser shows its text (`dweller dump --md`).
 
 Each FDn is checked by the test its phase adds to
 `cargo test --release --test framework`. F1.1 adds that test and the
@@ -410,19 +410,19 @@ the card that makes it:
 - time box: 90 min
 - notes: Nothing is stored: a reload shows the JSON's count again (the doc's data scope is a file and memory; a persisted like would be a feature it does not describe). Copy the counter, do not share it: an island is built from its own directory.
 
-#### F5.7: the posts app in the anyknown browser, dev and production
+#### F5.7: the posts app in the dweller browser, dev and production
 - lane: framework
-- goal: `scripts/framework-posts.sh` builds the posts app for production, starts it, and checks the anyknown browser's `dump --md` of `/` and of a post, and a form POST through `anyknown agent` JSON lines; `posts_prod` checks the production binary against the F5.4 to F5.6 transcripts.
+- goal: `scripts/framework-posts.sh` builds the posts app for production, starts it, and checks the dweller browser's `dump --md` of `/` and of a post, and a form POST through `dweller agent` JSON lines; `posts_prod` checks the production binary against the F5.4 to F5.6 transcripts.
 - serves: FD9, FD7
-- files: `scripts/framework-posts.sh` (new), `tests/framework.rs` (`posts_prod`), `tests/framework/posts/anyknown_*.md` (new: the expected Markdown dumps)
+- files: `scripts/framework-posts.sh` (new), `tests/framework.rs` (`posts_prod`), `tests/framework/posts/dweller_*.md` (new: the expected Markdown dumps)
 - verify: `cargo test --release --test framework posts_prod` → exit 0 (the production binary from F5.3 gives the same transcripts as the dev build, apart from the scrubbed `href` and ETag lines) and `scripts/framework-posts.sh` → exit 0, printing `dump / ok`, `dump post ok`, `form ok` (the dump contains every post title; after `navigate`, `type name`, `type text`, `click`, the post page dump holds the new comment)
 - depends on: F5.6, F5.3
 - parallel with: –
 - where: local (the browser build is `scripts/downstream.sh`, about 30 s in debug mode; it stays out of `tests/framework.rs` so a browser regression does not read as a framework failure, `docs/framework.md` §7)
 - model: sonnet
 - time box: 120 min
-- notes: The `agent` JSON line shapes are in `docs/agent-protocol.md` of aye-lang/anyknown. If the browser cannot do a step, the script prints which step and the card ends with that listed as a browser-lane gap (P-card), not worked around. The island is not run in the anyknown browser (no `WebAssembly` there, `docs/framework.md` §7); its text is the server-rendered `Likes: 3`.
-- notes (done): `posts_prod` runs the `POSTS_CASES` transcripts, the comment `POST` and the page after it against the production binary (the app tree gone, `PATH=/usr/bin:/bin`, the data file copied elsewhere), with the hashed stylesheet `href` put back to `/style.css` and `Content-Length` recomputed; `/style.css` and the hashed URL are compared with `public/style.css`, and `likes.wasm` is checked when the island was built. The manual/CI step is `sh scripts/framework-posts.sh` (after `scripts/downstream.sh` has cloned anyknown; with no clone it prints `skipped: no anyknown clone; run scripts/downstream.sh first` and exits 0): it prints `dump / ok`, `dump post ok`, `form ok`. The checks are `grep`s on the dumps, so there are no `anyknown_*.md` files. `dump --md` reads the first `article` only (`docs/agent-protocol.md`, Read), and the posts page has its comments after the `article`, so `0 comments` is checked in `dump --a11y` and `1 comments` in the agent `snapshot`. A `<main>` around the page would put the comments into the Markdown; that changes every posts transcript and is left as a decision.
+- notes: The `agent` JSON line shapes are in `docs/agent-protocol.md` of aye-lang/dweller. If the browser cannot do a step, the script prints which step and the card ends with that listed as a browser-lane gap (P-card), not worked around. The island is not run in the dweller browser (no `WebAssembly` there, `docs/framework.md` §7); its text is the server-rendered `Likes: 3`.
+- notes (done): `posts_prod` runs the `POSTS_CASES` transcripts, the comment `POST` and the page after it against the production binary (the app tree gone, `PATH=/usr/bin:/bin`, the data file copied elsewhere), with the hashed stylesheet `href` put back to `/style.css` and `Content-Length` recomputed; `/style.css` and the hashed URL are compared with `public/style.css`, and `likes.wasm` is checked when the island was built. The manual/CI step is `sh scripts/framework-posts.sh` (after `scripts/downstream.sh` has cloned dweller; with no clone it prints `skipped: no dweller clone; run scripts/downstream.sh first` and exits 0): it prints `dump / ok`, `dump post ok`, `form ok`. The checks are `grep`s on the dumps, so there are no `dweller_*.md` files. `dump --md` reads the first `article` only (`docs/agent-protocol.md`, Read), and the posts page has its comments after the `article`, so `0 comments` is checked in `dump --a11y` and `1 comments` in the agent `snapshot`. A `<main>` around the page would put the comments into the Markdown; that changes every posts transcript and is left as a decision.
 
 #### F5.8: the framework on Ubuntu 24.04
 - lane: framework
@@ -436,7 +436,7 @@ the card that makes it:
 - model: sonnet
 - time box: 120 min
 - notes: Expect Linux differences in `std.fs` link handling and `stat` (the O2.5 notes). Fix only what is small and inside `framework/` or the test; anything in `std/` or `src/` is an O-card in the report. Stop rule: two failing runs of the same test → report.
-- done: 2026-10-11, Ubuntu 24.04 x86_64. `cargo test --release --test framework` exit 0, 20 passed, 0 skipped (build_prod, dev_island, dev_broken, dev_error, dev_script, dev_reload, dev_units, dev_start, dev_reload_cycle, island_build, hello, dev_reload_node, islands_glue, posts_comments, island_e2e, pages, gen_prod, web_units, posts_pages, prod_serve). `ldd` of the pages production binary (728608 bytes): `linux-vdso.so.1`, `libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6`, `libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6`, `/lib64/ld-linux-x86-64.so.2`; no libcurl. Run under `env -i`, `/`, `/about` and `/style.css` all answered 200. `scripts/downstream.sh` was skipped: the anyknown clone needs `gh auth`, unavailable in the cloud session.
+- done: 2026-10-11, Ubuntu 24.04 x86_64. `cargo test --release --test framework` exit 0, 20 passed, 0 skipped (build_prod, dev_island, dev_broken, dev_error, dev_script, dev_reload, dev_units, dev_start, dev_reload_cycle, island_build, hello, dev_reload_node, islands_glue, posts_comments, island_e2e, pages, gen_prod, web_units, posts_pages, prod_serve). `ldd` of the pages production binary (728608 bytes): `linux-vdso.so.1`, `libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6`, `libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6`, `/lib64/ld-linux-x86-64.so.2`; no libcurl. Run under `env -i`, `/`, `/about` and `/style.css` all answered 200. `scripts/downstream.sh` was skipped: the dweller clone needs `gh auth`, unavailable in the cloud session.
 
 #### F5.9: the hello page's requests per second
 - lane: framework
@@ -506,4 +506,4 @@ brackets.
 - F4 bundler for JS islands (FD6's "or in JS and bundled"): reuses the browser's JS parser, which needs the browser-lane step that moves `browser/js/lexer.aye`, `parser.aye` and `ast.aye` out of the `js` module (not yet a card, `docs/framework.md` "Aye-lane steps by phase"). Not in F4: the Aye island already meets FD6, and plain JS modules in `public/` work from F2.1. Verify when written: a JS island imported by a page runs under Node 22.
 - F4 TypeScript (type-stripping in the shared parser): waits for the bundler and for the user's answer to question 3 of `docs/framework.md`.
 - F5 later: TLS in the server (the documented deploy is behind Caddy or nginx), a database layer (§6: out of scope), sessions (above).
-- Islands and dev reload in the anyknown browser need `WebAssembly` and `EventSource` there (neither exists); until then the framework tests with Node 22 and Chrome (`docs/framework.md` §5, §7).
+- Islands and dev reload in the dweller browser need `WebAssembly` and `EventSource` there (neither exists); until then the framework tests with Node 22 and Chrome (`docs/framework.md` §5, §7).

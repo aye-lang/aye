@@ -2,7 +2,7 @@
 
 Ubuntu 24.04.5, x86_64, Firecracker VM (kernel cmdline `ipv6.disable=1`),
 `scripts/setup-ubuntu.sh`, then `cargo test --release` one binary at a time.
-The `browser` rows are from before P8.3; the browser is now in aye-lang/anyknown (`scripts/downstream.sh`).
+The `browser` rows are from before P8.3; the browser is now in aye-lang/dweller (`scripts/downstream.sh`).
 
 | Target | Exit | Summary | Seconds |
 |---|---|---|---|

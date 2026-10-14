@@ -6,7 +6,7 @@ entries come from `browser/COMPILER_GAPS.md`, where an old workaround is
 the bad case and the feature that replaced it the good one; the rules
 themselves are in `docs/spec.md` and `docs/decisions.md`. Paths under
 `browser/` in this file point into
-[aye-lang/anyknown](https://github.com/aye-lang/anyknown) (the code moved there in P8.3);
+[aye-lang/dweller](https://github.com/aye-lang/dweller) (the code moved there in P8.3);
 line numbers are from the revision before the split.
 
 ## Errors

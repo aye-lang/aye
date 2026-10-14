@@ -2,7 +2,7 @@
 
 Goal: finish the language (Aye, formerly Ore: command `aye`,
 extension `.aye`) to the done criteria in [`plans/aye.md`](plans/aye.md),
-then resume the anyknown browser in its own repo (aye-lang/anyknown). The
+then resume the dweller browser in its own repo (aye-lang/dweller). The
 language lane gets most slots. The browser is frozen (maintenance only) and
 is the language's biggest integration test, run as the downstream check. The framework does one slice (F1)
 as the acceptance test of `std.http`. Finished steps are in
@@ -34,16 +34,16 @@ root's test executable: 450 ms to 5 ms), O5.2f (`aye test` without `-g`:
 -14% wall on `aye test browser`), CI sharding (#13), the lsp debounce
 test made deterministic (#11, #14). Criterion O3: gaps 49-56 fixed or
 declined (decisions.md "Compiler gaps closed out, round 2 (O3)"), and
-anyknown#1 moved its gap file's "## Open" to empty. O6.1c (lsp end spans)
+Dweller#1 (then anyknown#1) moved its gap file's "## Open" to empty. O6.1c (lsp end spans)
 merged from the cloud.
 
-Anyknown maintenance the same day, each a PR merged on anyknown's own CI
+Dweller (then anyknown) maintenance the same day, each a PR merged on its own CI
 (macOS + ubuntu): #2, #4 and #8 fix the three known flaky image tests
 (image load/error fired in the finishing task; a dropped in-flight load
 is held, one fetch per document; the test server's `/held-now` waits for
 every named image), #3 O1.17c, #5 O1.14c (`@targetOs()` in the browser), #6
-P8.x (`std.fs.readDir` in archive.aye). `tests/downstream/ANYKNOWN_REV`
-points at anyknown main after these. Framework browser checks (island,
+P8.x (`std.fs.readDir` in archive.aye). `tests/downstream/DWELLER_REV`
+points at dweller main after these. Framework browser checks (island,
 dev reload) passed in headless `agent-browser` (plans/framework.md F3,
 F4); the no-browser hook allows that shim, so such checks are agent
 work. Check `gh run list` and remote `<step>-<slug>` branches on resume.
@@ -52,14 +52,14 @@ Cloud-prompt rules (learned): the session ends when its turn ends, so
 every long command runs in the foreground with a 10 minute timeout,
 split into chunks; start by resetting the local main to origin/main;
 source `/etc/profile.d/aye-wasi.sh`; `cargo fmt` before committing;
-`scripts/downstream.sh` cannot reach the private anyknown repo from the
-VM (skipped, say so; the Mac runs it). The scheduler fires `run_once_at`
+`scripts/downstream.sh` clones the public Dweller repo, so it also runs
+on the VM. The scheduler fires `run_once_at`
 routines up to 30 min late; a manual `run` makes a late one fire twice.
 Sessions often leave their merged branch on origin: prune them.
 
 State: all criteria O1–O13 hold; the Aye backlog in `plans/aye.md` has
 no open card; framework F0–F5 are done. Next, per the goal at the top:
-resume the anyknown browser in its own repo (its `docs/plans/browser.md`
+resume the dweller browser in its own repo (its `docs/plans/browser.md`
 backlog: P3.63, P1.6, P1.14, ...), with this repo in maintenance and
 performance mode (new cards from downstream needs or measurements).
 
@@ -68,7 +68,7 @@ performance mode (new cards from downstream needs or measurements).
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
 | Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O1–O13 hold (2026-10-14); backlog empty | maintenance; cards from downstream needs | cloud routines; local Mac for macOS-only PRs |
-| Browser ([`plans/anyknown.md`](plans/anyknown.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/anyknown` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the anyknown repo | local (archives in `target/sites/`, screenshots) |
+| Browser ([`plans/dweller.md`](plans/dweller.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/dweller` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the dweller repo | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F3 (dev server) done 2026-10-11; F4 islands next (F4.1 spike first) | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename
@@ -89,8 +89,8 @@ Steps not tied to one lane, in this order. Their cards are in
 3. **X3 website** ayelang.dev on Cloudflare Workers (`site/`); v1 live 2026-10-08.
 4. **X4 go public** (aye-lang/aye only): decided 2026-10-12, go
    public now. The pre-public check passed (`plans/project.md` X4); left
-   is the visibility switch (a repo admin setting). aye-lang/anyknown
-   stays private: it is the user's product.
+   is the visibility switch (a repo admin setting). The browser repo
+   (Dweller, formerly dweller) was open-sourced on 2026-10-15.
 
 ## Execution rules
 
@@ -123,11 +123,11 @@ its area. Nothing else of the plan.
    Docs-only cards skip the build and tests. The downstream check
    replaces the old browser criterion M1 (`cargo test --release --test
    browser` after every merge), which `cargo test` no longer covers
-   ([`plans/anyknown.md`](plans/anyknown.md)).
+   ([`plans/dweller.md`](plans/dweller.md)).
 6. **Do not edit** `docs/plan.md`, `docs/plans/*` or `docs/milestones.md`
    unless the card names it; main updates them once per batch
    ([workflow.md, "Parallel streams do not edit a shared status document"](practices/workflow.md#parallel-streams-do-not-edit-a-shared-status-document)).
-   New compiler gaps go in `browser/COMPILER_GAPS.md` of aye-lang/anyknown.
+   New compiler gaps go in `browser/COMPILER_GAPS.md` of aye-lang/dweller.
 7. **Cloud is the integrator (user, 2026-10-12).** The work runs in
    Claude cloud sessions (Ubuntu 24.04 VM, a fresh clone of
    `aye-lang/aye`), merges included: the session that finishes a step
@@ -141,9 +141,9 @@ its area. Nothing else of the plan.
 8. **Diagnose, then fix.** A step whose cause is unknown is a diagnose
    step (cause written down, fix proposed); the fix is the next card.
 8. **Browser symptoms:** before dispatching a browser fix, confirm the
-   symptom on current anyknown `main` (`page_load.py check --screens`). P3.4 and
+   symptom on current dweller `main` (`page_load.py check --screens`). P3.4 and
    P3.5 chased symptoms that no longer reproduced.
-9. **Site expectations only tighten** (`browser/tools/sites.json` in aye-lang/anyknown). A
+9. **Site expectations only tighten** (`browser/tools/sites.json` in aye-lang/dweller). A
    site that loses content is a regression to fix, never a reason to
    change its expected strings (P3.20 did, for GitHub).
 10. **Report:** commits (hash and one line each), the verify result, the
@@ -158,8 +158,7 @@ its area. Nothing else of the plan.
     is the merge commit's or the last commit's message. A PR is only
     for a change someone should see before it lands. The VM is Linux,
     so `scripts/linux.sh` is not used there; `scripts/downstream.sh`
-    needs read access to the private anyknown repo (the session's
-    GitHub access), and never writes to it.
+    clones the public Dweller repo, and never writes to it.
 
 Merging (main's side):
 
@@ -223,22 +222,22 @@ goes to the backlog or to `done.md` as dropped.
   (here, in a lane plan or in `decisions.md`) and go on. The user only
   stops work when their token budget runs out. Merges and pushes to
   `main` are the cloud session's too (rule 7).
-- **anyknown is the user's (user, 2026-10-12):** aye-lang/anyknown is
-  the user's product and outside the AI's decisions: it stays private,
-  its license, visibility and product choices are the user's. From
-  here it is read only (`scripts/downstream.sh`); a change it needs is
-  proposed to the user, not pushed.
+- **Dweller (user, 2026-10-15):** the browser, formerly aye-lang/dweller,
+  is renamed Dweller and open-sourced under MIT OR Apache-2.0 at
+  aye-lang/dweller; author emails in its history are kept. Product
+  choices for Dweller (features, name, license) are the user's; code
+  changes go by PR on its own CI.
 - **Lanes and priority (2026-10-08):** language first; browser frozen
   until O6–O9, then split into its own repo (git filter-repo) and
   resumed; framework does F1 only. Lane decisions are in each lane plan.
 - **Name and repo:** Ore → Aye (`aye`, `.aye`, "ayelang"); repo
   github.com/aye-lang/aye, going public on its own (X4, decided
-  2026-10-12; aye-lang/anyknown stays private); license MIT OR Apache-2.0 (`LICENSE-MIT`,
+  2026-10-12); license MIT OR Apache-2.0 (`LICENSE-MIT`,
   `LICENSE-APACHE`); site ayelang.dev (Cloudflare Workers, `site/`).
 - **Platforms:** macOS (local) and Ubuntu 24.04 (Apple `container`
   locally via `scripts/linux.sh`, after X1; the user's cloud).
   Windows is out of scope. M10's ThreadSanitizer run is not possible on
   this Mac.
-- **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md` (in aye-lang/anyknown).
+- **Integration branch** `main`; one gap list, `browser/COMPILER_GAPS.md` (in aye-lang/dweller).
 - **Step ids** are never renumbered: P/O (aye), P (browser), F
   (framework), X (project). Language choices: [`decisions.md`](decisions.md).

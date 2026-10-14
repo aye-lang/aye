@@ -8,9 +8,9 @@ check). Names in it (`web` for the library module and the command,
 `.web/` for the generated build root) are placeholders: see "Questions
 for the user".
 
-The anyknown browser, which this document cites for code and protocol
+The dweller browser, which this document cites for code and protocol
 (`browser/...`, `docs/agent-protocol.md`, `browser/COMPILER_GAPS.md`), has lived in
-[aye-lang/anyknown](https://github.com/aye-lang/anyknown) since P8.3; those paths are
+[aye-lang/dweller](https://github.com/aye-lang/dweller) since P8.3; those paths are
 relative to that repo.
 
 Inputs: [`plan.md`](plan.md) (lanes), [`plans/aye.md`](plans/aye.md)
@@ -336,9 +336,9 @@ form submissions in memory behind a global `Mutex`. A database layer is a later 
   `tests/framework/<app>/*.http` over a TCP socket and compares the
   response with the expected one (`Date` masked). It is part of
   `cargo test`, so rule 4 of `plan.md` covers it.
-- **The anyknown browser as client:** FD9 runs
-  `anyknown dump --md http://127.0.0.1:<port>/` on the example app, and
-  the form POST through `anyknown agent` JSON lines (`navigate`, `type`,
+- **The dweller browser as client:** FD9 runs
+  `dweller dump --md http://127.0.0.1:<port>/` on the example app, and
+  the form POST through `dweller agent` JSON lines (`navigate`, `type`,
   `click`, `docs/agent-protocol.md`). This dogfoods the browser's
   networking, HTML parsing and forms on pages we control. It stays in
   the FD9 script, not in `tests/framework.rs`, so a browser regression
@@ -377,13 +377,13 @@ props; a generated `/_web/islands.js` loads `counter.wasm` and calls its
 **Proposed wording** for design.md's non-goal (today: 不取代 JavaScript：
 網頁內容的腳本語言仍是 JS，Aye 只寫引擎本身。), taken 2026-10-12 (see "Decided questions"):
 
-> 不取代 JavaScript：網頁的腳本語言仍是 JS，anyknown 引擎照規格實作它。Aye
+> 不取代 JavaScript：網頁的腳本語言仍是 JS，dweller 引擎照規格實作它。Aye
 > 寫引擎、伺服器與工具；Aye 也能編譯成 wasm32 在網頁裡執行（框架的
 > island），那是 WebAssembly 的一般用法，網頁作者不必改寫 JS，Aye 也不提供
 > JS 以外的網頁 API。
 
 (English: Aye does not replace JavaScript. JS stays the scripting
-language of web pages, and the anyknown engine implements it to the
+language of web pages, and the dweller engine implements it to the
 spec. Aye writes the engine, servers and tools; Aye can also be compiled
 to wasm32 and run in pages (the framework's islands), which is ordinary
 WebAssembly: page authors need not rewrite their JS, and Aye offers no

@@ -4,10 +4,10 @@ Choices made in the stage0 compiler where the design doc did not fix the
 answer. Each one can be revisited. The grammar is in `grammar.ebnf`.
 
 Since P8.3 the browser (`browser/`, with its `COMPILER_GAPS.md`) lives in
-[aye-lang/anyknown](https://github.com/aye-lang/anyknown). Mentions of `browser/` and of
+[aye-lang/dweller](https://github.com/aye-lang/dweller). Mentions of `browser/` and of
 `aye test browser` / `aye build browser` below record what a decision or
 a measurement rested on, as written then; to repeat one, run it in the
-checkout that `scripts/downstream.sh` makes at `target/downstream/anyknown`.
+checkout that `scripts/downstream.sh` makes at `target/downstream/dweller`.
 
 ## Syntax
 
@@ -283,7 +283,7 @@ The rest of std is Aye too: no container or text function is a compiler builtin.
 
 ## Ergonomics from the browser (M9.5)
 
-The browser written in Aye (`browser/COMPILER_GAPS.md`, now in aye-lang/anyknown) listed what hurt. Each change below answers one entry.
+The browser written in Aye (`browser/COMPILER_GAPS.md`, now in aye-lang/dweller) listed what hurt. Each change below answers one entry.
 
 - **Several variants per `match` arm:** `.A, .B => ...` on enums and on errors, like the integer patterns. Such an arm binds no fields, since the variants' fields differ in names and types; a variant with fields is listed as `.V { .. }`, as in a single-variant arm, so dropping a payload stays visible. A binding there is E0097, which says to give the variant its own arm. Shared-name bindings were left out: they would need equal field types and a rule for what the binding means. A variant listed twice in one arm is E0057, like a variant matched by an earlier arm. Lowering tests the tag against the arm's tags (one `||` chain).
 - **`[_]T{...}`:** the parser counts the elements and builds `[N]T{...}`, so nothing after it knows the difference. `[_]T` anywhere else (a parameter, `@sizeOf`) is E0045, which says that a type needs the length. A generated table no longer needs its length counted by hand.
@@ -743,7 +743,7 @@ passes disagree in sign). `Server` is unchanged.
 
 ## Compiler gaps closed out, round 2 (O3)
 
-Criterion O3 wants `browser/COMPILER_GAPS.md` (aye-lang/anyknown) "## Open" empty. Gaps 49, 51 and 54 were fixed (O1.3a, O1.7, X1.3) and gap 50 by `@targetOs()` (O1.14, O1.14b). Methods as function values (gap 52) and generic methods (half of gap 53) are fixed in O1.28 and O1.29. The rest are declined:
+Criterion O3 wants `browser/COMPILER_GAPS.md` (aye-lang/dweller) "## Open" empty. Gaps 49, 51 and 54 were fixed (O1.3a, O1.7, X1.3) and gap 50 by `@targetOs()` (O1.14, O1.14b). Methods as function values (gap 52) and generic methods (half of gap 53) are fixed in O1.28 and O1.29. The rest are declined:
 
 - **No nested structs** (gap 53, the first half). A struct is declared at module level, like every other named type, so each type has one name, `module.Type`, that `aye doc --signatures`, hover and error messages print the same way, and the generated C name stays `module_Type`. A struct inside a struct or a function adds a scope for type names (`Outer.Inner`, a type that captures nothing yet is visible only in one block) for no new power: a module-level struct without `pub` is just as private. std.http `Server` needed generic methods, not nesting.
 - **An `extern fn` does not share its name with a `pub fn`** (gap 55). A name in a module means one thing (E0015). The link-name form `extern("symlink") fn cSymlink(...)` (O1.3a) names the C symbol at the declaration, so the wrapper keeps the short name and a reader sees which call goes to C.

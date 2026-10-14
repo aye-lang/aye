@@ -537,8 +537,8 @@ project. When you learn a lesson that will come up again, add an entry there.
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT), at your option. Third-party files keep their own
-notices. The Octane benchmark ports and jQuery that the anyknown browser tests use live in
-[aye-lang/anyknown](https://github.com/aye-lang/anyknown), with their notices.
+notices. The Octane benchmark ports and jQuery that the dweller browser tests use live in
+[aye-lang/dweller](https://github.com/aye-lang/dweller), with their notices.
 
 Unless you explicitly state otherwise, any contribution you submit for
 inclusion in this project, as defined in the Apache-2.0 license, is dual

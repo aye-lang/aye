@@ -1,7 +1,7 @@
 # Stage0 milestones
 
 The browser (`browser/`, `docs/browser.md`, `cargo test --test browser`) named in
-these milestones moved to [aye-lang/anyknown](https://github.com/aye-lang/anyknown) in P8.3.
+these milestones moved to [aye-lang/dweller](https://github.com/aye-lang/dweller) in P8.3.
 The texts keep their original paths.
 
 | Milestone | Status | Date | What is left |
@@ -119,8 +119,8 @@ pass.
 
 # Stage0 milestones, part 2: enough language for the browser
 
-M1 to M5 made Aye usable for small CLIs. M6 to M10 add what the anyknown
-browser (`docs/browser.md` in aye-lang/anyknown) needs: bit operations for hashing and decoding,
+M1 to M5 made Aye usable for small CLIs. M6 to M10 add what the dweller
+browser (`docs/browser.md` in aye-lang/dweller) needs: bit operations for hashing and decoding,
 constants, integer `match` for tokenizers, real C interop for SDL2,
 FreeType and libcurl, and a std with lists, maps and text. The same rules
 apply: acceptance tests first, a milestone is done when they pass, and
@@ -414,7 +414,7 @@ thread each, handing control back and forth through two channels.
   coroutines on threads, the error return trace, and each misuse panic;
   the spec's `std.coro` section; a JavaScript conformance script of many
   live and dropped generators, nested resumes, deep recursion and async
-  chains, also under `ANYKNOWN_JS_GC=stress`. Runs as x86_64 under
+  chains, also under `DWELLER_JS_GC=stress`. Runs as x86_64 under
   Rosetta; the generated C compiles for x86_64 and aarch64 Linux. No new
   compile-time checks, so no new error codes.
 - **Done as:** see `docs/decisions.md`, "Coroutines (M12)". In the
