@@ -107,6 +107,11 @@ impl Client {
     /// The next message, which must be `publishDiagnostics`: its params.
     fn diagnostics(&mut self) -> Json {
         let msg = self.recv();
+        self.params_of_diagnostics(msg)
+    }
+
+    /// `msg`, which must be `publishDiagnostics`: its params.
+    fn params_of_diagnostics(&self, msg: Json) -> Json {
         assert_eq!(
             msg.get("method").and_then(Json::as_str),
             Some("textDocument/publishDiagnostics"),
@@ -1161,13 +1166,29 @@ fn hover_does_not_restart_the_debounce() {
     c.notify("textDocument/didChange", &change(3, GOOD));
     let t = Instant::now();
     std::thread::sleep(Duration::from_millis(100));
-    at(&mut c, 7, "hover", &uri, 1, 8);
-    let p = c.diagnostics();
-    let e = t.elapsed();
+    let h = Instant::now();
+    c.send(&format!(
+        r#"{{"jsonrpc":"2.0","id":7,"method":"textDocument/hover","params":{{"textDocument":{{"uri":{}}},"position":{{"line":1,"character":8}}}}}}"#,
+        aye::diag::json_str(&uri)
+    ));
+    // On a busy machine the check can fire before the hover is read, so the
+    // reply and the diagnostics come in either order.
+    let (mut reply, mut published) = (None, None);
+    while reply.is_none() || published.is_none() {
+        let msg = c.recv();
+        if msg.get("id").and_then(Json::as_i64) == Some(7) {
+            reply = Some(msg);
+        } else {
+            published = Some((c.params_of_diagnostics(msg), t.elapsed(), h.elapsed()));
+        }
+    }
+    assert!(reply.unwrap().get("result").is_some());
+    let (p, e, since_hover) = published.unwrap();
     assert_eq!(p.get("version").and_then(Json::as_i64), Some(3));
-    // 150 ms from the last change; a restart by the hover would be 250 ms.
+    // 150 ms from the last change, about 50 ms after the hover; a restart by
+    // the hover would put it 150 ms or more after the hover.
     assert!(e >= Duration::from_millis(150), "{e:?}");
-    assert!(e < Duration::from_millis(240), "{e:?}");
+    assert!(since_hover < Duration::from_millis(140), "{since_hover:?}");
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
