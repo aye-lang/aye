@@ -1166,7 +1166,6 @@ fn hover_does_not_restart_the_debounce() {
     c.notify("textDocument/didChange", &change(3, GOOD));
     let t = Instant::now();
     std::thread::sleep(Duration::from_millis(100));
-    let h = Instant::now();
     c.send(&format!(
         r#"{{"jsonrpc":"2.0","id":7,"method":"textDocument/hover","params":{{"textDocument":{{"uri":{}}},"position":{{"line":1,"character":8}}}}}}"#,
         aye::diag::json_str(&uri)
@@ -1179,16 +1178,16 @@ fn hover_does_not_restart_the_debounce() {
         if msg.get("id").and_then(Json::as_i64) == Some(7) {
             reply = Some(msg);
         } else {
-            published = Some((c.params_of_diagnostics(msg), t.elapsed(), h.elapsed()));
+            published = Some((c.params_of_diagnostics(msg), t.elapsed()));
         }
     }
     assert!(reply.unwrap().get("result").is_some());
-    let (p, e, since_hover) = published.unwrap();
+    let (p, e) = published.unwrap();
     assert_eq!(p.get("version").and_then(Json::as_i64), Some(3));
-    // 150 ms from the last change, about 50 ms after the hover; a restart by
-    // the hover would put it 150 ms or more after the hover.
+    // Not before 150 ms from the last change. That the hover does not restart
+    // the quiet time is the unit test `hover_does_not_move_the_last_change`
+    // in src/lsp.rs: an upper bound on wall time failed on loaded CI runners.
     assert!(e >= Duration::from_millis(150), "{e:?}");
-    assert!(since_hover < Duration::from_millis(140), "{since_hover:?}");
     c.finish();
     let _ = std::fs::remove_dir_all(dir);
 }
