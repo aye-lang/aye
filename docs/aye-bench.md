@@ -195,3 +195,57 @@ CPU while the server uses about 55% of one CPU over its 4 workers (`top`), and t
 and 13151 + 12548 req/s before, 14135 + 13997 and 12398 + 12729 without the lock (about 26k together either way). The lock is
 taken twice per connection, uncontended at this rate, so it was left as is. To see server-side gains on the accept path, a
 multi-threaded client (`wrk`, or several `ab`) is needed first.
+
+## 2026-10-14 keep-alive skew under `SO_REUSEPORT` (O3.9e, Ubuntu 24.04 cloud VM)
+
+O3.9e asked whether the kernel's hash of keep-alive connections over the per-worker listeners (O3.9c) leaves a worker idle while
+another queues. `nproc` 4, Linux 6.18.44 Firecracker, Ubuntu 24.04, load average 1.0 to 4.0 (this session only), main `cd75835`,
+`wrk` 4.1.0 (Ubuntu package), `scripts/bench/hello_http.aye` built `--mode fast`. Each run starts a fresh server, sends one `curl`,
+then `wrk -t2 -c64 -d10s http://127.0.0.1:8081/` (keep-alive, wrk's default) or the same with `-H 'Connection: close'`; the
+server gets SIGTERM after it. Variants: `aye` is the bench hello (4 workers); `w1` the same with `s.workers = 1` (and
+`os.onStop()`); `cnt4`/`cnt1` the same built with a temporary, uncommitted counter in `workerMain` (requests served and
+connections accepted per worker, printed at stop). CPU per worker thread is `utime + stime` from `/proc/<pid>/task/*/stat`
+over the run. No socket errors and no non-2xx anywhere.
+
+Unpinned, three passes (req/s; median last):
+
+| server | keep-alive | median | `Connection: close` | median |
+|---|---|---|---|---|
+| aye, 4 workers | 147999 / 157481 / 155966 | 155966 | 27536 / 27812 / 28564 | 27812 |
+| cnt4, 4 workers | 160567 / 162850 / 159252 | 160567 | 28356 / 30210 / 30087 | 30087 |
+| w1, 1 worker | 79074 / 87334 / 68492 | 79074 | 31517 / 31584 / 31927 | 31584 |
+| cnt1, 1 worker | 67249 / 80592 / 60847 | 67249 | 32673 / 32505 / 32564 | 32564 |
+
+Pinned with `taskset` (server on CPUs 0-1, `wrk` on 2-3), three passes:
+
+| server | keep-alive | median | `Connection: close` | median |
+|---|---|---|---|---|
+| cnt4, 4 workers | 189705 / 178625 / 181646 | 181646 | 30838 / 29438 / 29068 | 29438 |
+| cnt1, 1 worker | 63101 / 67091 / 59905 | 63101 | 33031 / 31755 / 32781 | 32781 |
+
+Per worker, keep-alive, `cnt4` (requests served / connections; max/min of requests; requests per connection; CPU per worker):
+
+| run | worker 0 | worker 1 | worker 2 | worker 3 | max/min | req per conn | CPU |
+|---|---|---|---|---|---|---|---|
+| unpinned 1 | 396122 / 16 | 297252 / 11 | 392267 / 17 | 536308 / 22 | 1.80 | 23.1k to 27.0k | 37 to 54% |
+| unpinned 2 | 241665 / 10 | 599723 / 25 | 463812 / 18 | 325529 / 13 | 2.48 | 24.0k to 25.8k | 35 to 58% |
+| unpinned 3 | 379162 / 18 | 328316 / 13 | 493760 / 20 | 393508 / 15 | 1.50 | 21.1k to 26.2k | 40 to 51% |
+| pinned 1 | 480406 / 18 | 410127 / 12 | 529062 / 19 | 481208 / 17 | 1.29 | 26.7k to 34.2k | 44 to 51% |
+| pinned 2 | 485073 / 18 | 551089 / 20 | 316606 / 10 | 438276 / 18 | 1.74 | 24.3k to 31.7k | 40 to 51% |
+| pinned 3 | 444269 / 14 | 447412 / 15 | 562181 / 25 | 366149 / 12 | 1.54 | 22.5k to 31.7k | 42 to 53% |
+
+(Connection counts include the one `curl`.) With `Connection: close` the workers serve within 4% of each other in every run.
+
+Decision: no code change. The request skew (1.3x to 2.5x) is the connection skew of the hash (10 to 25 connections per worker,
+64 in all), not a worker that queues: unpinned, every connection gets about the same rate whichever worker holds it (requests per
+connection within 8 to 24%), and no worker thread goes above 58% of a CPU, so the worker with 25 connections is not the limit;
+the client's per-connection round trip is. Pinned to two CPUs, the four workers split those CPUs evenly (40 to 53% each), so a
+worker with more connections gives each a little less (22.5k vs 31.7k in pass 3), but the CPUs are full and moving connections
+would not add requests. Keep-alive with 4 workers is about twice the 1-worker number (156k to 182k vs 63k to 79k median), far
+from "clearly below". A hand-off between workers would cost a lock or a wake per moved connection for no throughput here.
+O3.9c's -9% `ab -k` result was `ab`'s single thread: `wrk` gets 156k to 182k from the same server. `taskset` made the keep-alive
+passes steadier (179k to 190k pinned vs 148k to 163k unpinned) and leaves the decision as it is.
+
+Aside, not this card: with `Connection: close` 4 workers (28k to 30k) are slightly below 1 worker (31.5k to 33k) in every pass,
+pinned or not; each worker uses about 27% of a CPU, so the server is not CPU-bound there either (likely the kernel's connection
+setup and `wrk`'s reconnects).

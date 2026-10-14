@@ -1,0 +1,54 @@
+// Misuse of generic methods (methods with their own `comptime` parameters).
+
+interface Show {
+    fn show(self: *Self) i64
+    fn each(self: *Self, comptime T: type) i64
+}
+
+struct Counter {
+    count: i64
+
+    fn add(self: *mut Self, comptime T: type, x: T) where T: Integer {
+        self.count += x as i64
+    }
+
+    fn bad(self: *Self, comptime n: i64) i64 {
+        return 1
+    }
+
+    fn other(self: *Self, comptime T: type) where U: Integer {
+    }
+
+    fn fields(self: *Self, comptime T: type, x: T) i64 {
+        return x.count
+    }
+
+    fn inferred(self: *Self, comptime T: type, x: T) !T {
+        return x
+    }
+}
+
+pub fn Box(comptime T: type) type {
+    return struct {
+        value: T
+
+        fn map(self: *Self, comptime U: type, f: fn(T) U) Box(U) {
+            return Box(U) { value: f(self.value) }
+        }
+    }
+}
+
+fn half(x: i64) f64 {
+    return x as f64 / 2.0
+}
+
+pub fn main() {
+    var c = Counter { count: 0 }
+    c.add(bool, true)
+    c.add(1, 2)
+    c.add(i64)
+    let b = Box(i64) { value: 1 }
+    let x = b.map(i32, half)
+    let y = Box(i64).map(b, f64, half)
+    let z = b.map(f64, half, half)
+}
