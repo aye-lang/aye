@@ -1147,6 +1147,65 @@ fn declaration_errors_end_after_the_name() {
     }
 }
 
+/// Errors whose offender is one expression or one name end where it ends.
+#[test]
+fn expression_and_name_errors_end_at_the_offender() {
+    let main = "\npub fn main() {\n    @println(1)\n}\n";
+    let cases: [(&str, String, &str); 6] = [
+        // `else |e|` on a condition that is no error union: the condition.
+        (
+            "E0102",
+            "fn opt() ?i64 {\n    return null\n}\n\npub fn main() {\n    if opt() |v| {\n        @println(v)\n    } else |e| {\n    }\n}\n".to_string(),
+            r#"{"start":{"line":5,"character":7},"end":{"line":5,"character":12}}"#,
+        ),
+        // A slice passed to the `...` of a C function: the argument.
+        (
+            "E0052",
+            "extern fn printf(format: [*]u8, ...) i32\n\npub fn main() {\n    printf(\"%s\".ptr, \"slice\")\n}\n".to_string(),
+            r#"{"start":{"line":3,"character":21},"end":{"line":3,"character":28}}"#,
+        ),
+        // `type` outside a `comptime` parameter: the keyword.
+        (
+            "E0076",
+            format!("fn f(n: type) void {{\n}}\n{main}"),
+            r#"{"start":{"line":0,"character":8},"end":{"line":0,"character":12}}"#,
+        ),
+        // A `where` constraint on a name that is no `comptime` parameter.
+        (
+            "E0076",
+            format!("interface Shape {{\n    fn area(self: *Self) i64\n}}\n\nfn f(comptime T: type, x: T) T where U: Shape {{\n    return x\n}}\n{main}"),
+            r#"{"start":{"line":4,"character":37},"end":{"line":4,"character":38}}"#,
+        ),
+        // Duplicate variant: the second name.
+        (
+            "E0015",
+            format!("enum Color {{\n    red,\n    red,\n}}\n{main}"),
+            r#"{"start":{"line":2,"character":4},"end":{"line":2,"character":7}}"#,
+        ),
+        // Return type of an `extern fn` that is not C-compatible: the type.
+        (
+            "E0052",
+            format!("extern fn name() []u8\n{main}"),
+            r#"{"start":{"line":0,"character":17},"end":{"line":0,"character":21}}"#,
+        ),
+    ];
+    for (i, (code, src, want)) in cases.iter().enumerate() {
+        let (dir, uri) = scratch(&format!("offender_{i}"), src);
+        let mut c = Client::start();
+        c.initialize();
+        c.notify("textDocument/didOpen", &open(&uri, src));
+        let p = c.diagnostics();
+        let list = p.get("diagnostics").unwrap().as_array().unwrap();
+        let d = list
+            .iter()
+            .find(|d| d.get("code").and_then(Json::as_str) == Some(*code))
+            .unwrap_or_else(|| panic!("{code} missing: {list:?}"));
+        assert_eq!(d.get("range").unwrap().write(), *want, "case {i} ({code})");
+        c.finish();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// A hover during typing does not postpone the check of the last change.
 #[test]
 fn hover_does_not_restart_the_debounce() {

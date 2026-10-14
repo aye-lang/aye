@@ -1859,11 +1859,14 @@ impl<'a> Checker<'a> {
                     let mut variants: Vec<VariantDef> = Vec::new();
                     for v in &e.variants {
                         if variants.iter().any(|x| x.name == v.name) {
-                            self.report(Error::new(
-                                E0015,
-                                v.span,
-                                format!("duplicate variant `{}` in enum `{}`", v.name, e.name),
-                            ));
+                            self.report(
+                                Error::new(
+                                    E0015,
+                                    v.span,
+                                    format!("duplicate variant `{}` in enum `{}`", v.name, e.name),
+                                )
+                                .ending(v.span.right(v.name.chars().count() as u32)),
+                            );
                             continue;
                         }
                         let fields =
@@ -1981,11 +1984,14 @@ impl<'a> Checker<'a> {
                 continue;
             }
             if let Some(p) = f.params.iter().find(|p| p.comptime) {
-                self.report(Error::new(
-                    E0076,
-                    p.span,
-                    "only a top-level function or a method can have `comptime` parameters",
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        p.span,
+                        "only a top-level function or a method can have `comptime` parameters",
+                    )
+                    .ending(p.name_end),
+                );
             }
             let sig = self.register(key, f, owner.clone(), None);
             if f.is_extern {
@@ -2001,8 +2007,8 @@ impl<'a> Checker<'a> {
                     }
                 }
                 if sig.ret != Type::Void && !self.c_compat(&sig.ret, false) {
-                    let span = f.ret.as_ref().unwrap().span;
-                    self.report(Error::new(E0052, span, not_c(&sig.ret, self)));
+                    let ret = f.ret.as_ref().unwrap();
+                    self.report(Error::new(E0052, ret.span, not_c(&sig.ret, self)).ending(ret.end));
                 }
                 if f.body.is_none() {
                     let (params, ret, variadic) =
@@ -2757,20 +2763,26 @@ impl<'a> Checker<'a> {
         }
         for b in &f.bounds {
             if !f.params.iter().any(|p| p.comptime && p.name == b.param) {
-                self.report(Error::new(
-                    E0076,
-                    b.span,
-                    format!("`{}` is not a `comptime` parameter of `{g}`", b.param),
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        b.span,
+                        format!("`{}` is not a `comptime` parameter of `{g}`", b.param),
+                    )
+                    .ending(b.span.right(b.param.chars().count() as u32)),
+                );
             } else if b.iface != INTEGER && b.iface != HASH && !self.ifaces.contains_key(&b.iface) {
-                self.report(Error::new(
-                    E0076,
-                    b.iface_span,
-                    format!(
-                        "`{}` is not an interface (a `where` constraint names an interface)",
-                        b.iface
-                    ),
-                ));
+                self.report(
+                    Error::new(
+                        E0076,
+                        b.iface_span,
+                        format!(
+                            "`{}` is not an interface (a `where` constraint names an interface)",
+                            b.iface
+                        ),
+                    )
+                    .ending(b.iface_span.right(b.iface.chars().count() as u32)),
+                );
             } else {
                 self.bounds
                     .entry((g.to_string(), b.param.clone()))
@@ -3462,11 +3474,14 @@ impl<'a> Checker<'a> {
             let mut errors: Vec<String> = Vec::new();
             for (n, span) in names {
                 if errors.contains(n) {
-                    self.report(Error::new(
-                        E0015,
-                        *span,
-                        format!("duplicate error `{n}` in error set `{}`", e.name),
-                    ));
+                    self.report(
+                        Error::new(
+                            E0015,
+                            *span,
+                            format!("duplicate error `{n}` in error set `{}`", e.name),
+                        )
+                        .ending(span.right(n.chars().count() as u32)),
+                    );
                     continue;
                 }
                 if !self.error_names.contains(n) {
@@ -3730,11 +3745,12 @@ impl<'a> Checker<'a> {
                     );
                 }
                 None if n == "type" => {
-                    return err(
+                    return Err(Error::new(
                         E0076,
                         t.span,
                         "`type` is only the type of a `comptime` parameter, or the return type of a type function",
-                    );
+                    )
+                    .ending(t.span.right(n.chars().count() as u32)));
                 }
                 None => {
                     let e = Error::new(E0017, t.span, format!("unknown type `{n}`"))
@@ -4307,9 +4323,9 @@ impl<'a> Checker<'a> {
                 let u = self.expr(cond, None).and_then(|u| match &u.ty {
                     Type::ErrorUnion(..) => Ok(u),
                     Type::Error => Err(silent()),
-                    t => err(E0102, u.span, format!(
+                    t => Err(Error::new(E0102, u.span, format!(
                         "`else |{ename}|` takes the error of an error union (`E!T`), but the condition has type `{t}`"
-                    )),
+                    )).ending(cond.end)),
                 });
                 let (set, payload) = match &u {
                     Ok(TExpr {
@@ -4828,10 +4844,10 @@ impl<'a> Checker<'a> {
     /// and the type of its value.
     fn optional_cond(&mut self, e: &ast::Expr, what: &str, name: &str) -> (Result<TExpr>, Type) {
         let c = self.expr(e, None).and_then(|c| match &c.ty {
-            Type::ErrorUnion(..) if what == "if" => err(E0102, c.span, format!(
+            Type::ErrorUnion(..) if what == "if" => Err(Error::new(E0102, c.span, format!(
                 "`if x |{name}|` on an error union (`{}`) needs `else |e| {{ ... }}`, which handles the error",
                 c.ty
-            )),
+            )).ending(e.end)),
             Type::Void => err(E0030, c.span, "this expression does not produce a value"),
             Type::Error => Err(silent()),
             _ => self.handled(c),
@@ -7426,7 +7442,7 @@ impl<'a> Checker<'a> {
                 })?;
         }
         if !self.c_compat(&t.ty, false) {
-            return err(
+            return Err(Error::new(
                 E0052,
                 t.span,
                 format!(
@@ -7434,7 +7450,8 @@ impl<'a> Checker<'a> {
                     t.ty,
                     self.c_hint(&t.ty, false)
                 ),
-            );
+            )
+            .ending(a.end));
         }
         Ok(t)
     }

@@ -1224,7 +1224,8 @@ impl Loader<'_> {
                     "`{name}` is imported more than once (first at {}:{})",
                     prev.line, prev.col
                 ),
-            );
+            )
+            .ending(name_span.right(name.chars().count() as u32));
             self.report(e);
             return;
         }
@@ -1233,7 +1234,8 @@ impl Loader<'_> {
                 "the import of `{name}` clashes with the declaration of `{name}` at {} (rename the declaration)",
                 self.place(d.span, name_span)
             );
-            self.report(Error::new(E0015, name_span, msg));
+            let end = name_span.right(name.chars().count() as u32);
+            self.report(Error::new(E0015, name_span, msg).ending(end));
             return;
         }
         self.imports.insert(name, (b, name_span));
