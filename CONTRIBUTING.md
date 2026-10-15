@@ -1,7 +1,7 @@
 # Contributing
 
-Build: Rust (cargo) and `clang` on `PATH` are required (see the README for
-optional libraries such as libclang, libcurl and SDL2).
+Build: Rust (cargo) and `clang` on `PATH` are required (see [`docs/cli.md`](docs/cli.md)
+for optional libraries such as libclang, libcurl and SDL2).
 
 ```sh
 cargo build --release

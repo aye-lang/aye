@@ -263,7 +263,7 @@ The rest of std is Aye too: no container or text function is a compiler builtin.
 - **`aye test`** compiles all tests of the program (M9.5: of every module but std's) into one executable whose argument is the index of the test to run, and runs each selected test in its own process. So a panic, a failed assertion or a crash ends only that test.
   - A failed assertion writes `file:line:col: assertion failed: <reason>` to stderr and exits with status 1. The reason is `condition is false` or `expected X, found Y`.
   - After the test body returns, a returned error is reported as `main` reports it (with the error return trace in debug mode), and then the leaks of `@testAllocator()`. The test allocator records allocations in every mode.
-  - A test passes when its process exits with status 0. The output format and the `--json` schema are in the README.
+  - A test passes when its process exits with status 0. The output format and the `--json` schema are in [`cli.md`](cli.md).
 
 ## Differences from the design doc (to resolve later)
 

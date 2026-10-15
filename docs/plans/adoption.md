@@ -299,6 +299,7 @@ A1 page plan:
 - model: opus
 - time box: 45 min
 - needs user: no
+- done 2026-10-15 (cloud): README.md is pitch, a 26-line sample with its output, why Aye (the three proof points with source links and the bench caveats), install from source per platform with a marked spot for A6, hello world in 3 commands, links (spec, std, `docs/cli.md`, framework, design, ayelang.dev, Discussions), status and license; the reference moved unchanged to `docs/cli.md` (named for its content instead of `docs/reference.md`; relative links fixed); `CONTRIBUTING.md` and `docs/decisions.md` point there. Every README code block checked: the sample runs with that output, the hello commands run, `cargo install` line as in Dweller's README. The tour link waits for A8.
 
 #### A4: `aye --version`
 - lane: aye
