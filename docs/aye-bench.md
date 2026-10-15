@@ -77,7 +77,7 @@ The framework hello page does 127.7k req/s at `-c 64`, 6.4x Node 22 and within 0
 
 ## Build times of `browser/`
 
-The browser is in aye-lang/anyknown since P8.3; the commands below run in the checkout `scripts/downstream.sh` makes at `target/downstream/anyknown`.
+The browser is in aye-lang/dweller since P8.3; the commands below run in the checkout `scripts/downstream.sh` makes at `target/downstream/dweller`.
 
 Wall clock, three runs each, `target/release/aye build` (fast mirrors `browser/build.sh`).
 
@@ -90,8 +90,8 @@ Wall clock, three runs each, `target/release/aye build` (fast mirrors `browser/b
 
 | binary | bytes |
 |---|---|
-| `anyknown_debug` | 12,988,952 |
-| `anyknown_fast` | 3,977,880 |
+| `dweller_debug` | 12,988,952 |
+| `dweller_fast` | 3,977,880 |
 | hello server, Aye fast | 43,600 |
 | hello server, Go | 8,215,565 |
 
@@ -105,8 +105,8 @@ go build -o target/hello_go scripts/bench/hello_go.go
 scripts/bench/run.sh            # ab output lands in target/ab_*.txt
 sudo apt-get install -y wrk     # the wrk table: one server at a time
 wrk -t2 -c64 -d10s --latency http://127.0.0.1:8081/
-time target/release/aye build browser -o target/anyknown_debug
-time target/release/aye build --mode fast browser -o target/anyknown_fast
+time target/release/aye build browser -o target/dweller_debug
+time target/release/aye build --mode fast browser -o target/dweller_fast
 ```
 
 Sources: [`scripts/bench/hello_http.aye`](../scripts/bench/hello_http.aye) (port 8081),

@@ -16,7 +16,7 @@ file for the area you work in, and skim the others.
 The language itself is in `docs/spec.md` (`aye spec`), the choices
 behind it in `docs/decisions.md`. The browser's own practices are in
 `docs/practices/browser.md` of
-[aye-lang/anyknown](https://github.com/aye-lang/anyknown). This directory does not repeat them; it records what
+[aye-lang/dweller](https://github.com/aye-lang/dweller). This directory does not repeat them; it records what
 went wrong and what to do instead.
 
 ## Entry format

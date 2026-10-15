@@ -4,7 +4,7 @@ How work gets from a worktree into `main`: commits, merges,
 tests, several agents at once, and compiler gaps. Each entry comes from
 a merge or a review in this repo's history. Since P8.3 `browser/`,
 `tests/browser.rs` and the `docs/browser*.md` files live in
-[aye-lang/anyknown](https://github.com/aye-lang/anyknown); the entries below keep
+[aye-lang/dweller](https://github.com/aye-lang/dweller); the entries below keep
 their old paths because the commits they cite do.
 
 ## Commits
@@ -154,8 +154,8 @@ other branch's binary: every `import()` threw "import is not defined".
 A rebuild "fixed" it, and the plan logged a flaky build (P2.7). Builds
 are deterministic: 10 clean builds and 3 under load gave the same C and
 binary, and all 23x/24x JS tests passed.
-**Good:** `browser/build.sh` of aye-lang/anyknown with no path (it writes
-`target/anyknown` in its own worktree), or a path named after the worktree:
+**Good:** `browser/build.sh` of aye-lang/dweller with no path (it writes
+`target/dweller` in its own worktree), or a path named after the worktree:
 `-o $SCRATCH/ak-$(basename "$PWD")`.
 **Why:** a shared output path lets another agent replace your binary
 between your build and your test, with no sign of it.
@@ -195,7 +195,7 @@ badly.
 **Bad:** a silent local workaround; the language never hears of it.
 **Good:** add a numbered entry with **Need**, **Repro**,
 **Workaround**, **Hit by** and **Status** to `browser/COMPILER_GAPS.md`
-in aye-lang/anyknown (line 8 has the format). The language milestones take their work
+in aye-lang/dweller (line 8 has the format). The language milestones take their work
 from that list (`docs/milestones.md:186`, M9.5: "The browser written in
 Aye recorded what hurt ... Fix those in the compiler and std").
 **Why:** the browser is Aye's test case; its gap list is the language's
@@ -263,14 +263,14 @@ other agents' builds on the Mac.
   parallel; unset runs everything. The summary lines carry
   `[shard i/n]` and count that slice only.
 - `sh scripts/downstream.sh; echo $?` → 0 when the merge touches `src/`
-  or `std/` (clones `aye-lang/anyknown` at `tests/downstream/ANYKNOWN_REV`
+  or `std/` (clones `aye-lang/dweller` at `tests/downstream/DWELLER_REV`
   into `target/downstream/`, runs `aye check browser`, `aye test browser`
   and `cargo test --release --test browser` with this worktree's
   `target/release/aye`; log in `target/downstream.log`; needs network and
   `gh auth login`; about 4 minutes). A failure caused by the compiler
-  change is fixed on the compiler side, or in anyknown with a new pin
-  (`docs/plans/anyknown.md`).
-- New compiler gaps are in `browser/COMPILER_GAPS.md` of aye-lang/anyknown;
+  change is fixed on the compiler side, or in dweller with a new pin
+  (`docs/plans/dweller.md`).
+- New compiler gaps are in `browser/COMPILER_GAPS.md` of aye-lang/dweller;
   workarounds for fixed gaps are gone.
 - The report has a "Done so far" paragraph; shared status docs
   (`docs/plan.md`, `docs/plans/*`) are left to the integrator.

@@ -7,7 +7,7 @@ optional libraries such as libclang, libcurl and SDL2).
 cargo build --release
 cargo test                         # all suites
 cargo test --test golden           # one suite: golden, spec, fmt
-sh scripts/downstream.sh           # build and test anyknown against this compiler
+sh scripts/downstream.sh           # build and test dweller against this compiler
 ```
 
 Workflow: work is split into lanes, phases and steps in

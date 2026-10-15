@@ -1,20 +1,20 @@
 #!/bin/sh
-# The posts example app in the anyknown browser (F5.7): builds the posts app
+# The posts example app in the dweller browser (F5.7): builds the posts app
 # for production, starts the binary and looks at it with the browser.
 #
 #     sh scripts/framework-posts.sh
 #
-# Needs target/downstream/anyknown (run scripts/downstream.sh first), else
-# it prints `skipped: no anyknown clone; run scripts/downstream.sh first`
+# Needs target/downstream/dweller (run scripts/downstream.sh first), else
+# it prints `skipped: no dweller clone; run scripts/downstream.sh first`
 # and exits 0. With AYE=<this checkout>/target/release/aye (override with
 # AYE) it
 #
 #     aye run framework/build -- <copy of framework/examples/posts>
-#     aye build browser                       (in the anyknown clone)
-#     anyknown dump --md http://127.0.0.1:<port>/
-#     anyknown dump --md http://127.0.0.1:<port>/posts/hello
-#     anyknown dump --a11y http://127.0.0.1:<port>/posts/hello
-#     anyknown agent                       (navigate, type, type, click, snapshot)
+#     aye build browser                       (in the dweller clone)
+#     dweller dump --md http://127.0.0.1:<port>/
+#     dweller dump --md http://127.0.0.1:<port>/posts/hello
+#     dweller dump --a11y http://127.0.0.1:<port>/posts/hello
+#     dweller agent                       (navigate, type, type, click, snapshot)
 #
 # and checks the dumps: every post title in the Markdown of `/`, the title in
 # the Markdown of the post and `0 comments` in its accessibility tree (the
@@ -28,7 +28,7 @@ cd "$(dirname "$0")/.."
 root=$(pwd)
 AYE=${AYE:-$root/target/release/aye}
 export AYE
-clone=$root/target/downstream/anyknown
+clone=$root/target/downstream/dweller
 work=$root/target/framework-posts
 
 fail() {
@@ -37,7 +37,7 @@ fail() {
 }
 
 if [ ! -d "$clone/browser" ]; then
-    echo "skipped: no anyknown clone; run scripts/downstream.sh first"
+    echo "skipped: no dweller clone; run scripts/downstream.sh first"
     exit 0
 fi
 if [ ! -x "$AYE" ]; then
@@ -52,9 +52,9 @@ cp "$work/app/data/posts.json" "$work/posts.json"
 
 "$AYE" run framework/build -- "$work/app" -o "$work/posts" > "$work/build.log" 2>&1 ||
     { tail -n 30 "$work/build.log" >&2; fail "web build (see $work/build.log)"; }
-(cd "$clone" && "$AYE" build browser -o "$work/anyknown") > "$work/anyknown-build.log" 2>&1 ||
-    { tail -n 30 "$work/anyknown-build.log" >&2; fail "aye build browser (see $work/anyknown-build.log)"; }
-ak=$work/anyknown
+(cd "$clone" && "$AYE" build browser -o "$work/dweller") > "$work/dweller-build.log" 2>&1 ||
+    { tail -n 30 "$work/dweller-build.log" >&2; fail "aye build browser (see $work/dweller-build.log)"; }
+ak=$work/dweller
 
 (cd "$work" && exec ./posts --port 0 --posts "$work/posts.json") > "$work/server.out" 2>&1 &
 server=$!
@@ -75,19 +75,19 @@ has() {
 }
 
 "$ak" dump --md "$base/" > "$work/home.md" 2> "$work/home.err" ||
-    fail "dump /: anyknown failed: $(cat "$work/home.err")"
+    fail "dump /: dweller failed: $(cat "$work/home.err")"
 for title in "Hello, world" "Less < More" "Posts live in a file"; do
     has "$work/home.md" "$title" "dump /"
 done
 echo "dump / ok"
 
 "$ak" dump --md "$base/posts/hello" > "$work/post.md" 2> "$work/post.err" ||
-    fail "dump post: anyknown failed: $(cat "$work/post.err")"
+    fail "dump post: dweller failed: $(cat "$work/post.err")"
 has "$work/post.md" "Hello, world" "dump post"
 # `dump --md` reads the first `article` only, and the comments are after it
 # in the page: their count is in the accessibility tree.
 "$ak" dump --a11y "$base/posts/hello" > "$work/post.a11y" 2> "$work/post.err" ||
-    fail "dump post: anyknown failed: $(cat "$work/post.err")"
+    fail "dump post: dweller failed: $(cat "$work/post.err")"
 has "$work/post.a11y" "0 comments" "dump post"
 echo "dump post ok"
 
@@ -95,7 +95,7 @@ echo "dump post ok"
 # the refs that a fresh load of the same page gives.
 printf '{"id":1,"cmd":"navigate","url":"%s/posts/hello"}\n' "$base" |
     "$ak" agent > "$work/look.json" 2> "$work/look.err" ||
-    fail "form: anyknown agent failed: $(cat "$work/look.err")"
+    fail "form: dweller agent failed: $(cat "$work/look.err")"
 ref() {
     sed -n "s/.*$1 \\\\\"$2\\\\\" \\[\\(e[0-9]*\\)\\].*/\\1/p" "$work/look.json" | head -n 1
 }
@@ -112,7 +112,7 @@ submit=$(ref button Post)
     printf '{"id":4,"cmd":"click","ref":"%s"}\n' "$submit"
     printf '{"id":5,"cmd":"snapshot"}\n'
 } | "$ak" agent > "$work/form.json" 2> "$work/form.err" ||
-    fail "form: anyknown agent failed: $(cat "$work/form.err")"
+    fail "form: dweller agent failed: $(cat "$work/form.err")"
 if grep -q '"ok":false' "$work/form.json"; then
     cat "$work/form.json" >&2
     fail "form: a step failed"

@@ -4,7 +4,7 @@ Oct 5, 2026 · @Solemnis
 
 ## 目標與非目標
 
-Aye（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統語言，同時服務兩個用途：通用系統程式（CLI、server、工具），以及 anyknown browser 自家引擎的實作語言。第二個用途是設計的壓力測試：引擎需要的東西（可預測延遲、圖狀資料結構、大量 C 函式庫、多執行緒）決定了大部分取捨。
+Aye（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統語言，同時服務兩個用途：通用系統程式（CLI、server、工具），以及 dweller browser 自家引擎的實作語言。第二個用途是設計的壓力測試：引擎需要的東西（可預測延遲、圖狀資料結構、大量 C 函式庫、多執行緒）決定了大部分取捨。
 
 **目標**
 
@@ -19,7 +19,7 @@ Aye（暫定名）是一門沒有 GC、以 explicit allocator 為核心的系統
 
 - 不做 GC，也不做 Rust 式 borrow checker。
 - 不做 exception、繼承、文字巨集。
-- 不取代 JavaScript：網頁的腳本語言仍是 JS，anyknown 引擎照規格實作它。Aye 寫引擎、伺服器與工具；Aye 也能編譯成 wasm32 在網頁裡執行（框架的 island），那是 WebAssembly 的一般用法，網頁作者不必改寫 JS，Aye 也不提供 JS 以外的網頁 API。
+- 不取代 JavaScript：網頁的腳本語言仍是 JS，dweller 引擎照規格實作它。Aye 寫引擎、伺服器與工具；Aye 也能編譯成 wasm32 在網頁裡執行（框架的 island），那是 WebAssembly 的一般用法，網頁作者不必改寫 JS，Aye 也不提供 JS 以外的網頁 API。
 - 1.0 之前不保證語法與 ABI 穩定。
 
 ## 設計原則與定位
