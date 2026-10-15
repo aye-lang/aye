@@ -47,8 +47,8 @@ checked against the compiler by `scripts/downstream.sh`:
   the first failure, prints the tail of the log, and exits non-zero. The log
   is `target/downstream.log`. It needs `cargo build --release` first.
 - Who runs it: CI (job `downstream` in `.github/workflows/ci.yml`, Linux,
-  in parallel with the golden shards) on every push and PR that is not
-  docs-only. Run it locally (also on a cloud VM) when changing `src/` or
+  in parallel with the golden shards) on every push to main that is not
+  docs-only; not on PRs (about 6.5 minutes warm, the shards under 4). Run it locally (also on a cloud VM) when changing `src/` or
   `std/`
   ([`practices/workflow.md`](../practices/workflow.md), "Checklist before
   finishing a branch"); macOS is covered only by the local Mac.
