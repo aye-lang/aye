@@ -14,6 +14,9 @@ builds it with clang. It implements a first slice of the language (see
 
 ## Build and run
 
+To install a release binary instead of building, see
+[docs/install.md](docs/install.md) (it needs only clang).
+
 Requirements: Rust (cargo), and `clang` on `PATH`. Developed on macOS arm64
 with Apple clang 17. Programs that `@link` a C library find it through
 `pkg-config` when it knows the name; the tests in `tests/ffi` use libcurl, SQLite (`@cimport("sqlite3.h")`; it ships with macOS, and the dev package on Ubuntu is `libsqlite3-dev`) and
