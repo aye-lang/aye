@@ -92,6 +92,9 @@ Steps not tied to one lane, in this order. Their cards are in
    public now. The pre-public check passed (`plans/project.md` X4); left
    is the visibility switch (a repo admin setting). The browser repo
    (Dweller, formerly dweller) was open-sourced on 2026-10-15.
+5. **X6 adoption** (user, 2026-10-15: "you yourself need to make this
+   language have customers"): audit, positioning and cards A0–A21 in
+   [`plans/adoption.md`](plans/adoption.md); A1 is the website rewrite.
 
 ## Execution rules
 
