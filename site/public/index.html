@@ -3,167 +3,350 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aye: a systems language for code written by AI agents</title>
-<meta name="description" content="Aye is a pre-release systems programming language designed for code written by AI agents. It compiles to C and builds one native binary with clang.">
+<title>Aye: a systems language AI agents learn from one command</title>
+<meta name="description" content="Aye is a small systems language without a garbage collector, built so that an AI agent can learn it from one command and write working native code.">
+<link rel="canonical" href="https://ayelang.dev/">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141618" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://ayelang.dev/">
+<meta property="og:site_name" content="Aye">
+<meta property="og:title" content="Aye: a systems language AI agents learn from one command">
+<meta property="og:description" content="A small systems language without a garbage collector. Your agent reads aye spec, writes the code, and aye check says what to fix. One native binary, built with clang.">
+<meta property="og:image" content="https://ayelang.dev/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Aye: a small systems language without a garbage collector, built so AI agents can learn it from one command.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Aye: a systems language AI agents learn from one command">
+<meta name="twitter:description" content="A small systems language without a garbage collector. Your agent reads aye spec, writes the code, and aye check says what to fix.">
+<meta name="twitter:image" content="https://ayelang.dev/og.png">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <div class="wrap top-row">
-    <a class="brand" href="/">Aye</a>
+    <a class="brand" href="/"><img src="favicon.svg" alt="" width="24" height="24">Aye</a>
     <nav aria-label="Sections">
+      <a href="#install">Install</a>
+      <a href="#tour">Tour</a>
       <a href="#why">Why</a>
-      <a href="#tools">Tools</a>
-      <a href="#example">Example</a>
-      <a href="#browser">Browser</a>
-      <a href="#roadmap">Roadmap</a>
-      <a href="std/">Std reference</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/aye-lang/aye">GitHub</a>
     </nav>
   </div>
 </header>
 
-<main class="wrap">
-  <section class="hero">
-    <p class="status">Pre-release</p>
-    <h1>A systems language for code written by AI&nbsp;agents</h1>
-    <p class="lead">Aye compiles to C and builds one native binary with clang. It has no garbage collector, no borrow checker, no exceptions and no macros. Memory comes from explicit allocators and is released with <code>defer</code>.</p>
-    <p class="note">Aye is not released yet. There is no download and no public repository. The source will be published under MIT OR Apache-2.0. The command is <code>aye</code> and source files end in <code>.aye</code>.</p>
-  </section>
+<main id="main">
+  <section class="hero wrap" aria-labelledby="pitch">
+    <div class="hero-text">
+      <h1 id="pitch">A small systems language without a garbage collector, built so AI agents can learn it from one command.</h1>
+      <p class="lead">Your agent reads <code>aye spec</code>, writes the code, and <code>aye check</code> says what to fix. Aye compiles to C and builds one small native binary with clang. No GC, no exceptions, no macros: memory comes from allocators you pass in and is released with <code>defer</code>.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn" href="#tour">Read the tour</a>
+        <a class="btn" href="https://github.com/aye-lang/aye">GitHub</a>
+      </div>
+      <p class="fine">macOS and Linux, arm64 and x86_64, plus wasm32 as a target. Pre-1.0: expect breaking changes.</p>
+    </div>
+    <figure class="code-card hero-code">
+      <figcaption>sum.aye <span class="out">prints <samp>42</samp></span></figcaption>
+<pre class="code" data-sample="sum.aye"><code><span class="k">import</span> std.heap.<span class="t">General</span>
+<span class="k">import</span> std.list.<span class="t">List</span>
 
-  <section id="why">
-    <h2>Why a new language for agents</h2>
-    <p>A new language has no training data. Aye makes up for that in three ways:</p>
-    <ul>
-      <li><strong>Familiar syntax.</strong> Braces and <code>name: Type</code> like Go, errors as values like Zig's error unions, tagged enums with exhaustive <code>match</code> like Rust. When a syntax choice is in doubt, Aye takes the form an agent is least likely to get wrong.</li>
-      <li><strong>The whole spec fits in one context.</strong> <code>aye spec</code> prints the complete language reference as one Markdown file. A test keeps it within a budget of about 30k tokens.</li>
-      <li><strong>Compiler feedback you can act on.</strong> Every error has a code, a position, often a fix-it, and an explanation with a wrong and a fixed example.</li>
-    </ul>
-    <p>The design rules follow from the same goal: no hidden allocation (a function that allocates takes an <code>Allocator</code>), no hidden control flow (no exceptions, no operator overloading, no destructors), generics as plain compile-time code instead of a macro language, and C as a first-class citizen. Integer overflow, out-of-bounds access, bad casts and division by zero trap in debug and safe builds.</p>
-  </section>
+<span class="k">error</span> <span class="t">ParseError</span> { <span class="t">BadDigit</span> }
 
-  <section id="tools">
-    <h2>One toolchain</h2>
-    <dl class="cmds">
-      <dt><code>aye spec</code></dt>
-      <dd>Print the language reference. Every example program in it is type-checked by the test suite, and so is every example it says the compiler rejects.</dd>
-      <dt><code>aye check --json</code></dt>
-      <dd>Run the front end only: no C, no clang. Each diagnostic has a file, line, column, error code and machine-applicable fixes.</dd>
-      <dt><code>aye explain &lt;code&gt;</code></dt>
-      <dd>Explain an error code, with a wrong and a fixed example.</dd>
-      <dt><code>aye fix</code></dt>
-      <dd>Apply the fix-its of <code>aye check</code> in place.</dd>
-      <dt><code>aye fmt</code></dt>
-      <dd>The one format. Idempotent, keeps every comment, never changes the tokens.</dd>
-      <dt><code>aye test</code></dt>
-      <dd>Run the <code>test</code> blocks of every module, with <code>--json</code> output.</dd>
-      <dt><code>aye doc --signatures</code></dt>
-      <dd>Print the public API of a module, or of std, with its doc comments: context for an agent next to the spec.</dd>
-      <dt><code>aye doc --html</code></dt>
-      <dd>Write the same documentation as HTML pages. The <a href="std/">std reference</a> on this site is made that way.</dd>
-      <dt><code>aye cimport</code></dt>
-      <dd>Show the declarations that <code>@cimport</code> makes of a C header. Headers are read at compile time with libclang; C functions are called directly, with no wrapper.</dd>
-      <dt><code>aye build</code>, <code>aye run</code></dt>
-      <dd>Build one native executable in <code>debug</code>, <code>safe</code> or <code>fast</code> mode.</dd>
-    </dl>
-  </section>
-
-  <section id="example">
-    <h2>Example</h2>
-    <p>A small tokenizer: a tagged enum, an error set, an allocator passed in explicitly, and <code>defer</code> for cleanup. The debug allocator reports any memory that was not freed.</p>
-    <figure>
-      <figcaption>tokens.aye</figcaption>
-<pre><code>import std.heap.General
-import std.list.List
-
-enum Token {
-    Num { value: i64 }
-    Op { text: []u8 }
+<span class="k">fn</span> <span class="f">parse</span>(s: []<span class="t">u8</span>) <span class="t">ParseError</span>!<span class="t">i64</span> {
+    <span class="k">var</span> n: <span class="t">i64</span> = <span class="n">0</span>
+    <span class="k">for</span> c <span class="k">in</span> s {
+        <span class="k">if</span> c &lt; <span class="s">'0'</span> || c &gt; <span class="s">'9'</span> {
+            <span class="k">return</span> <span class="t">ParseError</span>.<span class="t">BadDigit</span>
+        }
+        n = n * <span class="n">10</span> + (c - <span class="s">'0'</span>) <span class="k">as</span> <span class="t">i64</span>
+    }
+    <span class="k">return</span> n
 }
 
-error LexError { Unexpected }
-
-fn lex(list: *mut List(Token), src: []u8) !void {
-    var i: usize = 0
-    while i &lt; src.len {
-        let c = src[i]
-        if c &gt;= '0' &amp;&amp; c &lt;= '9' {
-            var n: i64 = 0
-            while i &lt; src.len &amp;&amp; src[i] &gt;= '0' &amp;&amp; src[i] &lt;= '9' {
-                n = n * 10 + (src[i] - '0') as i64
-                i += 1
-            }
-            try list.append(Token.Num { value: n })
-        } else if c == '+' || c == '*' {
-            try list.append(Token.Op { text: src[i..i + 1] })
-            i += 1
-        } else if c == ' ' {
-            i += 1
-        } else {
-            return LexError.Unexpected
-        }
+<span class="k">pub</span> <span class="k">fn</span> <span class="f">main</span>() !<span class="t">void</span> {
+    <span class="k">var</span> gpa = <span class="t">General</span>.init()
+    <span class="k">defer</span> gpa.deinit()
+    <span class="k">var</span> xs = <span class="t">List</span>(<span class="t">i64</span>).init(gpa.allocator())
+    <span class="k">defer</span> xs.deinit()
+    <span class="k">try</span> xs.append(<span class="k">try</span> parse(<span class="s">"12"</span>))
+    <span class="k">try</span> xs.append(<span class="k">try</span> parse(<span class="s">"30"</span>))
+    <span class="k">var</span> total: <span class="t">i64</span> = <span class="n">0</span>
+    <span class="k">for</span> x <span class="k">in</span> xs.items() {
+        total += x
     }
-}
-
-pub fn main() !void {
-    var gpa = General.init()
-    defer gpa.deinit()
-    var toks = List(Token).init(gpa.allocator())
-    defer toks.deinit()
-
-    try lex(&amp;mut toks, "12 + 3 * 4")
-    for t in toks.items() {
-        match t {
-            .Num { value } =&gt; @println(value),
-            .Op { text } =&gt; @println(text)
-        }
-    }
+    <span class="b">@println</span>(total)
 }</code></pre>
     </figure>
-    <p>Delete the first line and check the file. The checker names the missing import and offers a fix; <code>aye fix</code> applies it:</p>
-<pre class="term"><code>$ aye check tokens.aye
-tokens.aye:33:15: error[E0084]: `General` is not declared: it is `std.heap.General` (add `import std.heap.General`)
-tokens.aye:2:1: help: add `import std.heap.General`
-$ aye fix tokens.aye
-tokens.aye:2:1: fixed: add `import std.heap.General`
-$ aye check tokens.aye
-$ aye run tokens.aye
-12
-+
-3
-*
-4</code></pre>
   </section>
 
-  <section id="gate">
-    <h2>Tested on a fresh agent</h2>
-    <p>The language has a standing gate: a fresh AI session gets only the output of <code>aye spec</code> and the checker, and writes a small command-line tool. In the latest run, the agent wrote <code>wc</code> and a JSON tokenizer. Both passed the checker in the first round. <code>wc</code> matched the system <code>wc</code> on four inputs, and the tokenizer rejected eleven invalid inputs with positioned errors. The agent found four places where the spec was silent or loose; the spec now covers them.</p>
+  <section id="why" class="band" aria-labelledby="why-h">
+    <div class="wrap">
+      <h2 id="why-h">Why Aye</h2>
+      <p class="section-lead">A new language has no training data. Aye is small enough that an agent learns it from the reference in one read, and strict enough that the checker catches the rest. Three results you can check:</p>
+      <div class="cards three">
+        <article class="card">
+          <p class="big">15 / 15</p>
+          <h3>Agents learn it cold</h3>
+          <p>Fresh Claude Sonnet agents, given only <code>aye spec</code> and the checker, passed 15 of 15 runs of five tasks: grep, line counts, an HTTP server, JSON totals and word frequencies. Median 11 turns and one <code>aye check</code> call per run; 1.85 USD for all 15.</p>
+          <p class="src">Source: <a href="https://github.com/aye-lang/aye/blob/main/docs/aye-eval.md">docs/aye-eval.md</a> (2026-10-11), rerun with <a href="https://github.com/aye-lang/aye/blob/main/scripts/eval.py">scripts/eval.py</a></p>
+        </article>
+        <article class="card">
+          <p class="big">112k lines</p>
+          <h3>It scales to a web browser</h3>
+          <p>Dweller is a web browser written in Aye: HTML and CSS parsing, a JavaScript engine, layout and painting, with SDL2, FreeType and libcurl called through <code>@cimport</code>. CI builds and tests it against the compiler on every push to main.</p>
+          <p class="src">Source: <a href="https://github.com/aye-lang/dweller">aye-lang/dweller</a> (112,198 lines of Aye in 192 files at <code>c40f2c9</code>, 2026-10-15), CI job <a href="https://github.com/aye-lang/aye/blob/main/.github/workflows/ci.yml">downstream</a></p>
+        </article>
+        <article class="card">
+          <p class="big">43.6 KB</p>
+          <h3>Small, fast binaries</h3>
+          <p>The hello-world HTTP server in <code>std.http</code> is a 43,600-byte binary (Go: 8.2 MB). It served 146k requests per second under <code>wrk</code>, against 70k for Go <code>net/http</code> and 16.6k for Node 22. A microbenchmark, with <a href="#bench">caveats below</a>.</p>
+          <p class="src">Source: <a href="https://github.com/aye-lang/aye/blob/main/docs/aye-bench.md">docs/aye-bench.md</a> (2026-10-14, commit <code>0e7463d</code>)</p>
+        </article>
+      </div>
+
+      <h3 class="sub">Built for the loop an agent runs</h3>
+      <div class="split">
+        <ul class="points">
+          <li><strong>One spec, one read.</strong> <code>aye spec</code> prints the core of the language reference in under 28 KB, and the whole reference stays under 30k tokens. The test suite type-checks every example in it (<a href="https://github.com/aye-lang/aye/blob/main/tests/spec.rs">tests/spec.rs</a>).</li>
+          <li><strong>Errors that fix themselves.</strong> Every error has a stable code and a position, often a fix-it. <code>aye explain</code> shows a wrong and a fixed example, <code>aye fix</code> applies the fix-its, and <code>aye check --json</code> gives all of it to a tool.</li>
+          <li><strong>No hidden costs.</strong> A function that allocates takes an <code>Allocator</code>. No GC, no exceptions, no operator overloading, no destructors. Overflow, out-of-bounds access and bad casts trap in debug and safe builds.</li>
+        </ul>
+        <figure class="code-card">
+          <figcaption>Delete the first line of sum.aye, then:</figcaption>
+<pre class="term"><code><span class="p">$</span> aye check sum.aye
+sum.aye:17:15: error[E0084]: `General` is not declared: it is `std.heap.General` (add `import std.heap.General`)
+sum.aye:2:1: help: add `import std.heap.General`
+<span class="p">$</span> aye fix sum.aye
+sum.aye:2:1: fixed: add `import std.heap.General`
+<span class="p">$</span> aye check sum.aye
+<span class="p">$</span> aye run sum.aye
+42</code></pre>
+        </figure>
+      </div>
+    </div>
   </section>
 
-  <section id="browser">
-    <h2>It scales: a web browser</h2>
-    <p>The dweller browser is written in Aye: HTML and CSS parsing, a JavaScript engine, layout and painting, plus an interface for AI agents (pages as Markdown or as an accessibility tree, and an MCP server). It calls C libraries such as SDL2, FreeType and libcurl directly.</p>
-    <p class="figure-line"><span class="num">104,795</span> lines of Aye in 185 files, measured on 8 October 2026.</p>
-    <p>Its source lives in <a href="https://github.com/aye-lang/dweller">aye-lang/dweller</a> (MIT OR Apache-2.0) and builds against a pinned Aye compiler.</p>
+  <section id="install" class="wrap" aria-labelledby="install-h">
+    <h2 id="install-h">Install</h2>
+    <p class="section-lead">There are no prebuilt binaries yet, so for now you build <code>aye</code> from source with Cargo. Aye emits C, so every build also needs <code>clang</code> on your <code>PATH</code>.</p>
+    <!-- INSTALL SCRIPT (card A6): when the one-line install script is released, put it here as step 1 and move "From source" below it. -->
+    <ol class="steps">
+      <li>
+        <h3>Get Rust and clang</h3>
+        <div class="cards two">
+          <div class="card">
+            <h4>macOS</h4>
+            <pre class="shell"><code>xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
+            <p>The Command Line Tools bring clang and libclang (for <code>@cimport</code>).</p>
+          </div>
+          <div class="card">
+            <h4>Linux (Debian, Ubuntu)</h4>
+            <pre class="shell"><code>sudo apt install clang libclang-dev pkg-config
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
+            <p>CI runs on Ubuntu 24.04 (x86_64) and macOS 15 (arm64).</p>
+          </div>
+        </div>
+      </li>
+      <li>
+        <h3>Build and install <code>aye</code></h3>
+        <pre class="shell"><code>cargo install --git https://github.com/aye-lang/aye aye</code></pre>
+        <p>This puts <code>aye</code> in <code>~/.cargo/bin</code>. Check it with <code>aye spec | head</code>.</p>
+      </li>
+      <li>
+        <h3>Write and run a program</h3>
+        <figure class="code-card">
+          <figcaption>hello.aye <span class="out">prints <samp>hello, world</samp> then <samp>bye</samp></span></figcaption>
+<pre class="code" data-sample="hello.aye"><code><span class="k">pub</span> <span class="k">fn</span> <span class="f">main</span>() {
+    <span class="k">defer</span> <span class="b">@println</span>(<span class="s">"bye"</span>)
+    <span class="b">@print</span>(<span class="s">"hello, "</span>)
+    <span class="b">@println</span>(<span class="s">"world"</span>)
+}</code></pre>
+        </figure>
+        <pre class="shell"><code>aye run hello.aye                      # build in debug mode and run
+aye build --mode fast hello.aye        # write ./hello, optimized</code></pre>
+      </li>
+      <li>
+        <h3>Hand it to your agent</h3>
+        <p>Start a session in Claude Code, Codex or Cursor with a line like this. <code>aye spec</code> is the whole onboarding:</p>
+        <pre class="prompt"><code>Run `aye spec` and read it before you write any Aye. Check your code with `aye check --json` and fix every error before you run it.</code></pre>
+      </li>
+    </ol>
+    <details class="more">
+      <summary>WebAssembly targets</summary>
+      <p><code>--target wasm32-wasip1</code> builds a WASI module, and <code>aye run</code> runs it under Node's <code>node:wasi</code>. <code>--target wasm32-freestanding</code> has no libc and exports your <code>pub extern fn</code>s to JavaScript. On macOS, install the WASI toolchain with <code>brew install llvm wasi-libc wasi-runtimes</code>. On Linux, <a href="https://github.com/aye-lang/aye/blob/main/scripts/setup-ubuntu.sh">scripts/setup-ubuntu.sh</a> installs wasi-sdk. Details are in <a href="https://github.com/aye-lang/aye/blob/main/docs/spec.md#2-programs-and-commands">spec §2</a>.</p>
+      <pre class="shell"><code>aye run --target wasm32-wasip1 hello.aye</code></pre>
+    </details>
+    <p class="fine">Windows is not supported.</p>
   </section>
 
-  <section id="roadmap">
-    <h2>Roadmap</h2>
-    <p>Work in progress, in no fixed order and with no dates:</p>
-    <ul>
-      <li>std: an HTTP server and client, JSON, paths, processes, wall-clock time and basic cryptography, next to the TCP module that is there today.</li>
-      <li>Packages from local paths and URLs, pinned by content hash in a lock file.</li>
-      <li>Targets: wasm32 and Linux, next to macOS.</li>
-      <li>A test runner for whole trees, with a time per test and time limits.</li>
-      <li>A language server: diagnostics, formatting, hover and go to definition.</li>
-      <li>A web framework built on the HTTP server.</li>
-    </ul>
+  <section id="tour" class="band" aria-labelledby="tour-h">
+    <div class="wrap">
+      <h2 id="tour-h">A five-minute tour</h2>
+      <p class="section-lead">If you know Go, Zig or Rust, most of Aye will look familiar: braces and <code>name: Type</code> like Go, errors as values like Zig, tagged enums and exhaustive <code>match</code> like Rust. Every sample below compiles with today's <code>aye</code>.</p>
+      <div class="cards tour">
+        <article class="card">
+          <h3>Structs and methods</h3>
+          <p>Methods live in the struct. The first parameter says whether a method gets a copy (<code>Self</code>), a read-only pointer (<code>*Self</code>) or a writable one (<code>*mut Self</code>).</p>
+<pre class="code" data-sample="point.aye"><code><span class="k">struct</span> <span class="t">Point</span> {
+    x: <span class="t">f64</span>
+    y: <span class="t">f64</span>
+
+    <span class="k">fn</span> <span class="f">len2</span>(self: <span class="t">Self</span>) <span class="t">f64</span> {
+        <span class="k">return</span> self.x * self.x + self.y * self.y
+    }
+
+    <span class="k">fn</span> <span class="f">scale</span>(self: *<span class="k">mut</span> <span class="t">Self</span>, k: <span class="t">f64</span>) {
+        self.x *= k
+        self.y *= k
+    }
+}
+
+<span class="k">pub</span> <span class="k">fn</span> <span class="f">main</span>() {
+    <span class="k">var</span> p = <span class="t">Point</span> { x: <span class="n">3.0</span>, y: <span class="n">4.0</span> }
+    p.scale(<span class="n">2.0</span>)
+    <span class="b">@println</span>(p.len2())
+}</code></pre>
+          <p class="out">Prints <samp>100</samp>.</p>
+        </article>
+        <article class="card">
+          <h3>Errors are values</h3>
+          <p>A function returns <code>E!T</code>: an error of set <code>E</code>, or a <code>T</code>. <code>try</code> passes the error up; <code>catch</code> handles it, here with an exhaustive <code>match</code>.</p>
+<pre class="code" data-sample="errors.aye"><code><span class="k">error</span> <span class="t">ParseError</span> { <span class="t">Empty</span>, <span class="t">BadDigit</span> }
+
+<span class="k">fn</span> <span class="f">digit</span>(s: []<span class="t">u8</span>) <span class="t">ParseError</span>!<span class="t">u8</span> {
+    <span class="k">if</span> s.len == <span class="n">0</span> {
+        <span class="k">return</span> <span class="t">ParseError</span>.<span class="t">Empty</span>
+    }
+    <span class="k">if</span> s[<span class="n">0</span>] &lt; <span class="s">'0'</span> || s[<span class="n">0</span>] &gt; <span class="s">'9'</span> {
+        <span class="k">return</span> <span class="t">ParseError</span>.<span class="t">BadDigit</span>
+    }
+    <span class="k">return</span> s[<span class="n">0</span>] - <span class="s">'0'</span>
+}
+
+<span class="k">pub</span> <span class="k">fn</span> <span class="f">main</span>() !<span class="t">void</span> {
+    <span class="b">@println</span>(<span class="k">try</span> digit(<span class="s">"7"</span>))
+    <span class="k">let</span> d = digit(<span class="s">"x"</span>) <span class="k">catch</span> |e| <span class="k">match</span> e {
+        .<span class="t">Empty</span> =&gt; <span class="n">0</span>
+        .<span class="t">BadDigit</span> =&gt; <span class="n">9</span>
+    }
+    <span class="b">@println</span>(d)
+}</code></pre>
+          <p class="out">Prints <samp>7</samp> then <samp>9</samp>.</p>
+        </article>
+        <article class="card">
+          <h3>Generics are compile-time code</h3>
+          <p>A <code>comptime T: type</code> parameter makes a function generic, and a function that returns <code>type</code> makes a new type. No separate macro or template language.</p>
+<pre class="code" data-sample="generic.aye"><code><span class="k">fn</span> <span class="f">max</span>(<span class="k">comptime</span> <span class="t">T</span>: <span class="k">type</span>, a: <span class="t">T</span>, b: <span class="t">T</span>) <span class="t">T</span> <span class="k">where</span> <span class="t">T</span>: <span class="t">Integer</span> {
+    <span class="k">if</span> a &gt; b {
+        <span class="k">return</span> a
+    }
+    <span class="k">return</span> b
+}
+
+<span class="k">fn</span> <span class="t">Pair</span>(<span class="k">comptime</span> <span class="t">T</span>: <span class="k">type</span>) <span class="k">type</span> {
+    <span class="k">return</span> <span class="k">struct</span> {
+        first: <span class="t">T</span>
+        second: <span class="t">T</span>
+    }
+}
+
+<span class="k">pub</span> <span class="k">fn</span> <span class="f">main</span>() {
+    <span class="b">@println</span>(max(<span class="t">i32</span>, -<span class="n">4</span>, <span class="n">3</span>))
+    <span class="k">let</span> p = <span class="t">Pair</span>(<span class="t">u8</span>) { first: <span class="n">1</span>, second: <span class="n">2</span> }
+    <span class="b">@println</span>(max(<span class="t">u8</span>, p.first, p.second))
+}</code></pre>
+          <p class="out">Prints <samp>3</samp> then <samp>2</samp>.</p>
+        </article>
+        <article class="card">
+          <h3>C is one line away</h3>
+          <p><code>@cimport</code> reads a C header with libclang and you call its functions directly, with no wrapper. Add <code>@link("zlib")</code> to link a library such as zlib.</p>
+<pre class="code" data-sample="cmath.aye"><code><span class="k">let</span> m = <span class="b">@cimport</span>(<span class="s">"math.h"</span>)
+
+<span class="k">pub</span> <span class="k">fn</span> <span class="f">main</span>() {
+    <span class="b">@println</span>(m.sqrt(<span class="n">2.0</span>))
+    <span class="b">@println</span>(m.pow(<span class="n">2.0</span>, <span class="n">10.0</span>))
+}</code></pre>
+          <p class="out">Prints <samp>1.41421</samp> then <samp>1024</samp>.</p>
+        </article>
+      </div>
+      <p class="more-link">Next: the <a href="https://github.com/aye-lang/aye/blob/main/docs/spec.md">language reference</a> covers memory, interfaces, modules, tests and std, the same text as <code>aye spec all</code>.</p>
+    </div>
+  </section>
+
+  <section id="showcase" class="wrap" aria-labelledby="showcase-h">
+    <h2 id="showcase-h">Built with Aye</h2>
+    <div class="cards three">
+      <article class="card">
+        <h3><a href="https://github.com/aye-lang/dweller">Dweller</a></h3>
+        <p>A web browser for people and AI agents: HTML, CSS, a JavaScript engine, layout and painting. Agents can read pages as Markdown or as an accessibility tree, or drive it over MCP. It calls SDL2, FreeType and libcurl through <code>@cimport</code>. MIT OR Apache-2.0.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://github.com/aye-lang/aye/tree/main/framework">The web framework</a></h3>
+        <p>A server framework on <code>std.http</code>, in the spirit of Next.js: file-based routes, pages and client islands compiled to wasm32. Design in <a href="https://github.com/aye-lang/aye/blob/main/docs/framework.md">docs/framework.md</a>, examples in <a href="https://github.com/aye-lang/aye/tree/main/framework/examples">framework/examples</a>.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://github.com/aye-lang/aye/tree/main/std">The standard library</a></h3>
+        <p>Written in Aye: files, processes, threads, coroutines, TCP, an HTTP server and client, JSON, maps, sorting, time and crypto. Browse it in the <a href="std/">std reference</a>.</p>
+      </article>
+    </div>
+
+    <h3 id="bench" class="sub">The hello-server benchmark</h3>
+    <div class="table-wrap">
+      <table>
+        <caption>Requests per second for <code>GET /</code> returning <code>hello\n</code>, <code>wrk -t2 -c64 -d10s</code>, median of three runs</caption>
+        <thead><tr><th scope="col">Server</th><th scope="col" class="num">req/s</th><th scope="col" class="num">p50</th><th scope="col" class="num">Binary</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Aye <code>std.http</code>, <code>--mode fast</code></th><td class="num">145,966</td><td class="num">0.22 ms</td><td class="num">43,600 B</td></tr>
+          <tr><th scope="row">Go 1.24 <code>net/http</code></th><td class="num">70,270</td><td class="num">0.59 ms</td><td class="num">8,215,565 B</td></tr>
+          <tr><th scope="row">Node 22 <code>http</code></th><td class="num">16,556</td><td class="num">3.52 ms</td><td class="num">n/a</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Read this with care.</strong> It is a hello-world microbenchmark, not a general claim that Aye is faster than Go. All three servers and the <code>wrk</code> client ran on one 4-core cloud VM (Intel Xeon 2.80 GHz, Ubuntu 24.04), so the client competes with the server for CPU. Results move with the VM shape: on another VM, Go did 126k under <code>ab</code>; before <code>std.http</code> got its worker pool (2026-10-11), Go beat Aye 99k to 39k. The driver script for the <code>wrk</code> runs is not committed yet. Machine, commands, all runs and the older tables are in <a href="https://github.com/aye-lang/aye/blob/main/docs/aye-bench.md">docs/aye-bench.md</a>; the servers are in <a href="https://github.com/aye-lang/aye/tree/main/scripts/bench">scripts/bench</a>.</p>
+  </section>
+
+  <section id="docs" class="band" aria-labelledby="docs-h">
+    <div class="wrap">
+      <h2 id="docs-h">Docs and community</h2>
+      <div class="cards two">
+        <div class="card">
+          <h3>Learn</h3>
+          <ul class="links">
+            <li><a href="https://github.com/aye-lang/aye/blob/main/docs/spec.md">Language reference</a>: also <code>aye spec</code> in your terminal</li>
+            <li><a href="std/">Standard library reference</a>: also <code>aye doc --signatures std</code></li>
+            <li><a href="https://github.com/aye-lang/aye#build-and-run">Command reference</a>: build, run, check, fix, test, fmt, doc</li>
+            <li>Error codes: <code>aye explain E0084</code></li>
+            <li><a href="https://github.com/aye-lang/aye#editor-support">Editor support</a>: <code>aye lsp</code> for any LSP client</li>
+            <li><a href="https://github.com/aye-lang/aye/blob/main/docs/decisions.md">Decision log</a> and <a href="https://github.com/aye-lang/aye/blob/main/docs/design.md">design notes</a> (in Chinese for now)</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Talk</h3>
+          <ul class="links">
+            <li><a href="https://github.com/aye-lang/aye/discussions">GitHub Discussions</a>: questions, ideas, what you built</li>
+            <li><a href="https://github.com/aye-lang/aye/issues">Issues</a>: bugs and wrong error messages</li>
+            <li><a href="https://github.com/aye-lang/aye/blob/main/CONTRIBUTING.md">Contributing</a></li>
+            <li><a href="https://github.com/aye-lang/aye/blob/main/docs/plan.md">What is next</a>: the plan, step by step</li>
+          </ul>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 
-<footer class="wrap foot">
-  <p>Aye is pre-release. Source to be published under MIT OR Apache-2.0.</p>
+<footer class="foot">
+  <div class="wrap">
+    <p><strong>Status:</strong> Aye is pre-1.0. The language and std still change, and there is no stability promise yet.</p>
+    <p>Aye is free and open source under <a href="https://github.com/aye-lang/aye/blob/main/LICENSE-MIT">MIT</a> OR <a href="https://github.com/aye-lang/aye/blob/main/LICENSE-APACHE">Apache-2.0</a>. Source on <a href="https://github.com/aye-lang/aye">GitHub</a>.</p>
+  </div>
 </footer>
 </body>
 </html>

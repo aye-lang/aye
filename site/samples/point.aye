@@ -1,0 +1,19 @@
+struct Point {
+    x: f64
+    y: f64
+
+    fn len2(self: Self) f64 {
+        return self.x * self.x + self.y * self.y
+    }
+
+    fn scale(self: *mut Self, k: f64) {
+        self.x *= k
+        self.y *= k
+    }
+}
+
+pub fn main() {
+    var p = Point { x: 3.0, y: 4.0 }
+    p.scale(2.0)
+    @println(p.len2())
+}

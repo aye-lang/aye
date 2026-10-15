@@ -8,3 +8,8 @@ routes = [
 
 [assets]
 directory = "./public"
+
+# Writes public/std (the std reference, not committed) before every
+# `wrangler deploy` or `wrangler dev`; needs `cargo build --release` first.
+[build]
+command = "sh build.sh"

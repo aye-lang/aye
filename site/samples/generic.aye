@@ -1,0 +1,19 @@
+fn max(comptime T: type, a: T, b: T) T where T: Integer {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn Pair(comptime T: type) type {
+    return struct {
+        first: T
+        second: T
+    }
+}
+
+pub fn main() {
+    @println(max(i32, -4, 3))
+    let p = Pair(u8) { first: 1, second: 2 }
+    @println(max(u8, p.first, p.second))
+}
