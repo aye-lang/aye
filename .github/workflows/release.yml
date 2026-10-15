@@ -1,0 +1,119 @@
+# Release binaries (docs/install.md). A pushed tag `v<version>` (the
+# version in Cargo.toml) builds `aye` on four runners, packages each as
+# aye-<version>-<target>.tar.gz (scripts/release/package.sh: bin/aye,
+# lib/aye/std, README, licenses), smoke-tests the unpacked tarball with
+# the runner's clang (scripts/release/smoke.sh: `aye --version`, hello
+# world, a std program), then publishes a GitHub Release with the four
+# tarballs, SHA256SUMS and notes from CHANGELOG.md or the tag message
+# (scripts/release/notes.sh). A pull request that touches the release
+# files runs the build, package and smoke test only (the tarballs are the
+# run's artifacts), so the workflow is checked before a tag is pushed.
+#
+# Every target builds natively: macos-15 (arm64), macos-15-intel
+# (x86_64), ubuntu-24.04 (x86_64) and ubuntu-24.04-arm (arm64), so each
+# smoke test runs the binary it ships. The Linux binaries link the glibc
+# of Ubuntu 24.04 (2.39).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/release/**'
+      - 'build.rs'
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    env:
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang
+      - name: rust
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }} && rustup default stable
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - id: package
+        run: echo "tarball=$(sh scripts/release/package.sh ${{ matrix.target }} target/${{ matrix.target }}/release/aye dist)" >> "$GITHUB_OUTPUT"
+      - run: sh scripts/release/smoke.sh "${{ steps.package.outputs.tarball }}"
+      # On a tag the version in Cargo.toml must be the tag's.
+      - if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          want="dist/aye-${GITHUB_REF_NAME#v}-${{ matrix.target }}.tar.gz"
+          if [ ! -f "$want" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml: built $(ls dist)" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aye-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # actions/checkout leaves a lightweight copy of the tag; fetch the
+      # annotated tag object for its message.
+      - run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: aye-*
+          merge-multiple: true
+      - name: checksums
+        working-directory: dist
+        run: |
+          set -- aye-*.tar.gz
+          [ $# -eq 4 ] || { echo "want 4 tarballs, got $*" >&2; exit 1; }
+          sha256sum -- "$@" > SHA256SUMS
+          cat SHA256SUMS
+      - run: sh scripts/release/notes.sh "$GITHUB_REF_NAME" > notes.md
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=
+          case $GITHUB_REF_NAME in *-*) prerelease=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "Aye ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md --verify-tag $prerelease

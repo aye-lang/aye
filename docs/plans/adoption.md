@@ -312,6 +312,7 @@ A1 page plan:
 - model: sonnet
 - time box: 30 min
 - needs user: no
+- status: **done** (branch `a5-release`): `aye --version`, `aye version` and `-V` print `aye 0.1.0 (<7-hex> <YYYY-MM-DD>)`, the commit date; outside a git checkout of this repo just `aye 0.1.0`. Test: `tests/version.rs`.
 
 #### A5: release workflow and v0.1.0
 - lane: project
@@ -325,6 +326,7 @@ A1 page plan:
 - time box: 60 min
 - needs user: no
 - notes: the Linux binaries link glibc of Ubuntu 24.04; say so in the notes (older distros: build from source). Linux arm64 is not in the test CI; add it as a fourth shard later if releases show problems.
+- status: **done** except the tag (branch `a5-release`): `.github/workflows/release.yml` builds natively on macos-15, macos-15-intel, ubuntu-24.04 and ubuntu-24.04-arm, packages with `scripts/release/package.sh` (`bin/aye`, `lib/aye/std`, README, licenses; std is embedded, so only clang is needed at run time), smoke-tests the unpacked tarball with `scripts/release/smoke.sh`, and on a tag publishes with `gh release create` (notes from `scripts/release/notes.sh`: the CHANGELOG section, else the tag message). Pull requests touching the release files run everything but the publish. Install docs: `docs/install.md`. Tag v0.1.0 is pushed by the main session after checking the PR-run artifacts.
 
 #### A6: install script
 - lane: project

@@ -21,7 +21,19 @@ const USAGE: &str = "usage (<path> is a .aye file, or a directory: a module of a
   aye cimport <header> [-Idir] [-DNAME[=value]] [--link <lib>]   (print the Aye declarations `@cimport` makes of a C header)
   aye lsp                       (a language server on stdin and stdout: diagnostics and formatting)
   aye explain <code>
+  aye version                   (also --version: `aye <version> (<commit> <date>)`)
   aye spec [<section> | all]    (no argument: the core of the reference and a list of the other sections)";
+
+/// `aye --version`: `aye <Cargo.toml version> (<short commit hash> <commit
+/// date>)`, the parenthesis left out when the build had no git checkout
+/// (build.rs).
+fn version_line() -> String {
+    let v = env!("CARGO_PKG_VERSION");
+    match (env!("AYE_GIT_SHA"), env!("AYE_GIT_DATE")) {
+        ("", _) | (_, "") => format!("aye {v}"),
+        (sha, date) => format!("aye {v} ({sha} {date})"),
+    }
+}
 
 /// The language reference that `aye spec` prints.
 const SPEC: &str = include_str!("../docs/spec.md");
@@ -219,6 +231,13 @@ fn main() -> ExitCode {
     let cmd_help = argv.iter().skip(1).take_while(|a| *a != "--").any(is_help);
     if argv.first().is_some_and(|a| is_help(a) || a == "help") || cmd_help {
         println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    if argv
+        .first()
+        .is_some_and(|a| matches!(a.as_str(), "--version" | "-V" | "version"))
+    {
+        println!("{}", version_line());
         return ExitCode::SUCCESS;
     }
     if std::env::args().nth(1).as_deref() == Some("spec") {

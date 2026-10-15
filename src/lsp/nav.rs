@@ -30,8 +30,9 @@
 //! document's directory, under a path dependency's directory (the `aye.toml`
 //! next to the document) if `a` is its key, or std. std is embedded in the
 //! compiler; its files are located under this compiler's source tree
-//! (`CARGO_MANIFEST_DIR`) if that is still on disk; if not, hover works and
-//! definition gives `null`. A URL dependency is its fetched copy in the
+//! (`CARGO_MANIFEST_DIR`) if that is still on disk, else under `lib/aye`
+//! next to the `bin/` of the executable (the layout of a release tarball);
+//! if neither has them, hover works and definition gives `null`. A URL dependency is its fetched copy in the
 //! cache (`<cache>/sha256/<hex>/`, the hash from `aye.lock`), only if it is
 //! locked and already there: the server never downloads.
 //!
@@ -274,7 +275,7 @@ fn typed(path: &str, text: &str, it: &Item, me: &Rc<Src>) -> Option<Found> {
     } else {
         let f = checked.files.get(at.file as usize)?;
         let disk = if f.std {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join(&f.name)
+            std_root().join(&f.name)
         } else {
             PathBuf::from(&f.name)
         };
@@ -341,6 +342,23 @@ struct Resolver {
     deps: Vec<(String, PathBuf)>,
 }
 
+/// The directory that holds `std/` on disk: this compiler's source tree,
+/// else `lib/aye` beside the `bin/` that holds the executable (a release
+/// tarball's `bin/aye` and `lib/aye/std/`); the source tree when neither
+/// has it.
+fn std_root() -> PathBuf {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if src.join("std").is_dir() {
+        return src;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.canonicalize().ok())
+        .and_then(|e| Some(e.parent()?.parent()?.join("lib/aye")))
+        .filter(|d| d.join("std").is_dir())
+        .unwrap_or(src)
+}
+
 impl Resolver {
     /// The files of the module `path`.
     fn module_files(&self, path: &str) -> Vec<Rc<Src>> {
@@ -348,7 +366,7 @@ impl Resolver {
         if path == "std" || path.starts_with("std.") {
             for (module, name, text) in STD_FILES {
                 if *module == path {
-                    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join(name);
+                    let file = std_root().join(name);
                     let uri = file.is_file().then(|| file_uri(&file));
                     out.extend(source(text, uri));
                 }
