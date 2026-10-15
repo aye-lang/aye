@@ -12,6 +12,10 @@ file for the area you work in, and skim the others.
   allocators, builtins, C interop, coroutines, safety and build modes.
 - [`workflow.md`](workflow.md): developing, testing, merging, and
   working with several agents at once.
+- [`agent-workflow.md`](agent-workflow.md): how a step is built and
+  merged here (lanes, phases, worktrees); the old `CONTRIBUTING.md`.
+- [`release.md`](release.md): what each release does, including the
+  changelog.
 
 The language itself is in `docs/spec.md` (`aye spec`), the choices
 behind it in `docs/decisions.md`. The browser's own practices are in
