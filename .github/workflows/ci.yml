@@ -5,7 +5,10 @@
 # there, and on a private repo macOS minutes count ten times. A push or PR
 # that changes only docs (everything under docs/ except docs/spec.md, which
 # is compiled in, and root-level *.md) does not run it: the last matching
-# `paths` pattern wins.
+# `paths` pattern wins. The `downstream` job (Linux only; the Mac covers
+# macOS) builds the compiler and runs scripts/downstream.sh, the public
+# Dweller browser at tests/downstream/DWELLER_REV, in parallel with the
+# shards.
 name: ci
 
 on:
@@ -89,3 +92,30 @@ jobs:
         run: cargo test --release
       - if: ${{ matrix.shard != 1 }}
         run: cargo test --release --test golden
+
+  downstream:
+    name: downstream (dweller)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # The packages of Dweller's scripts/setup-ubuntu.sh without the
+      # wasi-sdk and Node downloads, which its tests do not use.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config clang lld libclang-dev libclang-rt-18-dev \
+            libcurl4-openssl-dev libfreetype-dev libsdl2-dev libsqlite3-dev \
+            libharfbuzz-dev libbrotli-dev fonts-dejavu-core python3 \
+            apache2-utils golang-go
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: downstream
+      - uses: actions/cache@v4
+        with:
+          path: target/downstream/dweller/target
+          key: dweller-target-${{ runner.arch }}-${{ hashFiles('tests/downstream/DWELLER_REV') }}
+      - run: cargo build --release
+      - run: sh scripts/downstream.sh
+      - if: ${{ failure() }}
+        run: tail -n 60 target/downstream.log
