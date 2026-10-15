@@ -1,0 +1,52 @@
+// `@ptrCast` between data and function pointers (O1.30): a C loader such
+// as `dlsym` or `eglGetProcAddress` gives `void *`, which becomes a
+// function pointer, and a header's `PFN...PROC` is a `?fn(...)`. Null
+// stays null between optionals.
+
+fn add(a: i32, b: i32) i32 {
+    return a + b
+}
+
+fn neg(a: i32) i32 {
+    return -a
+}
+
+// What a loader returns: a function's address as C's `void *`.
+fn lookup(name: []u8) ?[*]u8 {
+    if name.len == 3 {
+        return @ptrCast([*]u8, add)
+    }
+    if name.len == 4 {
+        return @ptrCast(?[*]u8, neg)
+    }
+    return null
+}
+
+pub fn main() {
+    // `void *` to a function, unwrapped first.
+    if lookup("add") |p| {
+        let f = @ptrCast(fn(i32, i32) i32, p)
+        @println(f(2, 3))
+    }
+    // `?[*]u8` to `?fn(...)`: null stays null.
+    let n = @ptrCast(?fn(i32) i32, lookup("neg!"))
+    if n |f| {
+        @println(f(7))
+    }
+    let none = @ptrCast(?fn(i32) i32, lookup("none!"))
+    @println(none == null)
+    // Between optional function types, as a header's `PFN...PROC` is.
+    let generic: ?fn() = @ptrCast(?fn(), n)
+    let back = @ptrCast(?fn(i32) i32, generic)
+    if back |f| {
+        @println(f(-4))
+    }
+    // A function to `?fn(...)` and to a data pointer and back.
+    let g = @ptrCast(?fn(i32) i32, neg)
+    if g |f| {
+        @println(f(1))
+    }
+    let raw = @ptrCast([*]u8, add)
+    let h = @ptrCast(fn(i32, i32) i32, raw)
+    @println(h(40, 2))
+}

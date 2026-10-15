@@ -9,4 +9,9 @@ pub fn main() {
     let e = @ptrCast([*]u8)
     let f = @ptrCast(x, &mut x)
     let g = @ptrCast(?[*]u32, o)
+    let h = @ptrCast(fn(i32) i32, o)
+    let k: ?fn() = null
+    let m = @ptrCast(fn(), k)
+    let n = @ptrCast(fn(), x)
+    let q = @ptrCast(i64, main)
 }

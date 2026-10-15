@@ -1,0 +1,32 @@
+// Run-time binding of entry points, as an EGL or GL loader does (O1.30):
+// `dlsym` gives C's `void *`, and `@ptrCast` makes it the header's
+// `PFN...PROC` type (`?fn(...)`) or a plain function type. Null stays
+// null. The functions are libc's, looked up in the program itself.
+
+let dl = @cimport("dlfcn.h")
+let p = @cimport("proc_address.h")
+
+pub fn main() {
+    let h = dl.dlopen(null, dl.RTLD_NOW)
+    let abs = @ptrCast(p.PFNABSPROC, dl.dlsym(h, "abs".ptr))
+    if abs |f| {
+        @println(f(-5))
+    }
+    // From one optional function type to another and back.
+    let any = @ptrCast(?fn(), abs)
+    let labs = @ptrCast(p.PFNLABSPROC, dl.dlsym(h, "labs".ptr))
+    if @ptrCast(p.PFNABSPROC, any) |f| {
+        @println(f(-6))
+    }
+    if labs |f| {
+        @println(f(-7))
+    }
+    // A missing symbol is null.
+    let missing = @ptrCast(p.PFNABSPROC, dl.dlsym(h, "no_such_function_here".ptr))
+    @println(missing == null)
+    // A non-optional function type from an unwrapped `void *`.
+    if dl.dlsym(h, "abs".ptr) |q| {
+        let f = @ptrCast(fn(c_int) c_int, q)
+        @println(f(-8))
+    }
+}

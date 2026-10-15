@@ -1867,7 +1867,7 @@ pub fn main() {
 }
 E0092 = 92 {
     "invalid `@ptrCast`",
-    "`@ptrCast(T, p)` reads the pointer `p` as the pointer type `T`; both are `*T`, `*mut T`, `[*]T`, or `?` of one, or both are function types (`fn(*mut Job)` as `fn([*]u8)`, for a C callback). It cannot make a read-only `*T` writable, or an optional pointer non-optional: unwrap it first with `if p |v| { }`. Numbers are converted with `as`.",
+    "`@ptrCast(T, p)` reads the pointer `p` as the pointer type `T`, a plain C cast; both are `*T`, `*mut T`, `[*]T`, a function type, or `?` of one. Function types convert to each other (`fn(*mut Job)` as `fn([*]u8)`, for a C callback) and to and from data pointers (the `void *` of `dlsym` or `eglGetProcAddress` as a header's `PFN...PROC`, a `?fn(...)`; null stays null). It cannot make a read-only `*T` writable, or an optional pointer non-optional: unwrap it first with `if p |v| { }`, or cast to the optional type. Numbers are converted with `as`.",
     r#"extern fn malloc(n: usize) ?[*]u8
 extern fn free(p: ?[*]u8)
 

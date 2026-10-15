@@ -550,10 +550,14 @@ pub fn main() {
 `[*]T` is an unchecked C pointer: `p[i]` reads and writes without a bounds
 check, `p[lo..hi]` (both bounds) gives a `[]mut T`, and it does not track
 read-only data. `?[*]T` compares with `null` and unwraps with `if p |q|`.
-`@ptrCast(T, p)` converts between pointer types (`*T`, `*mut T`, `[*]T`, `?`
-of one), for example `@ptrCast([*]u8, &mut state)` for a C `void *` and
-back, or between function types (`@ptrCast(fn([*]u8), f)` for a C
-callback); it cannot make a `*T` writable or an optional non-optional.
+`@ptrCast(T, p)` converts between pointer types (`*T`, `*mut T`, `[*]T`,
+function types, `?` of one), a plain C cast: for example
+`@ptrCast([*]u8, &mut state)` for a C `void *` and back, between function
+types (`@ptrCast(fn([*]u8), f)` for a C callback), or from a `void *` that
+`dlsym` or `eglGetProcAddress` returns to a function or to a header's
+`PFN...PROC` type (`@ptrCast(c.PFNEGLGETERRORPROC, p)`, a `?fn(...)`; null
+stays null). It cannot make a `*T` writable or an optional non-optional
+(unwrap it with `if p |v|`, or cast to the optional type).
 `@sizeOf(T)` is a `usize`; `@zeroed(T)` is the all-zero value of a number,
 `bool` (`false`), optional pointer, `extern struct`, `extern union` or
 array of them (`@zeroed([64]bool)`, `@zeroed([4][4]u8)`), and a constant

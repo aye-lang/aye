@@ -1,6 +1,10 @@
-ptr_cast.aye:3:29: error[E0092]: `@ptrCast` converts a pointer, found `i32` (convert numbers with `as`)
-ptr_cast.aye:4:22: error[E0092]: `@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one) or between function types, not to `i64`
+ptr_cast.aye:3:29: error[E0092]: `@ptrCast` converts a pointer or a function, found `i32` (convert numbers with `as`)
+ptr_cast.aye:4:22: error[E0092]: `@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T`, a function type or `?` of one), not to `i64`
 ptr_cast.aye:6:13: error[E0092]: `@ptrCast` cannot make the read-only pointer `*i32` writable (`*mut i32`)
-ptr_cast.aye:8:13: error[E0092]: `@ptrCast` cannot turn the optional `?[*]u8` into `[*]u8`: unwrap it first (`if p |v| { ... }`)
+ptr_cast.aye:8:13: error[E0092]: `@ptrCast` cannot turn the optional `?[*]u8` into `[*]u8`: unwrap it first (`if p |v| { ... }`) or cast to `?[*]u8`
 ptr_cast.aye:9:13: error[E0022]: `@ptrCast` takes two arguments: the type and the pointer
 ptr_cast.aye:10:22: error[E0022]: the first argument of `@ptrCast` must be a type
+ptr_cast.aye:12:13: error[E0092]: `@ptrCast` cannot turn the optional `?[*]u8` into `fn(i32) i32`: unwrap it first (`if p |v| { ... }`) or cast to `?fn(i32) i32`
+ptr_cast.aye:14:13: error[E0092]: `@ptrCast` cannot turn the optional `?fn()` into `fn()`: unwrap it first (`if p |v| { ... }`) or cast to `?fn()`
+ptr_cast.aye:15:28: error[E0092]: `@ptrCast` converts a pointer or a function, found `i32` (convert numbers with `as`)
+ptr_cast.aye:16:22: error[E0092]: `@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T`, a function type or `?` of one), not to `i64`

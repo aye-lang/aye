@@ -7899,45 +7899,28 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// `@ptrCast(T, p)`: the pointer `p` (`*T`, `*mut T`, `[*]T` or `?` of
-    /// one) as the pointer type `to` (written at `to_span`). It cannot make
-    /// a read-only `*T` writable, or an optional pointer non-optional.
+    /// `@ptrCast(T, p)`: the pointer `p` (`*T`, `*mut T`, `[*]T`, a function
+    /// type or `?` of one) as the pointer type `to` (written at `to_span`),
+    /// a plain C cast. Data and function pointers convert both ways (C's
+    /// `void *` from `dlsym` to a function, as POSIX requires). It cannot
+    /// make a read-only `*T` writable, or an optional pointer non-optional.
     fn ptr_cast(&mut self, to: Type, to_span: Span, arg: &ast::Expr, span: Span) -> Result<TExpr> {
-        // Is the pointer type optional, and can it write?
+        // Is the pointer type optional, and can it write? A function pointer
+        // counts as writable, as C's `void *` does.
         fn kind(t: &Type) -> Option<(bool, bool)> {
             match t {
                 Type::Ptr(_, m) => Some((false, *m)),
-                Type::CPtr(_) => Some((false, true)),
+                Type::CPtr(_) | Type::Fn(..) => Some((false, true)),
                 Type::Optional(e) => kind(e).filter(|(opt, _)| !opt).map(|(_, w)| (true, w)),
                 _ => None,
             }
-        }
-        // A function to another function type: the C function pointer is
-        // called with other parameter types (`fn(*mut Job)` as `fn([*]u8)`).
-        if let Type::Fn(..) = to {
-            let f = self.value(arg, None)?;
-            if !matches!(f.ty, Type::Fn(..)) {
-                return err(
-                    E0092,
-                    f.span,
-                    format!(
-                        "`@ptrCast` to a function type converts a function, found `{}`",
-                        f.ty
-                    ),
-                );
-            }
-            return Ok(TExpr {
-                kind: TExprKind::PtrCast(Box::new(f)),
-                ty: to,
-                span,
-            });
         }
         let Some((to_opt, _)) = kind(&to) else {
             return err(
                 E0092,
                 to_span,
                 format!(
-                    "`@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T` or `?` of one) or between function types, not to `{to}`"
+                    "`@ptrCast` converts to a pointer type (`*T`, `*mut T`, `[*]T`, a function type or `?` of one), not to `{to}`"
                 ),
             );
         };
@@ -7947,7 +7930,7 @@ impl<'a> Checker<'a> {
                 E0092,
                 p.span,
                 format!(
-                    "`@ptrCast` converts a pointer, found `{}` (convert numbers with `as`)",
+                    "`@ptrCast` converts a pointer or a function, found `{}` (convert numbers with `as`)",
                     p.ty
                 ),
             );
@@ -7957,7 +7940,7 @@ impl<'a> Checker<'a> {
                 E0092,
                 span,
                 format!(
-                    "`@ptrCast` cannot turn the optional `{}` into `{to}`: unwrap it first (`if p |v| {{ ... }}`)",
+                    "`@ptrCast` cannot turn the optional `{}` into `{to}`: unwrap it first (`if p |v| {{ ... }}`) or cast to `?{to}`",
                     p.ty
                 ),
             );
