@@ -225,6 +225,10 @@ const FMT_EXCLUDED: &[(&str, &str)] = &[
         "tests/modules/single/broken.aye",
         "brackets do not match on purpose",
     ),
+    (
+        "editors/vscode/test/grammar/constructs.test.aye",
+        "a grammar test: invalid code and scope comments on purpose",
+    ),
 ];
 
 #[test]
