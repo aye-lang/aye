@@ -83,6 +83,9 @@ source, which needs [Rust](https://rustup.rs) and, for every Aye build,
 
 <!-- A6: the one-line installer goes here once it is released. -->
 
+Release binaries, which need only clang, are coming with the first tag;
+[`docs/install.md`](docs/install.md) describes them and building from source.
+
 - **macOS:** `xcode-select --install` (clang comes with the Command Line
   Tools).
 - **Ubuntu / Debian:** `sudo apt install clang`.
