@@ -1,4 +1,4 @@
-# Aye language reference (stage0)
+# Aye language reference
 
 Aye is a systems language without garbage collection: memory comes from
 explicit `Allocator` values and is released with `defer`. The syntax is

@@ -135,30 +135,24 @@ sum.aye:2:1: fixed: add `import std.heap.General`
 
   <section id="install" class="wrap" aria-labelledby="install-h">
     <h2 id="install-h">Install</h2>
-    <p class="section-lead">There are no prebuilt binaries yet, so for now you build <code>aye</code> from source with Cargo. Aye emits C, so every build also needs <code>clang</code> on your <code>PATH</code>.</p>
-    <!-- INSTALL SCRIPT (card A6): when the one-line install script is released, put it here as step 1 and move "From source" below it. -->
+    <p class="section-lead">One command installs the latest release for macOS or Linux, arm64 or x86_64, into <code>~/.aye</code>. Aye emits C, so every build also needs <code>clang</code> on your <code>PATH</code>.</p>
     <ol class="steps">
       <li>
-        <h3>Get Rust and clang</h3>
+        <h3>Install <code>aye</code></h3>
+        <pre class="shell"><code>curl -fsSL https://ayelang.dev/install.sh | sh</code></pre>
+        <p>The <a href="/install.sh">script</a> checks the download against the release's <code>SHA256SUMS</code>, never uses sudo, and prints the line to add to your shell profile (<code>export PATH="$HOME/.aye/bin:$PATH"</code>). Run it again to upgrade; <code>AYE_VERSION=v0.1.0</code> picks a release, <code>AYE_HOME</code> another directory. The tarballs are also on the <a href="https://github.com/aye-lang/aye/releases">releases page</a>.</p>
         <div class="cards two">
           <div class="card">
-            <h4>macOS</h4>
-            <pre class="shell"><code>xcode-select --install
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
+            <h4>clang on macOS</h4>
+            <pre class="shell"><code>xcode-select --install</code></pre>
             <p>The Command Line Tools bring clang and libclang (for <code>@cimport</code>).</p>
           </div>
           <div class="card">
-            <h4>Linux (Debian, Ubuntu)</h4>
-            <pre class="shell"><code>sudo apt install clang libclang-dev pkg-config
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></pre>
-            <p>CI runs on Ubuntu 24.04 (x86_64) and macOS 15 (arm64).</p>
+            <h4>clang on Linux (Debian, Ubuntu)</h4>
+            <pre class="shell"><code>sudo apt install clang libclang-dev pkg-config</code></pre>
+            <p>The Linux binaries need glibc 2.39 or newer (Ubuntu 24.04). CI runs on Ubuntu 24.04 and macOS 15.</p>
           </div>
         </div>
-      </li>
-      <li>
-        <h3>Build and install <code>aye</code></h3>
-        <pre class="shell"><code>cargo install --git https://github.com/aye-lang/aye aye</code></pre>
-        <p>This puts <code>aye</code> in <code>~/.cargo/bin</code>. Check it with <code>aye spec | head</code>.</p>
       </li>
       <li>
         <h3>Write and run a program</h3>
@@ -179,6 +173,12 @@ aye build --mode fast hello.aye        # write ./hello, optimized</code></pre>
         <pre class="prompt"><code>Run `aye spec` and read it before you write any Aye. Check your code with `aye check --json` and fix every error before you run it.</code></pre>
       </li>
     </ol>
+    <details class="more">
+      <summary>Build from source</summary>
+      <p>With <a href="https://rustup.rs">Rust</a> (1.85 or newer) and clang, Cargo builds <code>aye</code> and puts it in <code>~/.cargo/bin</code>. This also works on an older Linux than the release binaries need.</p>
+      <pre class="shell"><code>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cargo install --git https://github.com/aye-lang/aye aye</code></pre>
+    </details>
     <details class="more">
       <summary>WebAssembly targets</summary>
       <p><code>--target wasm32-wasip1</code> builds a WASI module, and <code>aye run</code> runs it under Node's <code>node:wasi</code>. <code>--target wasm32-freestanding</code> has no libc and exports your <code>pub extern fn</code>s to JavaScript. On macOS, install the WASI toolchain with <code>brew install llvm wasi-libc wasi-runtimes</code>. On Linux, <a href="https://github.com/aye-lang/aye/blob/main/scripts/setup-ubuntu.sh">scripts/setup-ubuntu.sh</a> installs wasi-sdk. Details are in <a href="https://github.com/aye-lang/aye/blob/main/docs/spec.md#2-programs-and-commands">spec §2</a>.</p>

@@ -8,6 +8,9 @@
 # (scripts/release/notes.sh). A pull request that touches the release
 # files runs the build, package and smoke test only (the tarballs are the
 # run's artifacts), so the workflow is checked before a tag is pushed.
+# After publishing, the install job runs install.yml: the one-line
+# installer (site/public/install.sh) installs the new release on
+# ubuntu-24.04 and macos-15 and runs hello world.
 #
 # Every target builds natively: macos-15 (arm64), macos-15-intel
 # (x86_64), ubuntu-24.04 (x86_64) and ubuntu-24.04-arm (arm64), so each
@@ -117,3 +120,9 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --title "Aye ${GITHUB_REF_NAME#v}" \
             --notes-file notes.md --verify-tag $prerelease
+
+  install:
+    needs: release
+    uses: ./.github/workflows/install.yml
+    with:
+      version: ${{ github.ref_name }}

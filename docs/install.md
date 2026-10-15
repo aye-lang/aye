@@ -1,5 +1,24 @@
 # Installing Aye
 
+## One command
+
+On macOS or Linux (arm64 or x86_64):
+
+```sh
+curl -fsSL https://ayelang.dev/install.sh | sh
+```
+
+[`install.sh`](../site/public/install.sh) (POSIX sh) picks the tarball
+for your OS and CPU from the latest release below, checks it against
+`SHA256SUMS`, unpacks it into `~/.aye/aye-<version>-<target>/` with
+`~/.aye/bin/aye` and `~/.aye/lib/aye` linked to it, and prints the
+`PATH` line to add to your shell profile (it edits no profile and never
+uses sudo). It warns, with the command, when clang is missing. Run it
+again to upgrade; it removes the previous release. Settings:
+`AYE_VERSION=v0.1.0` installs that release, `AYE_HOME=<dir>` installs
+somewhere other than `~/.aye`. `.github/workflows/install.yml` runs it on
+Ubuntu 24.04 and macOS 15 for every release and every change to it.
+
 ## From a release
 
 Each release on [GitHub](https://github.com/aye-lang/aye/releases) has a

@@ -340,6 +340,7 @@ A1 page plan:
 - model: sonnet
 - time box: 45 min
 - needs user: no
+- status: **done** 2026-10-15 (cloud, branch `a6-install`): `site/public/install.sh` (POSIX sh, `set -eu`, shellcheck clean) maps `uname -s`/`-m` to the four release targets (clear errors for Windows, other OSes and CPUs, and glibc older than 2.39), finds the latest tag through the GitHub API (falling back to the `/releases/latest` redirect) or takes `AYE_VERSION`, checks the tarball against `SHA256SUMS` (sha256sum or shasum), unpacks it as is into `${AYE_HOME:-~/.aye}/aye-<version>-<target>/` with `bin/aye` and `lib/aye` symlinked beside it, removes older releases, prints the PATH line (edits no profile, no sudo) and the clang command per platform when clang is missing. `AYE_UNAME_S`/`AYE_UNAME_M` override uname for tests. CI: `.github/workflows/install.yml` (shellcheck, then install twice + `aye --version` + hello world on ubuntu-24.04 and macos-15) runs on pull requests touching the script and as release.yml's `install` job after publishing. Local: installed v0.1.0 into a temp `AYE_HOME` twice, hello world ran; riscv64, MINGW64 and FreeBSD give the errors. The site's Install section and README lead with the one-liner, from source second. (`$AYE_INSTALL` in the goal became `AYE_HOME`.)
 
 #### A7: Homebrew tap
 - lane: project

@@ -1,0 +1,78 @@
+# Checks the install script (site/public/install.sh, served at
+# https://ayelang.dev/install.sh; card A6) the way a user runs it: shellcheck,
+# then on ubuntu-24.04 and macos-15 it installs a published release into a
+# fresh AYE_HOME and runs `aye --version` and hello world with the installed
+# compiler. Runs on pull requests that touch the script (against the latest
+# release), and from release.yml after a release is published (against that
+# tag).
+name: install
+
+on:
+  pull_request:
+    paths:
+      - 'site/public/install.sh'
+      - '.github/workflows/install.yml'
+  workflow_call:
+    inputs:
+      version:
+        description: release tag to install (empty for the latest)
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      version:
+        description: release tag to install (empty for the latest)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck site/public/install.sh
+
+  install:
+    name: install (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang
+      - name: install.sh
+        env:
+          AYE_VERSION: ${{ inputs.version }}
+        run: |
+          echo "AYE_HOME=$RUNNER_TEMP/aye-home" >> "$GITHUB_ENV"
+          AYE_HOME="$RUNNER_TEMP/aye-home" sh site/public/install.sh
+      # A second run upgrades in place (the script is idempotent).
+      - name: install.sh again
+        env:
+          AYE_VERSION: ${{ inputs.version }}
+        run: sh site/public/install.sh
+      - name: hello world
+        working-directory: ${{ runner.temp }}
+        env:
+          WANT: ${{ inputs.version }}
+        run: |
+          export PATH="$AYE_HOME/bin:$PATH"
+          v=$(aye --version)
+          echo "$v"
+          case $WANT in
+            '') ;;
+            *) case $v in "aye ${WANT#v}"|"aye ${WANT#v} ("*) ;; *) echo "want aye ${WANT#v}" >&2; exit 1 ;; esac ;;
+          esac
+          printf 'pub fn main() { @println("hi") }\n' > hello.aye
+          out=$(aye run hello.aye)
+          [ "$out" = hi ] || { echo "aye run hello.aye printed '$out'" >&2; exit 1; }

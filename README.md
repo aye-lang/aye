@@ -9,8 +9,8 @@ Memory is managed through explicit `Allocator` parameters and
 and no borrow checker. The syntax is Go-like. The compiler emits C and
 builds it with clang into one small native binary.
 
-Install: `cargo install --git https://github.com/aye-lang/aye aye` (needs
-Rust and clang; see [Install](#install)).
+Install: `curl -fsSL https://ayelang.dev/install.sh | sh` (macOS and
+Linux; Aye also needs clang, see [Install](#install)).
 
 ```aye
 import std.heap.General
@@ -77,25 +77,35 @@ applies, and `aye check --json` gives all of it as JSON.
 ## Install
 
 Aye runs on macOS and Linux, arm64 and x86_64 (and builds for
-`wasm32-wasip1`). Windows is not supported. Today you build it from
-source, which needs [Rust](https://rustup.rs) and, for every Aye build,
-`clang` on `PATH`:
+`wasm32-wasip1`). Windows is not supported. Install the latest release:
 
-<!-- A6: the one-line installer goes here once it is released. -->
+```sh
+curl -fsSL https://ayelang.dev/install.sh | sh
+```
 
-Release binaries, which need only clang, are coming with the first tag;
-[`docs/install.md`](docs/install.md) describes them and building from source.
+The [script](site/public/install.sh) downloads the release tarball for
+your platform from [GitHub](https://github.com/aye-lang/aye/releases),
+checks it against `SHA256SUMS`, unpacks it into `~/.aye` (`AYE_HOME` picks
+another directory, `AYE_VERSION=v0.1.0` a release), and prints the line to
+add to your shell profile, `export PATH="$HOME/.aye/bin:$PATH"`. It never
+uses sudo; run it again to upgrade. The Linux binaries need glibc 2.39 or
+newer (Ubuntu 24.04).
+
+Every Aye build also needs `clang` on `PATH`:
 
 - **macOS:** `xcode-select --install` (clang comes with the Command Line
   Tools).
 - **Ubuntu / Debian:** `sudo apt install clang`.
 - **Fedora:** `sudo dnf install clang`.
 
-Then:
+**Build from source** (needs [Rust](https://rustup.rs) 1.85 or newer, and
+clang; also works on an older Linux):
 
 ```sh
 cargo install --git https://github.com/aye-lang/aye aye
 ```
+
+[`docs/install.md`](docs/install.md) has the details.
 
 Optional: libclang for `@cimport` of C headers (it comes with the macOS
 Command Line Tools; on Linux, the `libclang` package of your distro), and

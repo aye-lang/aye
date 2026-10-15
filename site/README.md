@@ -5,6 +5,12 @@ Worker with static assets (`wrangler.toml`). Plain HTML and CSS, no
 JavaScript. One build step, `build.sh`, writes the std reference into
 `public/std/` (not committed).
 
+`public/install.sh` is the one-line installer (card A6), served at
+https://ayelang.dev/install.sh: `curl -fsSL https://ayelang.dev/install.sh | sh`.
+`.github/workflows/install.yml` shellchecks it and runs it against the
+latest release on pull requests that touch it, and against each new
+release from `release.yml`. See `docs/install.md`.
+
 ## Build
 
 ```sh
