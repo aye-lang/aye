@@ -16,9 +16,10 @@ integrator (rule 7): each step runs as a one-time cloud routine
 24.04 x86_64) that merges `main` in, runs the Linux suite in foreground
 chunks, and fast-forwards `main`; GitHub CI is the full-suite gate. The
 local Mac pulls and does macOS-only work through PRs (merged with
-`gh pr merge --squash` once all seven CI jobs pass; the repo has no branch
-protection, so never use `--auto`). CI runs the downstream check (job
-`downstream`, Linux); run `sh scripts/downstream.sh` locally when changing it.
+`gh pr merge --squash` once all six CI jobs pass; the repo has no branch
+protection, so never use `--auto`). The downstream check (job `downstream`,
+Linux) runs on pushes to main, not on PRs; run `sh scripts/downstream.sh`
+locally before merging a PR that changes `src/` or `std/`.
 
 CI since 2026-10-14 (#13): `golden` runs in three shards per OS
 (`AYE_GOLDEN_SHARD=i/3`, tests/golden.rs; shard 1 also runs the other
