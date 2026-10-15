@@ -15,10 +15,10 @@ integrator (rule 7): each step runs as a one-time cloud routine
 (`RemoteTrigger`, environment `env_01CZsU4Eo82wo62Hpf2skA2q`, Ubuntu
 24.04 x86_64) that merges `main` in, runs the Linux suite in foreground
 chunks, and fast-forwards `main`; GitHub CI is the full-suite gate. The
-local Mac pulls, does macOS-only work through PRs (merged with
-`gh pr merge --squash` once all six CI jobs pass; the repo has no branch
-protection, so never use `--auto`), and runs `sh scripts/downstream.sh`
-after std/src changes.
+local Mac pulls and does macOS-only work through PRs (merged with
+`gh pr merge --squash` once all seven CI jobs pass; the repo has no branch
+protection, so never use `--auto`). CI runs the downstream check (job
+`downstream`, Linux); run `sh scripts/downstream.sh` locally when changing it.
 
 CI since 2026-10-14 (#13): `golden` runs in three shards per OS
 (`AYE_GOLDEN_SHARD=i/3`, tests/golden.rs; shard 1 also runs the other
@@ -68,7 +68,7 @@ performance mode (new cards from downstream needs or measurements).
 | Lane | Priority | Current phase | Next step | Runs where |
 |---|---|---|---|---|
 | Aye language ([`plans/aye.md`](plans/aye.md)) | 1, most slots | O1–O13 hold (2026-10-14); backlog empty | maintenance; cards from downstream needs | cloud routines; local Mac for macOS-only PRs |
-| Browser ([`plans/dweller.md`](plans/dweller.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/dweller` repo; downstream check | `scripts/downstream.sh` after src/ or std/ merges; resumes in the dweller repo | local (archives in `target/sites/`, screenshots) |
+| Browser ([`plans/dweller.md`](plans/dweller.md)) | 2, maintenance | P8 split done (P8.1 to P8.3): `aye-lang/dweller` repo; downstream check | CI job `downstream` runs `scripts/downstream.sh` on every src/ or std/ change; resumes in the dweller repo | local (archives in `target/sites/`, screenshots) |
 | Framework ([`plans/framework.md`](plans/framework.md)) | 3, one slice | resumed 2026-10-11 (O6–O9 hold) | F3 (dev server) done 2026-10-11; F4 islands next (F4.1 spike first) | local or cloud |
 
 Order of dispatch (2026-10-08): names and style first. The rename

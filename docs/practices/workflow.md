@@ -266,8 +266,9 @@ other agents' builds on the Mac.
   or `std/` (clones `aye-lang/dweller` at `tests/downstream/DWELLER_REV`
   into `target/downstream/`, runs `aye check browser`, `aye test browser`
   and `cargo test --release --test browser` with this worktree's
-  `target/release/aye`; log in `target/downstream.log`; needs network and
-  `gh auth login`; about 4 minutes). A failure caused by the compiler
+  `target/release/aye`; log in `target/downstream.log`; needs network
+  only, since Dweller is public; about 4 minutes). CI runs it too (job
+  `downstream`, Linux); run it locally when changing `src/` or `std/`. A failure caused by the compiler
   change is fixed on the compiler side, or in dweller with a new pin
   (`docs/plans/dweller.md`).
 - New compiler gaps are in `browser/COMPILER_GAPS.md` of aye-lang/dweller;
