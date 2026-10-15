@@ -1,0 +1,6 @@
+let m = @cimport("math.h")
+
+pub fn main() {
+    @println(m.sqrt(2.0))
+    @println(m.pow(2.0, 10.0))
+}

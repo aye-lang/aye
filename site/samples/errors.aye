@@ -1,0 +1,20 @@
+error ParseError { Empty, BadDigit }
+
+fn digit(s: []u8) ParseError!u8 {
+    if s.len == 0 {
+        return ParseError.Empty
+    }
+    if s[0] < '0' || s[0] > '9' {
+        return ParseError.BadDigit
+    }
+    return s[0] - '0'
+}
+
+pub fn main() !void {
+    @println(try digit("7"))
+    let d = digit("x") catch |e| match e {
+        .Empty => 0
+        .BadDigit => 9
+    }
+    @println(d)
+}

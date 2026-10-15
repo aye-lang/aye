@@ -215,6 +215,7 @@ posting under their name. Each card has a `needs user` line.
 - time box: 90 min; split into A1a (index) and A1b (why, bench) if it does not fit
 - needs user: no to write it. To deploy before A2: the user runs `cd site && wrangler deploy` once.
 - notes: page plan below.
+- done: 2026-10-15. `sh site/check.sh` → `site/check.sh: ok` (exit 0; 6 samples pass `aye check`, all also run with the expected output), `wrangler deploy --dry-run` → exit 0 (it now runs `build.sh` itself, so `/std/` is deployed). One page: hero (pitch, `sum.aye`, Install / Read the tour / GitHub), Why Aye (15/15 eval, Dweller 112,198 lines in 192 files at c40f2c9, 43.6 KB hello server, the check/fix/run transcript), Install (from source, per platform, wasm, marked spot for A6), tour (structs, errors, generics, `@cimport`), Built with Aye (Dweller, framework, std, the wrk table with its caveats), Docs and community, status footer. Syntax colors at edit time by `site/highlight.py`; Open Graph image `og.png`. Not done here: `why.html` waits for A16's English rationale; `bench.html` was folded into the caveats paragraph on the page (A17 makes the benchmark reproducible); the Dweller screenshot is left for later.
 
 A1 page plan:
 
