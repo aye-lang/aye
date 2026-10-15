@@ -1,0 +1,26 @@
+name: Feature request
+description: A concrete change to the language, std, tools or framework.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Open-ended ideas and "how do I" questions belong in [Discussions](https://github.com/aye-lang/aye/discussions). Use this form once you can state the problem. Aye is small on purpose: read [docs/design.md](https://github.com/aye-lang/aye/blob/main/docs/design.md) and [docs/decisions.md](https://github.com/aye-lang/aye/blob/main/docs/decisions.md) first, since many things were declined deliberately.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that is hard or impossible today? Show the code you would write now.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What it would look like, and what it costs (new syntax, new std API, compiler work).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

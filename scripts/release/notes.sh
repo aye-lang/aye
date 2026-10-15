@@ -22,6 +22,7 @@ if [ -f "$root/CHANGELOG.md" ]; then
             sub(/^## +\[?v?/, "", h)
             if (index(h, v) == 1 && substr(h, length(v) + 1, 1) ~ /^($|[] ])/) { on = 1; next }
         }
+        on && /^\[[^]]+\]: / { next }
         on { print }
     ' "$root/CHANGELOG.md")
 fi

@@ -1,0 +1,40 @@
+name: Bug report
+description: The compiler, std, a tool (check, fix, fmt, test, lsp, spec) or the framework does something wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: version
+    attributes:
+      label: Output of `aye --version`
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      description: For example macOS 15 arm64, Ubuntu 24.04 x86_64. Add the output of `clang --version` if the C build fails.
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: Smallest program that shows it
+      description: One file if you can, and the exact command you ran.
+      render: aye
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Paste the full output, including any error code (`E0123`).
+      render: text
+    validations:
+      required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/aye-lang/aye/discussions
+    about: Ask how to do something, or float a feature idea, in Discussions before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/aye-lang/aye/security/advisories/new
+    about: Report it privately; see SECURITY.md. Do not open a public issue.

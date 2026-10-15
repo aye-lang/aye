@@ -444,6 +444,7 @@ A1 page plan:
 - model: sonnet
 - time box: 30 min
 - needs user: no (the code of conduct names the user's contact email only with their consent; otherwise it points to GitHub's report-abuse flow and Discussions moderators)
+- status: **done** (branch `a14-community`): issue templates (bug, feature, config.yml to Discussions), PR template, `CODE_OF_CONDUCT.md` (Covenant 2.1; reports via issues, Discussions or a private advisory, no email), `SECURITY.md`, CONTRIBUTING.md rewritten for outsiders; the old agent workflow is `docs/practices/agent-workflow.md`. Not added: the "an agent wrote Aye" issue form. Check `community/profile` after the push.
 
 #### A15: changelog and news
 - lane: project
@@ -457,6 +458,7 @@ A1 page plan:
 - model: sonnet
 - time box: 45 min
 - needs user: no
+- status: **done** except the site (branch `a14-community`): `CHANGELOG.md` with 0.1.0 and Unreleased, `docs/practices/release.md` (each release updates it), `scripts/release/notes.sh` skips link-reference lines; `release.yml` already used the section with the tag-message fallback. Left for later (needs A1's site): `/news/` and `site/public/feed.xml`.
 
 #### A16: design rationale in English
 - lane: project
