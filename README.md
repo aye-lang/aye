@@ -132,6 +132,10 @@ find and fix errors, `aye test` runs `test` blocks, `aye fmt` formats, and
   every function, `aye doc --html std` writes HTML pages.
 - **Commands, test runner and supported language:**
   [`docs/cli.md`](docs/cli.md).
+- **Editor support:** the VS Code extension in
+  [`editors/vscode/`](editors/vscode) (syntax colors, and errors, fixes,
+  formatting, hover and go to definition from `aye lsp`); any other
+  editor runs `aye lsp` ([`docs/cli.md`](docs/cli.md#editor-support)).
 - **Web framework:** [`framework/`](framework), with examples in
   [`framework/examples/`](framework/examples) and its design in
   [`docs/framework.md`](docs/framework.md).

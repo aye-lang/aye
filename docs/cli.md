@@ -497,6 +497,13 @@ Over stdio, no port. For example, as the server entry of a generic client:
 { "command": "aye", "args": ["lsp"], "filetypes": ["aye"], "extensions": [".aye"] }
 ```
 
+For VS Code, [`editors/vscode/`](../editors/vscode) is an extension that
+does this and adds syntax colors, brackets, indentation and snippets.
+Until it is on the Marketplace, build it as its README says, or (from
+the release after 0.1.0) download the `aye-vscode-<version>.vsix` of a
+[release](https://github.com/aye-lang/aye/releases) and run
+`code --install-extension aye-vscode-<version>.vsix`.
+
 ## Compiler pipeline
 
 `src/lexer.rs` → `src/parser.rs` (`src/ast.rs`) → `src/module.rs` (loads

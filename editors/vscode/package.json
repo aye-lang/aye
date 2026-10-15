@@ -1,0 +1,103 @@
+{
+  "name": "aye",
+  "displayName": "Aye",
+  "description": "Aye language support: syntax colors, and diagnostics, quick fixes, formatting, hover and go to definition from `aye lsp`.",
+  "version": "0.1.0",
+  "publisher": "aye-lang",
+  "license": "(MIT OR Apache-2.0)",
+  "homepage": "https://ayelang.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aye-lang/aye",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/aye-lang/aye/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Formatters"
+  ],
+  "keywords": [
+    "aye",
+    "systems programming",
+    "lsp"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "aye",
+        "aliases": [
+          "Aye",
+          "aye"
+        ],
+        "extensions": [
+          ".aye"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aye",
+        "scopeName": "source.aye",
+        "path": "./syntaxes/aye.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "aye",
+        "path": "./snippets/aye.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "aye.restartServer",
+        "title": "Aye: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "Aye",
+      "properties": {
+        "aye.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path to the `aye` compiler. Empty: `aye` on `PATH`, else `~/.aye/bin/aye` (where the installer puts it)."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[aye]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "build": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --minify",
+    "vscode:prepublish": "npm run build",
+    "test": "vscode-tmgrammar-test -g syntaxes/aye.tmLanguage.json 'test/grammar/*.test.aye' && node test/tokenize.mjs && node test/lsp.mjs",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "3.2.1",
+    "esbuild": "0.23.1",
+    "typescript": "5.5.4",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.1.0",
+    "vscode-tmgrammar-test": "0.1.3"
+  }
+}
