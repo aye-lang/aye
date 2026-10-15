@@ -59,7 +59,7 @@ error: skipped oops: Invalid
 - **It scales to a browser.** [Dweller](https://github.com/aye-lang/dweller)
   is a web browser written in Aye (HTML, CSS, a JavaScript engine,
   layout, painting; SDL2, FreeType and libcurl called through
-  `@cimport`), about 105k lines. CI builds and tests it against every
+  `@cimport`), about 112k lines. CI builds and tests it against every
   compiler change on main (job `downstream` in
   [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 - **Small, fast binaries.** A 43.6 KB Aye hello HTTP server served 146k
