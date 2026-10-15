@@ -1,0 +1,183 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Aye",
+  "scopeName": "source.aye",
+  "fileTypes": ["aye"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#numbers" },
+    { "include": "#builtins" },
+    { "include": "#fn-decl" },
+    { "include": "#type-decl" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#calls" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.aye",
+          "match": "(///).*$",
+          "captures": { "1": { "name": "punctuation.definition.comment.aye" } }
+        },
+        {
+          "name": "comment.line.double-slash.aye",
+          "match": "(//).*$",
+          "captures": { "1": { "name": "punctuation.definition.comment.aye" } }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "A string ends on its line; an unclosed one ends at the newline.",
+          "name": "string.quoted.double.aye",
+          "begin": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.aye" } },
+          "end": "\"|$",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.aye" } },
+          "patterns": [{ "include": "#escapes" }]
+        },
+        {
+          "comment": "One line of a multi-line string: `\\\\ text` up to the end of the line, raw (no escapes).",
+          "name": "string.quoted.other.multiline.aye",
+          "match": "(\\\\\\\\).*$",
+          "captures": { "1": { "name": "punctuation.definition.string.begin.aye" } }
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        { "name": "constant.character.escape.aye", "match": "\\\\(?:[ntr0\\\\\"']|x[0-9a-fA-F]{2})" },
+        { "name": "invalid.illegal.escape.aye", "match": "\\\\." }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.aye",
+      "match": "(')(\\\\(?:[ntr0\\\\\"']|x[0-9a-fA-F]{2})|[^\\\\'])(')",
+      "captures": {
+        "1": { "name": "punctuation.definition.string.begin.aye" },
+        "2": { "patterns": [{ "include": "#escapes" }] },
+        "3": { "name": "punctuation.definition.string.end.aye" }
+      }
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.integer.hexadecimal.aye", "match": "\\b0x[0-9a-fA-F_]+\\b" },
+        { "name": "constant.numeric.integer.octal.aye", "match": "\\b0o[0-7_]+\\b" },
+        { "name": "constant.numeric.integer.binary.aye", "match": "\\b0b[01_]+\\b" },
+        { "name": "constant.numeric.float.aye", "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)\\b" },
+        { "name": "constant.numeric.integer.decimal.aye", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "builtins": {
+      "name": "support.function.builtin.aye",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "fn-decl": {
+      "comment": "`fn name(params) Ret`, also a nameless `fn(A, B) R` function type. Also ends before a brace, so an unclosed `(` being typed does not color the rest of the file.",
+      "begin": "\\b(fn)\\b\\s*([A-Za-z_][A-Za-z0-9_]*)?\\s*(\\()",
+      "beginCaptures": {
+        "1": { "name": "storage.type.function.aye" },
+        "2": { "name": "entity.name.function.aye" },
+        "3": { "name": "punctuation.section.parameters.begin.aye" }
+      },
+      "end": "\\)|(?=[{}])",
+      "endCaptures": { "0": { "name": "punctuation.section.parameters.end.aye" } },
+      "patterns": [
+        { "include": "#comments" },
+        {
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.parameter.aye" },
+            "2": { "name": "punctuation.separator.colon.aye" }
+          }
+        },
+        { "include": "#paren-group" },
+        { "include": "$self" }
+      ]
+    },
+    "paren-group": {
+      "begin": "\\(",
+      "beginCaptures": { "0": { "name": "punctuation.section.parens.begin.aye" } },
+      "end": "\\)",
+      "endCaptures": { "0": { "name": "punctuation.section.parens.end.aye" } },
+      "patterns": [{ "include": "$self" }]
+    },
+    "type-decl": {
+      "comment": "`struct Name`, `enum Name`, `error Name`, `interface Name`, `extern union Name`.",
+      "match": "\\b(struct|enum|error|interface|union)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.$1.aye" },
+        "2": { "name": "entity.name.type.aye" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.aye",
+          "match": "\\b(if|else|for|in|while|break|continue|return|match|try|catch|orelse|defer|errdefer|unreachable)\\b"
+        },
+        { "name": "keyword.control.import.aye", "match": "\\bimport\\b" },
+        { "name": "storage.type.function.aye", "match": "\\bfn\\b" },
+        { "name": "storage.type.aye", "match": "\\b(struct|enum|error|interface|let|var|test)\\b" },
+        { "name": "storage.modifier.aye", "match": "\\b(pub|mut|comptime|extern|dyn)\\b" },
+        { "name": "keyword.other.aye", "match": "\\b(as|is|where)\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.boolean.aye", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.null.aye", "match": "\\bnull\\b" },
+        { "name": "variable.language.self.aye", "match": "\\bself\\b" },
+        { "name": "variable.other.readwrite.discard.aye", "match": "\\b_\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.aye",
+          "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|bool|void|noreturn|type|simd|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_longlong|c_ulonglong)\\b"
+        },
+        { "name": "support.type.builtin.aye", "match": "\\b(Self|Integer|Hash)\\b" },
+        { "name": "entity.name.type.aye", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
+      ]
+    },
+    "calls": {
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": { "1": { "name": "entity.name.function.call.aye" } }
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.aye", "match": "=>" },
+        { "name": "keyword.operator.range.aye", "match": "\\.\\.\\.|\\.\\.=|\\.\\." },
+        { "name": "keyword.operator.dereference.aye", "match": "\\.\\*" },
+        { "name": "keyword.operator.unwrap.aye", "match": "\\.\\?" },
+        { "name": "keyword.operator.assignment.compound.aye", "match": "<<=|>>=|[+\\-*]%=|[+\\-*/%&|^]=" },
+        { "name": "keyword.operator.comparison.aye", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.logical.aye", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.bitwise.aye", "match": "<<|>>|&|\\||\\^|~" },
+        { "name": "keyword.operator.arithmetic.aye", "match": "[+\\-*]%|[+\\-*/%]" },
+        { "name": "keyword.operator.assignment.aye", "match": "=" },
+        { "name": "keyword.operator.optional.aye", "match": "\\?" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.comma.aye", "match": "," },
+        { "name": "punctuation.separator.colon.aye", "match": ":" },
+        { "name": "punctuation.accessor.aye", "match": "\\." },
+        { "name": "punctuation.section.braces.aye", "match": "[{}]" },
+        { "name": "punctuation.section.brackets.aye", "match": "[\\[\\]]" },
+        { "name": "punctuation.section.parens.aye", "match": "[()]" },
+        { "name": "invalid.illegal.semicolon.aye", "match": ";" }
+      ]
+    }
+  }
+}

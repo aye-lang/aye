@@ -7,6 +7,13 @@ may still change between minor versions.
 
 ## [Unreleased]
 
+### Tools
+
+- A VS Code extension, `editors/vscode/`: syntax colors, brackets,
+  indentation and snippets for `.aye`, and the `aye lsp` language server
+  (errors, quick fixes, formatting, hover, go to definition). Releases
+  attach it as `aye-vscode-<version>.vsix`.
+
 ## [0.1.0] - 2026-10-15
 
 The first release: a stage0 compiler that emits C and builds it with clang,

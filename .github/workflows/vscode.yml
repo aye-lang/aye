@@ -1,0 +1,61 @@
+# The VS Code extension (editors/vscode, card A10): type-checks it, runs
+# the annotated grammar test (vscode-tmgrammar-test), tokenizes every .aye
+# file of the repo and fails on a string or parameter list that spills
+# past its line or file (test/tokenize.mjs), checks that `aye lsp` answers
+# didOpen with publishDiagnostics (test/lsp.mjs), and packages
+# aye-vscode-<version>.vsix as the run's artifact. release.yml calls it
+# and attaches the .vsix to the GitHub Release.
+name: vscode
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'editors/vscode/**'
+      - 'src/lexer.rs'
+      - 'src/lsp.rs'
+      - '.github/workflows/vscode.yml'
+  pull_request:
+    paths:
+      - 'editors/vscode/**'
+      - 'src/lexer.rs'
+      - 'src/lsp.rs'
+      - '.github/workflows/vscode.yml'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vscode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vscode
+      - run: cargo build --release
+        working-directory: .
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vscode-tmgrammar-test -g syntaxes/aye.tmLanguage.json 'test/grammar/*.test.aye'
+      - run: node test/tokenize.mjs
+      - run: node test/lsp.mjs
+      - name: package
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          npx vsce package --out "aye-vscode-$version.vsix"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aye-vscode
+          path: editors/vscode/aye-vscode-*.vsix

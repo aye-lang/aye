@@ -1,0 +1,10 @@
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!language-configuration.json
+!syntaxes/aye.tmLanguage.json
+!snippets/aye.json
+!out/extension.js
+!images/screenshot.png

@@ -1,0 +1,177 @@
+// SYNTAX TEST "source.aye" "every construct of the Aye lexer"
+/// Adds two numbers.
+// <-- comment.line.documentation.aye
+//  ^^^^ comment.line.documentation.aye
+import std.heap.General
+// <----- keyword.control.import.aye
+//        ^ punctuation.accessor.aye
+//              ^^^^^^^ entity.name.type.aye
+pub fn add(comptime T: type, a: T, mut b: *mut T) T where T: Integer {
+// <-- storage.modifier.aye
+//  ^^ storage.type.function.aye
+//     ^^^ entity.name.function.aye
+//        ^ punctuation.section.parameters.begin.aye
+//         ^^^^^^^^ storage.modifier.aye
+//                  ^ entity.name.type.aye
+//                     ^^^^ support.type.primitive.aye
+//                           ^ variable.parameter.aye
+//                            ^ punctuation.separator.colon.aye
+//                                 ^^^ storage.modifier.aye
+//                                     ^ variable.parameter.aye
+//                                        ^ keyword.operator.arithmetic.aye
+//                                         ^^^ storage.modifier.aye
+//                                              ^ punctuation.section.parameters.end.aye
+//                                                  ^^^^^ keyword.other.aye
+//                                                           ^^^^^^^ support.type.builtin.aye
+//                                                                   ^ punctuation.section.braces.aye
+    let x = 1_000 + 0xff_ff + 0o17 + 0b1010
+//  ^^^ storage.type.aye
+//        ^ keyword.operator.assignment.aye
+//          ^^^^^ constant.numeric.integer.decimal.aye
+//                ^ keyword.operator.arithmetic.aye
+//                  ^^^^^^^ constant.numeric.integer.hexadecimal.aye
+//                            ^^^^ constant.numeric.integer.octal.aye
+//                                   ^^^^^^ constant.numeric.integer.binary.aye
+    var y: f64 = 1.5e-3 + 2.0 + 1e9
+//  ^^^ storage.type.aye
+//         ^^^ support.type.primitive.aye
+//               ^^^^^^ constant.numeric.float.aye
+//                        ^^^ constant.numeric.float.aye
+//                              ^^^ constant.numeric.float.aye
+    for i, c in xs[0..10] {
+//  ^^^ keyword.control.aye
+//       ^ punctuation.separator.comma.aye
+//           ^^ keyword.control.aye
+//                ^ punctuation.section.brackets.aye
+//                 ^ constant.numeric.integer.decimal.aye
+//                  ^^ keyword.operator.range.aye
+//                    ^^ constant.numeric.integer.decimal.aye
+    }
+    let s = "tab\t \x41 \q end" // trailing
+//          ^ punctuation.definition.string.begin.aye
+//           ^^^ string.quoted.double.aye
+//              ^^ constant.character.escape.aye
+//                 ^^^^ constant.character.escape.aye
+//                      ^^ invalid.illegal.escape.aye
+//                         ^^^ string.quoted.double.aye
+//                            ^ punctuation.definition.string.end.aye
+//                              ^^^^^^^^^^^ comment.line.double-slash.aye
+    let u = "unclosed
+//           ^^^^^^^^ string.quoted.double.aye
+    let after = 1
+//  ^^^ storage.type.aye
+//      ^^^^^ source.aye
+//              ^ constant.numeric.integer.decimal.aye
+    let c = '\n' + 'a' + '\''
+//          ^ string.quoted.single.aye
+//           ^^ constant.character.escape.aye
+//                 ^^^ string.quoted.single.aye
+//                        ^^ constant.character.escape.aye
+    let text =
+        \\raw "line" // not a comment
+//      ^^ punctuation.definition.string.begin.aye
+//        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ string.quoted.other.multiline.aye
+    defer gpa.deinit()
+//  ^^^^^ keyword.control.aye
+//            ^^^^^^ entity.name.function.call.aye
+    errdefer @println(true, false, null)
+//  ^^^^^^^^ keyword.control.aye
+//           ^^^^^^^^ support.function.builtin.aye
+//                    ^^^^ constant.language.boolean.aye
+//                          ^^^^^ constant.language.boolean.aye
+//                                 ^^^^ constant.language.null.aye
+    let m = @cimport("math.h")
+//          ^^^^^^^^ support.function.builtin.aye
+//                   ^^^^^^^^ string.quoted.double.aye
+    let r = try parse(s) catch |e| return e
+//          ^^^ keyword.control.aye
+//              ^^^^^ entity.name.function.call.aye
+//                       ^^^^^ keyword.control.aye
+//                             ^ keyword.operator.bitwise.aye
+//                                 ^^^^^^ keyword.control.aye
+    let v = p.* + q.? orelse unreachable
+//           ^^ keyword.operator.dereference.aye
+//                 ^^ keyword.operator.unwrap.aye
+//                    ^^^^^^ keyword.control.aye
+//                           ^^^^^^^^^^^ keyword.control.aye
+    if v is ?u8 && !ok || n >= 2 {
+//  ^^ keyword.control.aye
+//       ^^ keyword.other.aye
+//          ^ keyword.operator.optional.aye
+//              ^^ keyword.operator.logical.aye
+//                 ^ keyword.operator.logical.aye
+//                     ^^ keyword.operator.logical.aye
+//                          ^^ keyword.operator.comparison.aye
+        n <<= 1
+//        ^^^ keyword.operator.assignment.compound.aye
+    } else {
+//    ^^^^ keyword.control.aye
+        while true { break }
+//      ^^^^^ keyword.control.aye
+//                   ^^^^^ keyword.control.aye
+    }
+    return match v {
+//  ^^^^^^ keyword.control.aye
+//         ^^^^^ keyword.control.aye
+        .A => x as i64
+//      ^ punctuation.accessor.aye
+//       ^ entity.name.type.aye
+//         ^^ keyword.operator.arrow.aye
+//              ^^ keyword.other.aye
+//                 ^^^ support.type.primitive.aye
+        1..=9 => x +% 1
+//       ^^^ keyword.operator.range.aye
+//                 ^^ keyword.operator.arithmetic.aye
+        else => continue
+//              ^^^^^^^^ keyword.control.aye
+    }
+}
+
+struct Point {
+// <----- storage.type.struct.aye
+//     ^^^^^ entity.name.type.aye
+    x: f64
+    fn len(self: Self) f64 {
+//  ^^ storage.type.function.aye
+//     ^^^ entity.name.function.aye
+//         ^^^^ variable.parameter.aye
+//               ^^^^ support.type.builtin.aye
+        return self.x
+//             ^^^^ variable.language.self.aye
+    }
+}
+
+enum Shape { Circle { r: f64 }, Empty }
+// <--- storage.type.enum.aye
+//   ^^^^^ entity.name.type.aye
+//           ^^^^^^ entity.name.type.aye
+error ParseError { BadDigit }
+// <---- storage.type.error.aye
+//    ^^^^^^^^^^ entity.name.type.aye
+error All = ParseError || Mem
+// <---- storage.type.error.aye
+//    ^^^ entity.name.type.aye
+interface Draw { fn draw(self: *Self) void }
+// <-------- storage.type.interface.aye
+//        ^^^^ entity.name.type.aye
+//                                    ^^^^ support.type.primitive.aye
+extern union U { a: c_int }
+// <----- storage.modifier.aye
+//     ^^^^^ storage.type.union.aye
+//                  ^^^^^ support.type.primitive.aye
+let cb: fn(i32, i32) i32 = add
+//      ^^ storage.type.function.aye
+//         ^^^ support.type.primitive.aye
+let p: dyn Draw = undefined_name
+//     ^^^ storage.modifier.aye
+let w: simd[4]f32 = @splat(0.0)
+//     ^^^^ support.type.primitive.aye
+//                  ^^^^^^ support.function.builtin.aye
+
+test "adds" {
+// <--- storage.type.aye
+//   ^^^^^^ string.quoted.double.aye
+    @expectEqual(3, add(i32, 1, 2))
+//  ^^^^^^^^^^^^ support.function.builtin.aye
+//                  ^^^ entity.name.function.call.aye
+}

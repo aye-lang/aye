@@ -1,0 +1,50 @@
+{
+  "main": {
+    "prefix": "main",
+    "description": "pub fn main() !void",
+    "body": ["pub fn main() !void {", "\t$0", "}"]
+  },
+  "fn": {
+    "prefix": "fn",
+    "description": "Function",
+    "body": ["fn ${1:name}($2) {", "\t$0", "}"]
+  },
+  "struct": {
+    "prefix": "struct",
+    "description": "Struct with a method",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:i64}",
+      "",
+      "\tfn ${4:method}(self: *Self) ${5:i64} {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ]
+  },
+  "enum": {
+    "prefix": "enum",
+    "description": "Enum (tagged union)",
+    "body": ["enum ${1:Name} {", "\t${2:A}", "\t${3:B} { ${4:x}: ${5:i64} }", "}"]
+  },
+  "error": {
+    "prefix": "error",
+    "description": "Error set",
+    "body": ["error ${1:Name} { ${2:A}, ${3:B} }"]
+  },
+  "match": {
+    "prefix": "match",
+    "description": "match expression",
+    "body": ["match ${1:value} {", "\t${2:pattern} => ${3:expr}", "}"]
+  },
+  "for": {
+    "prefix": "for",
+    "description": "for loop over a range or slice",
+    "body": ["for ${1:i} in ${2:0..n} {", "\t$0", "}"]
+  },
+  "test": {
+    "prefix": "test",
+    "description": "test block",
+    "body": ["test \"${1:name}\" {", "\t@expect(${2:true})$0", "}"]
+  }
+}
