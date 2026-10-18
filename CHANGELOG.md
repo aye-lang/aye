@@ -7,6 +7,12 @@ may still change between minor versions.
 
 ## [Unreleased]
 
+### Changed
+
+- `E!T` and `?T` hold the payload first, at offset 0, then the error or
+  flag (Zig's layout): copying a result no longer starts with the 2-byte
+  error and its padding, a store-forwarding stall on x86-64.
+
 ### Tools
 
 - A VS Code extension, `editors/vscode/`: syntax colors, brackets,

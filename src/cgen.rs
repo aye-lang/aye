@@ -2461,15 +2461,19 @@ impl Gen {
                 s.push_str(" };");
                 self.line(0, &s);
             }
+            // The payload first, at offset 0 (aligned), then the flag, as
+            // Zig lays out `?T`.
             Type::Optional(e) => {
                 self.define(e, p, done);
                 let _ = writeln!(
                     self.out,
-                    "struct {name} {{ bool has; {} val; }};",
+                    "struct {name} {{ {} val; bool has; }};",
                     c_type(e)
                 );
             }
-            // The error value (0: no error), then the payload.
+            // The payload first, at offset 0 (aligned), then the error value
+            // (0: no error), as Zig lays out `E!T`: a copy of the result
+            // never starts with the 2-byte error and its padding.
             Type::ErrorUnion(_, e) if **e == Type::Void => {
                 let _ = writeln!(self.out, "struct {name} {{ uint16_t err; }};");
             }
@@ -2477,7 +2481,7 @@ impl Gen {
                 self.define(e, p, done);
                 let _ = writeln!(
                     self.out,
-                    "struct {name} {{ uint16_t err; {} val; }};",
+                    "struct {name} {{ {} val; uint16_t err; }};",
                     c_type(e)
                 );
             }
@@ -3247,7 +3251,7 @@ impl Gen {
                 if is_ptr_optional(ty) {
                     v
                 } else {
-                    format!("(({}){{true, {v}}})", c_type(ty))
+                    format!("(({}){{.val = {v}, .has = true}})", c_type(ty))
                 }
             }
             Rvalue::Null(ty) => {
@@ -3296,7 +3300,7 @@ impl Gen {
             Rvalue::IsErr(p) => format!("({}.err != 0)", self.place(f, p)),
             Rvalue::Ok { val: None, ty } => format!("(({}){{0}})", c_type(ty)),
             Rvalue::Ok { val: Some(v), ty } => {
-                format!("(({}){{0, {}}})", c_type(ty), self.operand(f, v))
+                format!("(({}){{.val = {}}})", c_type(ty), self.operand(f, v))
             }
             Rvalue::Err { err, ty } => {
                 format!("(({}){{.err = {}}})", c_type(ty), self.operand(f, err))
@@ -3473,7 +3477,7 @@ fn const_init(p: &Program, v: &ConstVal, ty: &Type) -> String {
         (ConstVal::Null, t) if is_ptr_optional(t) => "0".to_string(),
         (ConstVal::Null, _) | (ConstVal::Zeroed, _) => "{0}".to_string(),
         (ConstVal::Some(x), Type::Optional(inner)) => {
-            format!("{{true, {}}}", const_init(p, x, inner))
+            format!("{{.val = {}, .has = true}}", const_init(p, x, inner))
         }
         (ConstVal::Agg(elems), Type::Array(el, _)) => {
             format!("{{{{{}}}}}", list(elems, &vec![&**el; elems.len()]))

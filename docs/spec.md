@@ -2455,6 +2455,13 @@ pub fn main() !void {
   Functions called from the block keep their checks.
 - Struct fields, arrays and slices are laid out by the compiler; only an
   `extern struct` promises C layout.
+- `E!T` and `?T` (other than optional pointers, which are a nullable
+  pointer) hold the payload first, at offset 0, so it keeps its own
+  alignment; then the error (a `u16`, 0 for no error) or the `bool` flag,
+  padded to the payload's alignment, as Zig lays them out. `@sizeOf(E!u8)`
+  is 4, `@sizeOf(E!u64)` 16 (error at 8), `@sizeOf(?u64)` 16 (flag at 8);
+  a 16-byte struct with 8-byte alignment gives 24 (error or flag at 16).
+  Neither is C-compatible, so this is not an ABI promise.
 
 ## 17. Diagnostics
 
