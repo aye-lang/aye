@@ -772,6 +772,84 @@ fn example1() -> Result<(), String> {
     Ok(())
 }
 
+/// `E!T` and `?T` put the payload first, at offset 0, then the error or
+/// the flag (as Zig does): checked on the generated C with `offsetof`.
+fn payload_layout(work: &Path) -> Result<(), String> {
+    let src = "error E { Bad }
+struct Pair {
+    a: u64
+    b: u64
+}
+struct Quad {
+    a: u32
+    b: u32
+    c: u32
+    d: u32
+}
+fn u8s(x: u8) E!u8 {
+    return x
+}
+fn u64s(x: u64) E!u64 {
+    return x
+}
+fn pair(x: u64) E!Pair {
+    return Pair { a: x, b: x }
+}
+fn quad(x: u32) E!Quad {
+    return Quad { a: x, b: x, c: x, d: x }
+}
+fn opt(x: u64) ?Pair {
+    return Pair { a: x, b: x }
+}
+fn optU8(x: u8) ?u8 {
+    return x
+}
+pub fn main() {
+    let a = u8s(1) catch 0
+    let b = u64s(1) catch 0
+    let c = pair(1) catch Pair { a: 0, b: 0 }
+    let d = quad(1) catch Quad { a: 0, b: 0, c: 0, d: 0 }
+    let e = opt(1)
+    let f = optU8(1)
+}
+";
+    let prog = driver::compile_to_c("layout.aye", src, Mode::Fast).map_err(|d| join(&d))?;
+    // (type, sizeof, offset of the payload, offset of `err` or `has`)
+    let want = [
+        ("aye_U_u8", 4, 0, 2),
+        ("aye_U_u64", 16, 0, 8),
+        ("aye_U_s_Pair", 24, 0, 16),
+        ("aye_U_s_Quad", 20, 0, 16),
+        ("aye_O_s_Pair", 24, 0, 16),
+        ("aye_O_u8", 2, 0, 1),
+    ];
+    let mut c = prog.c.clone();
+    c.push_str("\n#include <stddef.h>\n");
+    for (ty, size, val, tag) in want {
+        let tag_field = if ty.starts_with("aye_U_") {
+            "err"
+        } else {
+            "has"
+        };
+        c.push_str(&format!(
+            "_Static_assert(sizeof({ty}) == {size}, \"{ty} size\");\n\
+             _Static_assert(offsetof({ty}, val) == {val}, \"{ty} val\");\n\
+             _Static_assert(offsetof({ty}, {tag_field}) == {tag}, \"{ty} {tag_field}\");\n"
+        ));
+    }
+    let path = work.join("payload_layout.c");
+    std::fs::write(&path, c).map_err(|e| e.to_string())?;
+    let out = Command::new("clang")
+        .args(["-std=gnu11", "-fsyntax-only", "-w"])
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("clang: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    Ok(())
+}
+
 /// Every file under `dir` as (path relative to `dir`, text), sorted.
 fn tree(dir: &Path) -> Vec<(String, String)> {
     fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
@@ -2174,6 +2252,10 @@ fn main() {
             println!("skipped wasm32-freestanding goldens: no wasm32 clang or no node");
         }
         add(&mut jobs, "example1".to_string(), example1);
+        let w = &work;
+        add(&mut jobs, "codegen/payload_layout".to_string(), move || {
+            payload_layout(w)
+        });
         let w = &work;
         add(&mut jobs, "deps/local".to_string(), move || deps_local(w));
         for p in &deps_errors {
