@@ -180,10 +180,21 @@ Result (2026-11-01): #239 merged 4bbd47c, #240 merged 3749645. First main run wi
 #### TC3g: experiment PR (not merged): harness builds the browser with `--mode safe`; CI times per shard and every test whose result changes
 The harness builds with plain `aye build browser` (debug, `-O0`). Debug mode is also the leak check: the General allocator keeps block headers and writes leak reports to stderr at `deinit` (`docs/decisions.md`, General), and the tests require empty stderr. So `--mode safe` alone would drop leak and double-free detection; if TC3g shows a large gain, the next step is an Aye option for the debug allocator in `-O2` builds, then switch the harness.
 
+TC3g result (2026-11-01, draft dweller #241, run 41233350745, closed): every test passes on `--mode safe`. Ubuntu shards 1.6–2.5 min (debug 3.4–6.2), macOS 7.0 / 7.4 min (debug 8.8 / 5.4). CPU-bound tests ~3x faster (macOS `js_conformance` 124 → 41 s, `jsdom_gc_stress_3` 181 → 70 s); `window_*` / `http_*` / `agent_*` tests (40–79 s) unchanged: they wait, they do not compute.
+
+#### TC3h: `aye --leak-check`: the General allocator's tracking in any mode (aye PR)
+Result: aye PR #24 merged 0953905 (`AYE_TRACK` split from `AYE_TRACE`; tests in `tests/leak_check.rs`). Dweller #242 (refreshed times) merged 7bab856; its one run was 10.7 min, within run-to-run noise, so judge by medians from now on.
+Then TC3i: dweller pins that aye and builds the test browser with `--mode safe --leak-check`.
+TC3i result (2026-11-01): dweller #243 merged 588eb6b. First main run (41236042596): `ci` wall **8.2 min** (was 32.7 median before TC3), Ubuntu shards 2.3 / 2.9 / 3.4 / 3.1 min, macOS 7.6 / 8.1 min; the macOS test step is 407 / 434 s, `window_*` tests are 46% of macOS test seconds (1104 of 2425 s). Leak check kept. TC3f3 (refresh times for `-O2`) dropped: shards are within 0.5 min of each other.
+
+#### TC3j: what the wait-bound tests wait on (read only)
+Result: (A) each shard's first tests block on the one `aye build browser` (`dweller()`, OnceLock), ~35–45 s on macOS, so their times include the build; (B) `--frames N` runs until N frames are drawn, each idle frame waits 10 ms (`browser/ui/window.aye:676, 723`), even after the event script is done: `window_history_steps` = 5 × 600 frames ≥ 30 s. Server delays the tests check (`/delay/…`) are the point and stay.
+
 ## Backlog (cards written when their phase comes up)
 
 - TC3g test build mode: the harness builds the browser in debug (`-O0`); measure the suite with `--mode safe` (`-O2` + checks) and list what debug adds that tests rely on (empty stderr also catches leak reports).
 
+- TC3k (next) `--frames N` ends early when the event script is done and nothing is pending: `window_*` is 46% of macOS test time, and macOS is the critical path (also faster local runs).
 - TC3d flaky handling: 12 of 92 failed attempts were flaky; detect by same-commit re-run, quarantine with an owner card, never silently.
 
 - TC1 fact store core: content-addressed store, local and remote cache.
