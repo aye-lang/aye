@@ -305,6 +305,9 @@ pub struct Root {
     /// `--no-link lib`: the `@linkOptional` libraries to treat as absent
     /// even where they are installed.
     pub no_link: Vec<String>,
+    /// `--leak-check`: the leak, double-free and use-after-free checks of
+    /// `General` in any mode (debug mode has them anyway).
+    pub leak_check: bool,
 }
 
 impl Root {
@@ -364,6 +367,7 @@ impl Root {
             cache: None,
             members: false,
             no_link: Vec::new(),
+            leak_check: false,
         })
     }
 
@@ -387,6 +391,7 @@ impl Root {
             cache: None,
             members: false,
             no_link: Vec::new(),
+            leak_check: false,
         }
     }
 }
@@ -532,6 +537,7 @@ pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<CProgram, 
 pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let target = root.target;
     let no_link = root.no_link.clone();
+    let track = mode == Mode::Debug || root.leak_check;
     // A freestanding program may only export functions.
     let checked = front_end(root, Some(target.os != Os::Freestanding));
     let mut typed = checked.result?;
@@ -544,6 +550,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         &file_names(&checked.files),
         mode != Mode::Fast,
         mode == Mode::Debug,
+        track,
         false,
     );
     Ok(CProgram {
@@ -641,6 +648,7 @@ pub fn compile_tests_to_c(
 ) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>, Vec<PathBuf>), Vec<Diag>> {
     let target = root.target;
     let no_link = root.no_link.clone();
+    let track = mode == Mode::Debug || root.leak_check;
     let checked = front_end(
         Root {
             doc_tests: true,
@@ -663,7 +671,14 @@ pub fn compile_tests_to_c(
             dirs.push(dir);
         }
     }
-    let (c, parts) = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
+    let (c, parts) = cgen::emit(
+        &ir,
+        &files,
+        mode != Mode::Fast,
+        mode == Mode::Debug,
+        track,
+        true,
+    );
     Ok((
         CProgram {
             c,
@@ -763,7 +778,8 @@ fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// tested once. Only tests whose shown name (`name`, `module: name`, the
 /// module relative to `path`) contains `filter` run, and with `module`,
 /// only those of that module. `cflags` are more flags for clang; `no_link`
-/// are `@linkOptional` libraries to treat as absent. Up to
+/// are `@linkOptional` libraries to treat as absent; `leak_check` turns on
+/// the checks of `General` in any mode (`Root::leak_check`). Up to
 /// `jobs` test processes run at once; `results` stay in test order. A test
 /// process that uses more than `time_limit` seconds of CPU time (0: no
 /// limit) is killed and fails. Of several directory roots, one that does
@@ -777,6 +793,7 @@ pub fn run_tests(
     module: Option<&str>,
     cflags: &[String],
     no_link: &[String],
+    leak_check: bool,
     jobs: usize,
     time_limit: u64,
 ) -> Result<TestRun, TestError> {
@@ -806,6 +823,7 @@ pub fn run_tests(
             .map_err(TestError::Run)?;
         root.target = target;
         root.no_link = no_link.to_vec();
+        root.leak_check = leak_check;
         let base = root.base.clone();
         let prefix: Vec<String> = base
             .strip_prefix(top)

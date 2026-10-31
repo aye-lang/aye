@@ -1,0 +1,1 @@
+tests/leak_check/leak.aye:10:23: leak: 8 bytes allocated here were never freed

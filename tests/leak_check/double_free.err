@@ -1,0 +1,1 @@
+tests/leak_check/double_free.aye:12:11: panic: double free of memory allocated at tests/leak_check/double_free.aye:10:23 and already freed at tests/leak_check/double_free.aye:11:11
