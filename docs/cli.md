@@ -110,6 +110,15 @@ error, the program prints `error: <Name>` to stderr and exits with status 1; in
 debug mode an error return trace follows, one `file:line:col` per `return` and
 `try` that the error passed through.
 
+`General` (`std.heap.General`) checks for leaks, double frees and writes
+after free only in debug mode: each block gets a header, `deinit` prints
+`file:line:col: leak: N bytes allocated here were never freed` for each
+block not freed, a second free panics, and freed blocks wait in a
+quarantine. `build`, `run` and `test` take `--leak-check` to turn these
+checks on in `safe` and `fast` mode too (`aye build --mode safe
+--leak-check`), at `-O2` speed; in debug mode it changes nothing. It does not
+turn on the error return trace.
+
 Compile errors are reported as `file:line:col: error[E0023]: <message>`. Every
 error has a stable code; `aye explain E0023` prints what it means, a program
 with the error and the fixed program (the table is `src/codes.rs`). The
