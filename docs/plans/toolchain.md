@@ -142,7 +142,49 @@ f85d97e7 (gh only); TC0b commands are in the card.
 - model: sonnet
 - time box: 45 min
 
+TC3a result (2026-11-01): 146 tests (`tests/browser.rs` 138, `tests/browser/perf.rs` 8); every group but `aye_unit_tests` runs the one built `dweller` binary, so a path-based map from changed files to groups is not sound. The only subset tool is the libtest name filter; no per-test times in CI. Slow: `js_conformance` (288 cases, twice), `jsdom_*`, `window_*`.
+
+Design decision: two tracks. Safe now: shard the step and record per-test times (TC3b). Bold, measured first: per-case dynamic dependencies at C-function level (Aye's C output is deterministic, so a changed function is a changed C function body), select only cases that executed a changed function; safe for deterministic tests (dynamic regression test selection).
+
+#### TC3b: shard dweller's browser test step, record per-test times
+- lane: project (change in aye-lang/dweller, card file `docs/plans/cards/TC3b.md` there)
+- goal: Ubuntu 4 shards, macOS 2 shards, one final aggregate check; once-per-OS steps only on shard 0; per-test times in the log (`--report-time`)
+- verify: PR CI green; browser step wall time per shard reported
+- where: dweller PR, CI · model: code-writer (opus) · time box: 45 min
+
+#### TC3c1: executed C functions per js_conformance case (spike)
+- goal: per case, the set of C functions it executes (counted even when inlined), at dweller main; naming patterns of C functions (stable vs numbered)
+- verify: summary numbers reproducible from the scratch script
+- where: local (capped.sh) · model: opus · time box: 45 min
+
+TC3c1 result (2026-11-01): clang profile counters (`--cflags -fprofile-instr-generate`, counted before inlining) + `xcrun llvm-profdata show`; all 288 cases, 0 mismatches, 19 s for the whole set. 7574 C functions; a case executes 940–1245 (median 972); union 1868; 926 run in every case (a commit touching one selects all). C names are stable (derived from Aye qualified names, no counters), but bodies carry `#line` and location constants, so diffs must mask them.
+
+#### TC3c2: changed C functions per commit (spike, after TC3c1)
+- goal: for the last 30 dweller commits touching `browser/`, the C functions whose body changed, and how often non-function C (types, globals) changed
+- where: local (capped.sh) · model: sonnet · time box: 45 min
+
+TC3c2 result (2026-11-01, last 30 first-parent commits touching `browser/`, coverage at main as the approximation): the normalizer passes its checks (a comment line → 0 changes; one flipped comparison → exactly that function). With "any changed type or global re-runs all", 27 of 30 commits select all 288 cases (types and `aye_g_*` data change in most commits). Functions only: 16 select 0, 13 select all 288, 1 selects 10. Cause: 926 of the ~970 functions a case runs are the shared JS-engine core. **Conclusion: per-case selection inside a group does not pay for Dweller; the unit that pays is the whole group** (half the commits would skip `js_conformance` entirely), and it needs item → function edges (types, globals) to be safe. Expected gain about 2x on the test step, not 10x. Next decision waits for per-test times from TC3b.
+
+#### TC3c3: selection rate and safety check (after TC3c1, TC3c2) — on hold, see TC3c2 result
+- goal: per commit, the share of js_conformance cases selected; for 3 commits every case whose result changed is in the selected set
+
+TC3b result (2026-11-01, dweller PR #238, merged 6e93a60): `ci` wall time 16.6 min (was 32.7 median). Shards unbalanced: Ubuntu 2.4 / 3.4 / 16.5 / 2.6 min, macOS 14.1 / 8.3 min. Per-test times: `jsdom_gc_stress` alone 908 s Ubuntu, 674 s macOS; next `js_conformance` 113 s; all others ≤ 84 s.
+
+#### TC3e: split `jsdom_gc_stress` into four tests (dweller PR)
+#### TC3f: balance shards by measured time, greedy longest-first (dweller PR, parallel with TC3e)
+Predicted after both: Ubuntu ~6 min, macOS ~11 min (macOS becomes the critical path).
+
+Result (2026-11-01): #239 merged 4bbd47c, #240 merged 3749645. First main run with both (41232362999): `ci` wall **8.9 min** (was 32.7 median), Ubuntu shards 4.0 / 6.2 / 3.4 / 5.1 min, macOS 8.8 / 5.4 min. macOS 1/2 is the critical path.
+
+#### TC3f2: regenerate `tests/browser-times.txt` from main run 41232362999 (dweller PR)
+#### TC3g: experiment PR (not merged): harness builds the browser with `--mode safe`; CI times per shard and every test whose result changes
+The harness builds with plain `aye build browser` (debug, `-O0`). Debug mode is also the leak check: the General allocator keeps block headers and writes leak reports to stderr at `deinit` (`docs/decisions.md`, General), and the tests require empty stderr. So `--mode safe` alone would drop leak and double-free detection; if TC3g shows a large gain, the next step is an Aye option for the debug allocator in `-O2` builds, then switch the harness.
+
 ## Backlog (cards written when their phase comes up)
+
+- TC3g test build mode: the harness builds the browser in debug (`-O0`); measure the suite with `--mode safe` (`-O2` + checks) and list what debug adds that tests rely on (empty stderr also catches leak reports).
+
+- TC3d flaky handling: 12 of 92 failed attempts were flaky; detect by same-commit re-run, quarantine with an owner card, never silently.
 
 - TC1 fact store core: content-addressed store, local and remote cache.
 - TC2 `aye build` incremental: stable C partitions, object cache by partition hash; output bytes identical.
