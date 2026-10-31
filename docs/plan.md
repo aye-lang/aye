@@ -95,6 +95,10 @@ Steps not tied to one lane, in this order. Their cards are in
 5. **X6 adoption** (user, 2026-10-15: "you yourself need to make this
    language have customers"): audit, positioning and cards A0–A21 in
    [`plans/adoption.md`](plans/adoption.md); A1 is the website rewrite.
+6. **X7 toolchain** (user, 2026-11-01: our own alternative to git, large
+   cuts in compile and test time, stable): one content-addressed fact
+   store for VCS, build and test; cards TC0a–TC5 in
+   [`plans/toolchain.md`](plans/toolchain.md); TC0a and TC0b first.
 
 ## Execution rules
 
