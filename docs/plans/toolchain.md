@@ -50,6 +50,38 @@ to a full run.
 - `aye test`: compiles all tests of the program into one executable on
   every run (`docs/decisions.md`, "`aye test`"); no result is reused.
 
+## Baseline (TC0a, TC0b, 2026-11-01)
+
+| What | aye | dweller |
+|---|---|---|
+| Merged PRs since 2026-10-02 | 22 | 234 |
+| PR open to merge, median / p90 | 8.1 / 26.3 min | 70.0 / 4884 min |
+| CI run, median / p90 | 6.3 / 8.3 min | 15.1 / 32.2 min |
+| CI runs failed / cancelled | 21% / 26% | 17% / 5% |
+
+Dweller local build (`browser/build.sh`, `--mode fast` = `-O2`, under
+`capped.sh`, median of 3): front end (`aye emit-c`, 1,049,870 lines /
+41 MB of C) 2 s, full build 8 s, rebuild after a one-comment edit 7 s
+(no cache), `aye test browser --module js` (28 tests) 4 s.
+
+TC0c, dweller PRs that have CI data (202 of 234; the API has no `ci`
+runs before 2026-10-11): open to merge median 40.5 / p90 794 min; CI
+running is 70% of a PR's time at the median, waiting after green is
+0.9 min at the median but 118 min at p90; 1 `ci` run per PR at the
+median, 2 at p90. A green `ci` run takes 32.7 min (median, last 30), and
+nearly all of it is one step: `cargo test --release --test browser`,
+15.8 min on macOS and 13.6 min on Ubuntu (median), against 0.2 min to
+build the browser. 92 of 458 run attempts failed (20%): 12 flaky (the
+same commit passed on a re-run), 80 real.
+
+**What this changes.** Local compile is not the bottleneck: 7 s. The
+browser test step is (about 95% of CI time), and its 20% failure rate
+doubles a PR's CI at p90. Order: TC3 (test selection and result cache)
+first, starting from the browser test step (TC3a inventory); TC5
+(landing) for the waiting tail; the build cache (TC2) last. Reproduce:
+`scratchpad/tc0a/run.sh` and `scratchpad/tc0c/run.sh` of session
+f85d97e7 (gh only); TC0b commands are in the card.
+
 ## Lanes
 
 - **A (this plan, first):** our own loop. TC0–TC5.
@@ -83,6 +115,30 @@ to a full run.
 - depends on: –
 - parallel with: all but other local builds (capped.sh queue)
 - where: local (macOS timing)
+- model: sonnet
+- time box: 45 min
+
+#### TC0c: where a dweller PR's 70 minutes go
+- lane: project
+- goal: per merged dweller PR since 2026-10-02: open to first CI start, CI runs per PR and their total time, last green CI to merge; per CI job and step: median time; failed runs that passed on a re-run of the same commit (flaky) vs not
+- serves: X7 main metric, order of TC3 / TC5
+- files: none (report only)
+- verify: numbers reproduced by one script with `gh` only
+- depends on: TC0a (reuses its data)
+- parallel with: all
+- where: local (gh only, no build)
+- model: sonnet
+- time box: 45 min
+
+#### TC3a: inventory of dweller's browser test step
+- lane: project
+- goal: list what `cargo test --release --test browser` in aye-lang/dweller runs: test groups, how many cases each, what source directories and data (goldens, site archives, test262, WPT) each reads, and whether the harness can already run a subset (filters, env vars)
+- serves: TC3 design (can we select tests by changed Aye modules?)
+- files: none (report only)
+- verify: every claim names a file:line in dweller
+- depends on: TC0c
+- parallel with: all
+- where: local (read only)
 - model: sonnet
 - time box: 45 min
 
