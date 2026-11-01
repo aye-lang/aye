@@ -190,6 +190,17 @@ TC3i result (2026-11-01): dweller #243 merged 588eb6b. First main run (412360425
 #### TC3j: what the wait-bound tests wait on (read only)
 Result: (A) each shard's first tests block on the one `aye build browser` (`dweller()`, OnceLock), ~35–45 s on macOS, so their times include the build; (B) `--frames N` runs until N frames are drawn, each idle frame waits 10 ms (`browser/ui/window.aye:676, 723`), even after the event script is done: `window_history_steps` = 5 × 600 frames ≥ 30 s. Server delays the tests check (`/delay/…`) are the point and stay.
 
+## TC5: landing (2026-11-01, order decided after TC3)
+
+What is left of edit-to-main after TC3: the wait after green (p90 118 min: nobody merges), PRs tested on a stale base, and red cycles (20% of runs; 12 of 92 failures flaky).
+
+- **TC5a merge queue (first).** GitHub's merge queue on dweller `main` (ruleset: merge queue with merge commits, required checks `browser` and `perf`, admin bypass; `ci` also runs `on: merge_group`). A PR is tested merged with the latest main (batched) and lands when green, so nobody waits to merge and main stays green. This is the merge train, automated, off the shelf. Cards land with `gh pr merge --merge --auto`.
+  Status 2026-11-01: dweller #244 (`ci` on `merge_group`) merged 055b2e7; ruleset 26292957 active (merge queue MERGE, ALLGREEN, build ≤ 5, required `browser` + `perf`, admin bypass); `allow_auto_merge` on. First PR through the queue: #245 (TC3k), landed 3ef66bf after merge_group run 41255683726 (success, 7.7 min). Verified end to end.
+- TC3k result: dweller #245, `--until-idle` (opt-in, `browser/ui/page-settled.aye`) on 4 tests: 47.8 s → 13 s locally (`window_history_steps` 33.4 → 8.9 s). `inserted_scripts` keeps full frames (it checks > 300 loop iterations).
+- TC5b result: dweller #246 (`.github/scripts/browser-shard.sh`: run, parse `... FAILED`, re-run once; flakes → `::warning`, step summary, artifact, `flaky: NAME` issue on push/merge_group) landed through the queue as 7de2c08 (merge_group run 41256149080, 8.2 min). Open: dweller `docs/plans/cards/TC5a.md` still says "in progress"; fix it in the next dweller PR.
+- **TC5b flaky handling.** A failed test is re-run once in the same job; if it passes, the job passes with a `::warning::flaky` line and a report artifact, and a flaky card is opened. Never silent.
+- **TC5c tree-hash evidence.** A tree that already passed is not re-tested (key: tree hash + workflow file hash + `AYE_REV` + runner image). Saves compute, not latency, so last.
+
 ## Backlog (cards written when their phase comes up)
 
 - TC3g test build mode: the harness builds the browser in debug (`-O0`); measure the suite with `--mode safe` (`-O2` + checks) and list what debug adds that tests rely on (empty stderr also catches leak reports).
