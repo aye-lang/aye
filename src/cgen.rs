@@ -874,8 +874,8 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__error"));
 extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #endif
 #ifdef __APPLE__
-#define AYE_O_RDONLY 0
-#define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
+#define AYE_O_RDONLY 0x01000000 /* O_CLOEXEC */
+#define AYE_O_CREATE 0x01000601 /* O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC */
 #define AYE_CLOCK_MONOTONIC 6
 #define AYE_ENOTEMPTY 66
 #define AYE_D_TYPE 20 /* dirent: d_type, then d_name */
@@ -888,8 +888,8 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #define AYE_D_TYPE 8 /* dirent: d_ino, d_type, then d_name */
 #define AYE_NSEC(v) ((int64_t)(uint32_t)(v)) /* tv_nsec is a 32-bit long; the padding is not zeroed */
 #else
-#define AYE_O_RDONLY 0
-#define AYE_O_CREATE 01101
+#define AYE_O_RDONLY 02000000 /* O_CLOEXEC */
+#define AYE_O_CREATE 02001101 /* O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC */
 #define AYE_CLOCK_MONOTONIC 1
 #define AYE_ENOTEMPTY 39
 #define AYE_D_TYPE 18
@@ -1034,7 +1034,8 @@ AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
    pipe). `out` gets the process id, then the parent's end of the stdin,
    stdout and stderr pipes (-1 where there is none). Returns 0 or the errno
    of the failure, including that of `execvp` in the child, which reports it
-   through a close-on-exec pipe. Every pipe end is close-on-exec; `dup2`
+   through a close-on-exec pipe. Every pipe end is close-on-exec (made so
+   atomically by `pipe2` on Linux, by `fcntl` after `pipe` on macOS); `dup2`
    clears the flag on the child's 0, 1 and 2. `args` goes on with `envc`
    NUL-terminated `NAME=value` strings (`envc` < 0: the child inherits this
    process's environment) and, when `hascwd` is set, one more string, the
@@ -1042,6 +1043,9 @@ AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
    this process, so that a write to an exited child's stdin fails with
    EPIPE; the child gets the default action back before `execvp`. */
 extern int aye_rt_pipe(int *) __asm__(AYE_SYM("pipe"));
+#ifdef __linux__
+extern int aye_rt_pipe2(int *, int) __asm__(AYE_SYM("pipe2"));
+#endif
 extern int aye_rt_close(int) __asm__(AYE_SYM("close"));
 extern int aye_rt_dup2(int, int) __asm__(AYE_SYM("dup2"));
 extern int aye_rt_fork(void) __asm__(AYE_SYM("fork"));
@@ -1054,6 +1058,16 @@ extern int aye_rt_chdir(const char *) __asm__(AYE_SYM("chdir"));
 extern void (*aye_rt_signal(int, void (*)(int)))(int) __asm__(AYE_SYM("signal"));
 extern char **aye_rt_environ __asm__(AYE_SYM("environ"));
 extern void aye_rt_exit_now(int) __asm__(AYE_SYM("_exit")) __attribute__((noreturn));
+static __attribute__((unused)) int aye_cloexec_pipe(int *p) {
+#ifdef __linux__
+    return aye_rt_pipe2(p, 02000000);
+#else
+    if (aye_rt_pipe(p) != 0) return -1;
+    aye_rt_fcntl(p[0], 2, 1);
+    aye_rt_fcntl(p[1], 2, 1);
+    return 0;
+#endif
+}
 AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t envc, int32_t hascwd, int32_t modes, int32_t *out) {
     int pp[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int ep[2] = {-1, -1};
@@ -1080,13 +1094,9 @@ AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t envc, int32_t 
     aye_rt_signal(13, (void (*)(int))1);
     for (int s = 0; s < 3; s++) {
         if (((modes >> (2 * s)) & 3) == 0) continue;
-        if (aye_rt_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
-        aye_rt_fcntl(pp[s][0], 2, 1);
-        aye_rt_fcntl(pp[s][1], 2, 1);
+        if (aye_cloexec_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
     }
-    if (aye_rt_pipe(ep) != 0) { err = *aye_rt_errno_loc(); goto fail; }
-    aye_rt_fcntl(ep[0], 2, 1);
-    aye_rt_fcntl(ep[1], 2, 1);
+    if (aye_cloexec_pipe(ep) != 0) { err = *aye_rt_errno_loc(); goto fail; }
     aye_rt_fflush(0);
     pid = aye_rt_fork();
     if (pid < 0) { err = *aye_rt_errno_loc(); goto fail; }
