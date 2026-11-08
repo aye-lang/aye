@@ -18,13 +18,15 @@ extern fn chmod(path: [*]u8, mode: u32) i32
 extern fn dup(fd: i32) i32
 extern fn close(fd: i32) i32
 
-// "open" or "closed": whether `fd` is open in a spawned shell.
+// "open" or "closed": whether `fd` is open in a spawned shell. The
+// redirection runs in a subshell: dash (Linux's /bin/sh) exits on a failed
+// redirection of a special builtin such as `:`.
 fn inChild(alloc: Allocator, fd: i32) ![]u8 {
     var cmd = Builder.init(alloc)
     defer cmd.deinit()
-    try cmd.append("{ : <&")
+    try cmd.append("(true <&")
     try cmd.appendInt(fd as i64)
-    try cmd.append("; } 2>/dev/null && echo open || echo closed")
+    try cmd.append(") 2>/dev/null && echo open || echo closed")
     let argv = [_][]u8{"/bin/sh", "-c", cmd.bytes()}
     var child = try process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit)
     let out = try child.stdout.?.readAll(alloc)
