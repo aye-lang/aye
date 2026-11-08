@@ -1806,16 +1806,16 @@ error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathF
 error ReadDirError = PathError || AllocError
 error ReadLinkError = PathError || AllocError
 enum Kind { File, Dir, Symlink, Other }
-struct Stat { size: u64, mtime: i64, kind: Kind }
+struct Stat { size: u64, mtime: i64, kind: Kind, uid: u32, gid: u32, mode: u32 }   (mode: st_mode, permission and type bits)
 struct DirEntry { name: []u8, kind: Kind }
 struct DirEntries { items: []mut DirEntry }   (and private fields)
 struct File { fd: i32 }
-std.fs.open(path: []u8) OpenError!File      open a file for reading
+std.fs.open(path: []u8) OpenError!File      open a file for reading (close-on-exec, as every fd std opens)
 std.fs.create(path: []u8) OpenError!File    create (or empty) a file for writing
 std.fs.exists(path: []u8) bool              is there a file or directory at path?
 std.fs.mtime(path: []u8) ?i64               its modification time in ns since 1970; null if stat fails
 std.fs.readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8   the whole file; free with alloc.free
-std.fs.stat(path: []u8) PathError!Stat                  size, mtime (ns since 1970) and kind; a symlink is not followed
+std.fs.stat(path: []u8) PathError!Stat                  size, mtime (ns since 1970), kind, uid, gid and mode; a symlink is not followed
 std.fs.statFollow(path: []u8) PathError!Stat            like stat, but follows symlinks
 std.fs.readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries   the entries, no "." or ".."; unordered; free with deinit
 std.fs.mkdir(path: []u8) PathError!void                  create a directory (the parent must exist)
