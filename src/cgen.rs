@@ -1748,29 +1748,65 @@ pub struct Parts {
 impl Parts {
     /// The C `c` (from `emit`) as a header, which a unit includes as
     /// `header`, and at most `k` units that each define a contiguous run
-    /// of the functions, balanced by size (unit 0 also has `main`). `None`
-    /// when the program has too few functions to gain from it.
-    pub fn split(&self, c: &str, header: &str, k: usize) -> Option<(String, Vec<String>)> {
+    /// of the functions, balanced by size (unit 0 also has `main`). A
+    /// function whose C is at most `small` bytes is instead defined `static
+    /// inline` at the end of the header, a copy in each unit that calls it.
+    /// `None` when the program has too few functions to gain from it.
+    pub fn split(
+        &self,
+        c: &str,
+        header: &str,
+        k: usize,
+        small: usize,
+    ) -> Option<(String, Vec<String>)> {
         if k < 2 || self.funcs.len() < SPLIT_MIN_FUNCS {
             return None;
         }
         let first = self.funcs[0].0;
         let total = self.tail.0 - first;
+        let mut inline = String::new();
+        let mut sigs = std::collections::HashSet::new();
         let mut units: Vec<String> = Vec::new();
+        let mut moved = false;
         for (i, (start, line)) in self.funcs.iter().enumerate() {
             let end = self.funcs.get(i + 1).map_or(self.tail.0, |f| f.0);
+            let body = &c[*start..end];
+            if end - start <= small && body.starts_with("\nAYE_FN ") {
+                let sig = &body[1..body.find(" {\n").unwrap()];
+                sigs.insert(sig);
+                inline.push_str(line);
+                inline.push_str("\nstatic inline ");
+                inline.push_str(&body["\nAYE_FN ".len()..]);
+                moved = true;
+                continue;
+            }
             // A new unit once this one has its share of the bodies.
             if units.is_empty() || ((start - first) * k >= total * units.len() && units.len() < k) {
                 units.push(format!(
                     "#define AYE_UNIT {}\n#include \"{header}\"\n{line}",
                     units.len()
                 ));
+            } else if moved {
+                units.last_mut().unwrap().push_str(line);
             }
-            units.last_mut().unwrap().push_str(&c[*start..end]);
+            moved = false;
+            units.last_mut().unwrap().push_str(body);
         }
         units[0].push_str(&self.tail.1);
         units[0].push_str(&c[self.tail.0..]);
-        Some((c[..first].to_string(), units))
+        let mut h = String::with_capacity(first + inline.len());
+        for l in c[..first].split_inclusive('\n') {
+            match l.strip_suffix(";\n").filter(|sig| sigs.contains(sig)) {
+                Some(sig) => {
+                    h.push_str("static inline ");
+                    h.push_str(&sig["AYE_FN ".len()..]);
+                    h.push_str(";\n");
+                }
+                None => h.push_str(l),
+            }
+        }
+        h.push_str(&inline);
+        Some((h, units))
     }
 }
 
@@ -3556,4 +3592,57 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
         _ => {}
     }
     all.push(t.clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 200 one-line functions and one big one, as `emit` lays them out.
+    fn program() -> (String, Parts) {
+        let mut c = String::from("#include <stdint.h>\n");
+        for i in 0..=200 {
+            c.push_str(&format!("AYE_FN int f{i}(void);\n"));
+        }
+        let mut parts = Parts::default();
+        for i in 0..=200 {
+            parts
+                .funcs
+                .push((c.len(), format!("#line {i} \"a.aye\"\n")));
+            let body = if i == 200 {
+                "    f0();\n".repeat(100)
+            } else {
+                String::new()
+            };
+            c.push_str(&format!(
+                "\nAYE_FN int f{i}(void) {{\n{body}    return {i};\n}}\n"
+            ));
+        }
+        parts.tail = (c.len(), String::new());
+        c.push_str("\nint main(void) { return f200(); }\n");
+        (c, parts)
+    }
+
+    #[test]
+    fn split_defines_small_functions_inline_in_the_header() {
+        let (c, parts) = program();
+        let (h, units) = parts.split(&c, "p.h", 4, 100).unwrap();
+        assert!(h.contains("\nstatic inline int f0(void);\n"));
+        assert!(
+            h.contains("#line 0 \"a.aye\"\n\nstatic inline int f0(void) {\n    return 0;\n}\n")
+        );
+        assert!(h.contains("\nAYE_FN int f200(void);\n"));
+        assert_eq!(units.len(), 1);
+        assert!(units[0].contains("\nAYE_FN int f200(void) {\n"));
+        assert!(!units.iter().any(|u| u.contains("int f0(void) {")));
+    }
+
+    #[test]
+    fn split_without_small_keeps_every_function_in_a_unit() {
+        let (c, parts) = program();
+        let (h, units) = parts.split(&c, "p.h", 4, 0).unwrap();
+        assert_eq!(h, c[..parts.funcs[0].0]);
+        assert!(!units.concat().contains("static inline"));
+        assert_eq!(units.len(), 4);
+    }
 }
