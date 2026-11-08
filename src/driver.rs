@@ -1281,6 +1281,12 @@ pub fn cc_obj(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     compile(p, out, mode, false)
 }
 
+/// In an optimized build split into units, a function whose C is at most
+/// this many bytes is defined `static inline` in the header, so that every
+/// unit can inline it (`List(T).items`, `len`): without LTO clang inlines
+/// only within a unit.
+const SMALL_FN: usize = 1024;
+
 /// `cc` and `cc_obj`: `link` is whether clang links.
 fn compile(p: &CProgram, out: &Path, mode: Mode, link: bool) -> Result<(), String> {
     // The C goes to a file, not to clang's stdin: a pipe holds 64 KiB, and
@@ -1298,7 +1304,8 @@ fn compile(p: &CProgram, out: &Path, mode: Mode, link: bool) -> Result<(), Strin
     if link && p.target.is_host() {
         let k = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
         let header = format!("{name}.h");
-        if let Some((h, units)) = p.parts.split(&p.c, &header, k) {
+        let small = if mode == Mode::Debug { 0 } else { SMALL_FN };
+        if let Some((h, units)) = p.parts.split(&p.c, &header, k, small) {
             return compile_parts(p, &name, &h, &units, out, mode);
         }
     }
