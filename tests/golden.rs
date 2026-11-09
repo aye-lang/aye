@@ -83,6 +83,9 @@
 //!   lines count in that mode only), printing nothing. Skipped
 //!   where AddressSanitizer does not run (Homebrew's LLVM is tried when the
 //!   clang on `PATH` has none).
+//! - `tests/coverage/edges.aye`: `aye run --coverage` prints `edges.out`
+//!   (`std.coverage` counts the edges that ran); without the flag it prints
+//!   `edges.plain.out` (no counters).
 //! - `perf`: the debug build of `tests/cases/general_churn.aye` finishes
 //!   within 10 s (`General` allocates and frees in constant time).
 //! - `aye build --cflags -fsanitize=thread`: the M10 fan-out program runs
@@ -1596,6 +1599,30 @@ fn output_and_cpu_within(
     ))
 }
 
+/// O7.8: `tests/coverage/edges.aye` run with `--coverage` (edge counters
+/// that `std.coverage` reads: the count of set edges stays for a repeated
+/// input and rises for one that takes a new branch) prints `edges.out`; run
+/// without it, `std.coverage` sees no region and prints `edges.plain.out`.
+fn cli_coverage() -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (flags, want) in [
+        (&["--coverage"][..], "edges.out"),
+        (&[][..], "edges.plain.out"),
+    ] {
+        let mut args = vec!["run", "tests/coverage/edges.aye"];
+        args.extend(flags);
+        let (_, err, code) = aye(root, &args)?;
+        let want = read(&root.join("tests/coverage").join(want)).unwrap();
+        if code != Some(0) || err != want {
+            return Err(format!(
+                "`aye {}`: {code:?}\n--- got\n{err}--- want\n{want}",
+                args.join(" ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// M10: the fan-out program built with `--cflags -fsanitize=thread` runs
 /// without a ThreadSanitizer report and prints what it prints without it.
 fn cli_tsan(work: &Path) -> Result<(), String> {
@@ -2016,7 +2043,7 @@ fn cli_doc_unknown_std() -> Result<(), String> {
         .output()
         .map_err(|e| e.to_string())?;
     let err = String::from_utf8_lossy(&out.stderr);
-    let want = "aye: unknown std module `std.tex`; std has: coro, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time\ndid you mean `std.text`?\n";
+    let want = "aye: unknown std module `std.tex`; std has: coro, coverage, crypto, diag, encoding, fs, heap, http, json, list, log, map, math, mem, net, os, path, pool, process, sort, sync, testing, text, thread, time\ndid you mean `std.text`?\n";
     if out.status.code() != Some(1) || !out.stdout.is_empty() || err != want {
         return Err(format!(
             "`aye doc --signatures std.tex`: {}\n--- expected stderr\n{want}--- got\n{err}",
@@ -2241,6 +2268,11 @@ fn main() {
             &mut jobs,
             "cli/aye build --cflags -fsanitize=thread".to_string(),
             move || cli_tsan(w),
+        );
+        add(
+            &mut jobs,
+            "cli/aye run --coverage".to_string(),
+            cli_coverage,
         );
         for p in &asan_cases {
             let w = &work;
