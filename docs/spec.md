@@ -1717,7 +1717,7 @@ std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn, wait      below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON: parse, get, asString, asNumber, at; write, stringify     below
-std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
+std.crypto    SHA-256/384/512, SHA-1, HMAC-SHA-256/384/512, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
 std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
 ```
 

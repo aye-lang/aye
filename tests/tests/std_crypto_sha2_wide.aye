@@ -1,0 +1,226 @@
+// std.crypto SHA-384, SHA-512 and their HMAC: the FIPS 180-4 and RFC 4231
+// vectors, padding boundaries, streaming in pieces, HMAC key lengths.
+
+import std.crypto.HmacSha384
+import std.crypto.HmacSha512
+import std.crypto.Sha384
+import std.crypto.Sha512
+import std.crypto.hmacSha384
+import std.crypto.hmacSha512
+import std.crypto.sha384
+import std.crypto.sha512
+import std.mem
+
+/// `d` as lowercase hex must equal `want`.
+fn expectHex(d: []u8, want: []u8) {
+    let digits = "0123456789abcdef"
+    var buf = [128]u8{0, ..}
+    for i, b in d {
+        buf[i * 2] = digits[(b >> 4) as usize]
+        buf[i * 2 + 1] = digits[(b & 15) as usize]
+    }
+    @expect(mem.eql(buf[..d.len * 2], want))
+}
+
+/// 256 bytes of "a".
+fn manyA() [256]u8 {
+    return [256]u8{97, ..}
+}
+
+test "sha512 vectors of FIPS 180-4" {
+    let d0 = sha512("")
+    expectHex(d0[..], "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e")
+    let d1 = sha512("abc")
+    expectHex(d1[..], "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
+    let d2 = sha512("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu")
+    expectHex(d2[..], "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909")
+    // One million "a", fed in chunks of 1000 bytes.
+    var h = Sha512.init()
+    let chunk = [1000]u8{97, ..}
+    for i in 0..1000 {
+        h.update(chunk[..])
+    }
+    let dm = h.final()
+    expectHex(dm[..], "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b")
+}
+
+test "sha512 at the padding boundaries" {
+    let a = manyA()
+    let d0 = sha512(a[..0])
+    expectHex(d0[..], "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e")
+    let d1 = sha512(a[..1])
+    expectHex(d1[..], "1f40fc92da241694750979ee6cf582f2d5d7d28e18335de05abc54d0560e0f5302860c652bf08d560252aa5e74210546f369fbbbce8c12cfc7957b2652fe9a75")
+    let d111 = sha512(a[..111])
+    expectHex(d111[..], "fa9121c7b32b9e01733d034cfc78cbf67f926c7ed83e82200ef86818196921760b4beff48404df811b953828274461673c68d04e297b0eb7b2b4d60fc6b566a2")
+    let d112 = sha512(a[..112])
+    expectHex(d112[..], "c01d080efd492776a1c43bd23dd99d0a2e626d481e16782e75d54c2503b5dc32bd05f0f1ba33e568b88fd2d970929b719ecbb152f58f130a407c8830604b70ca")
+    let d113 = sha512(a[..113])
+    expectHex(d113[..], "55ddd8ac210a6e18ba1ee055af84c966e0dbff091c43580ae1be703bdb85da31acf6948cf5bd90c55a20e5450f22fb89bd8d0085e39f85a86cc46abbca75e24d")
+    let d127 = sha512(a[..127])
+    expectHex(d127[..], "828613968b501dc00a97e08c73b118aa8876c26b8aac93df128502ab360f91bab50a51e088769a5c1eff4782ace147dce3642554199876374291f5d921629502")
+    let d128 = sha512(a[..128])
+    expectHex(d128[..], "b73d1929aa615934e61a871596b3f3b33359f42b8175602e89f7e06e5f658a243667807ed300314b95cacdd579f3e33abdfbe351909519a846d465c59582f321")
+    let d129 = sha512(a[..129])
+    expectHex(d129[..], "4f681e0bd53cda4b5a2041cc8a06f2eabde44fb16c951fbd5b87702f07aeab611565b19c47fde30587177ebb852e3971bbd8d3fd30da18d71037dfbd98420429")
+    let d239 = sha512(a[..239])
+    expectHex(d239[..], "52c853cb8d907f3d4d6b889beb027985d7c273486d75f8baf26f80d24e90c74c6c3de3e22131582380a7d14d43f2941a31385439cd6ddc469f628015e50bf286")
+    let d240 = sha512(a[..240])
+    expectHex(d240[..], "4c296d90c61052a62ffb1dd196f1b7b09373b1f93e71836baebf89690546b7595684dbe9467a8e484fa0d1094272b4344a7c24f5fee8daedeb0bf549c985ab5f")
+    let d241 = sha512(a[..241])
+    expectHex(d241[..], "81bd43dcdb4d9a7bae6f4f3ebd771d5988481613097aa5de5774f9fdfc1d4230a608fa1a9dfe3147dc88545df63513f93d13d92d27963926e5a3632aaed4c8bb")
+}
+
+test "sha384 vectors of FIPS 180-4" {
+    let d0 = sha384("")
+    expectHex(d0[..], "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b")
+    let d1 = sha384("abc")
+    expectHex(d1[..], "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7")
+    let d2 = sha384("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu")
+    expectHex(d2[..], "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039")
+    // One million "a", fed in chunks of 1000 bytes.
+    var h = Sha384.init()
+    let chunk = [1000]u8{97, ..}
+    for i in 0..1000 {
+        h.update(chunk[..])
+    }
+    let dm = h.final()
+    expectHex(dm[..], "9d0e1809716474cb086e834e310a4a1ced149e9c00f248527972cec5704c2a5b07b8b3dc38ecc4ebae97ddd87f3d8985")
+}
+
+test "sha384 at the padding boundaries" {
+    let a = manyA()
+    let d0 = sha384(a[..0])
+    expectHex(d0[..], "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b")
+    let d1 = sha384(a[..1])
+    expectHex(d1[..], "54a59b9f22b0b80880d8427e548b7c23abd873486e1f035dce9cd697e85175033caa88e6d57bc35efae0b5afd3145f31")
+    let d111 = sha384(a[..111])
+    expectHex(d111[..], "3c37955051cb5c3026f94d551d5b5e2ac38d572ae4e07172085fed81f8466b8f90dc23a8ffcdea0b8d8e58e8fdacc80a")
+    let d112 = sha384(a[..112])
+    expectHex(d112[..], "187d4e07cb306103c69967bf544d0dfbe9042577599c73c330abc0cb64c61236d5ed565ee19119d8c31779a38f791fcd")
+    let d113 = sha384(a[..113])
+    expectHex(d113[..], "1d6bed01626682961b50da078a6b1da707c1da0c8a0a3226f159235bd45ed724a0622fa6f39fd70007a6c72a5cda43ae")
+    let d127 = sha384(a[..127])
+    expectHex(d127[..], "9bd06b1763c2cf7aef40e795dc65bc96d59c41b537f3ad72ebdefd485476b5717c1aeb37c327fe9c1831b12b9efd08ae")
+    let d128 = sha384(a[..128])
+    expectHex(d128[..], "edb12730a366098b3b2beac75a3bef1b0969b15c48e2163c23d96994f8d1bef760c7e27f3c464d3829f56c0d53808b0b")
+    let d129 = sha384(a[..129])
+    expectHex(d129[..], "39b6f5a7b0e781dbc419f72e49b30eaac10f2c98c4403bc610da31067fd1b48f324138c8615d2b496d08d73d5e865326")
+    let d239 = sha384(a[..239])
+    expectHex(d239[..], "e247c35f4bc1aa38026f8880c8c97305545d00d3f859e00c57d1c1f0a176b3c6b749c4eb081f08bd0fba500969cd056a")
+    let d240 = sha384(a[..240])
+    expectHex(d240[..], "4d86957beab348a29180f02d02564ac1d32f5b4c217ece2b038f7c184f0cafc8c8e438eb82aa03796170e0a7ce8c0675")
+    let d241 = sha384(a[..241])
+    expectHex(d241[..], "c509f73a7a331247832bf478043a516326c0a7ab83108586bed465ae63df829dfba4806989d354c46845d6966fc6e503")
+}
+
+test "streaming in two pieces equals one shot, at every split" {
+    let a = manyA()
+    let want512 = sha512(a[..240])
+    let want384 = sha384(a[..240])
+    for cut in 0..241 {
+        var h = Sha512.init()
+        h.update(a[..cut])
+        h.update(a[cut..240])
+        let d = h.final()
+        @expect(mem.eql(d[..], want512[..]))
+        var g = Sha384.init()
+        g.update(a[..cut])
+        g.update(a[cut..240])
+        let e = g.final()
+        @expect(mem.eql(e[..], want384[..]))
+    }
+}
+
+test "hmacSha512 cases 1 to 7 of RFC 4231" {
+    let k1 = [20]u8{11, ..}
+    let m1 = "Hi There"
+    let d1 = hmacSha512(k1[..], m1[..])
+    expectHex(d1[..], "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854")
+    let k2 = "Jefe"
+    let m2 = "what do ya want for nothing?"
+    let d2 = hmacSha512(k2[..], m2[..])
+    expectHex(d2[..], "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737")
+    let k3 = [20]u8{170, ..}
+    let m3 = [50]u8{221, ..}
+    let d3 = hmacSha512(k3[..], m3[..])
+    expectHex(d3[..], "fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb")
+    let k4 = [25]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
+    let m4 = [50]u8{205, ..}
+    let d4 = hmacSha512(k4[..], m4[..])
+    expectHex(d4[..], "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3dba91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd")
+    let k5 = [20]u8{12, ..}
+    let m5 = "Test With Truncation"
+    let d5 = hmacSha512(k5[..], m5[..])
+    expectHex(d5[..16], "415fad6271580a531d4179bc891d87a6")
+    let k6 = [131]u8{170, ..}
+    let m6 = "Test Using Larger Than Block-Size Key - Hash Key First"
+    let d6 = hmacSha512(k6[..], m6[..])
+    expectHex(d6[..], "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598")
+    let k7 = [131]u8{170, ..}
+    let m7 = "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+    let d7 = hmacSha512(k7[..], m7[..])
+    expectHex(d7[..], "e37b6a775dc87dbaa4dfa9f96e5e3ffddebd71f8867289865df5a32d20cdc944b6022cac3c4982b10d5eeb55c3e4de15134676fb6de0446065c97440fa8c6a58")
+}
+
+test "hmacSha384 cases 1 to 7 of RFC 4231" {
+    let k1 = [20]u8{11, ..}
+    let m1 = "Hi There"
+    let d1 = hmacSha384(k1[..], m1[..])
+    expectHex(d1[..], "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6")
+    let k2 = "Jefe"
+    let m2 = "what do ya want for nothing?"
+    let d2 = hmacSha384(k2[..], m2[..])
+    expectHex(d2[..], "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649")
+    let k3 = [20]u8{170, ..}
+    let m3 = [50]u8{221, ..}
+    let d3 = hmacSha384(k3[..], m3[..])
+    expectHex(d3[..], "88062608d3e6ad8a0aa2ace014c8a86f0aa635d947ac9febe83ef4e55966144b2a5ab39dc13814b94e3ab6e101a34f27")
+    let k4 = [25]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
+    let m4 = [50]u8{205, ..}
+    let d4 = hmacSha384(k4[..], m4[..])
+    expectHex(d4[..], "3e8a69b7783c25851933ab6290af6ca77a9981480850009cc5577c6e1f573b4e6801dd23c4a7d679ccf8a386c674cffb")
+    let k5 = [20]u8{12, ..}
+    let m5 = "Test With Truncation"
+    let d5 = hmacSha384(k5[..], m5[..])
+    expectHex(d5[..16], "3abf34c3503b2a23a46efc619baef897")
+    let k6 = [131]u8{170, ..}
+    let m6 = "Test Using Larger Than Block-Size Key - Hash Key First"
+    let d6 = hmacSha384(k6[..], m6[..])
+    expectHex(d6[..], "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952")
+    let k7 = [131]u8{170, ..}
+    let m7 = "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+    let d7 = hmacSha384(k7[..], m7[..])
+    expectHex(d7[..], "6617178e941f020d351e2f254e8fd32c602420feb0b8fb9adccebb82461e99c5a678cc31e799176d3860e6110c46523e")
+}
+
+test "hmacSha512 keys of 0, 128 and 129 bytes, streaming" {
+    let key = manyA()
+    let d0 = hmacSha512(key[..0], "x")
+    expectHex(d0[..], "aee650458ddcbcd4557531b27f1cded4c577f576079b086f57f3c6b9e037a7c0b3cdf7ff58afa09fe279076d1107d5d554f4d34fc6f03d8fd12f93d892802ac3")
+    let d128 = hmacSha512(key[..128], "x")
+    expectHex(d128[..], "b2fd3490e6072206d5543e474fddcdacda9259edebf698ffac1f3a03720e2dccc637abea568e2617df5ffae62ac2313da4031174d135345607e02ef0b05e17e8")
+    let d129 = hmacSha512(key[..129], "x")
+    expectHex(d129[..], "0433e12ae78ba15593470cad13567e91810dfbfae5e007f9870bd13d782626cc9f56d2b02f71c6cf4484bec0d859053aa00e3c465d7153765cfbf5882be701f2")
+    let want = hmacSha512(key[..20], "abcdef")
+    var h = HmacSha512.init(key[..20])
+    h.update("abc")
+    h.update("def")
+    let d = h.final()
+    @expect(mem.eql(d[..], want[..]))
+}
+
+test "hmacSha384 keys of 0, 128 and 129 bytes, streaming" {
+    let key = manyA()
+    let d0 = hmacSha384(key[..0], "x")
+    expectHex(d0[..], "962166748e08ee8bc8f622dae1e1d50ddf5a91701a0651de95eb3a520419a6e0a3ea84a0a8989de07ce29906b8892e5f")
+    let d128 = hmacSha384(key[..128], "x")
+    expectHex(d128[..], "8798a9af0bca9de0ba33f5d37b5b1b048f907f304d32cf071bf4bf6dfc14b027f9e23837006424e4209a36041e38148c")
+    let d129 = hmacSha384(key[..129], "x")
+    expectHex(d129[..], "372eca22a3ffc1832ecd11f781a2dfed7dd3b585ce12d6f76fd24d4a687fdfff03caf7708294afaa84b84a87bbf64e19")
+    let want = hmacSha384(key[..20], "abcdef")
+    var h = HmacSha384.init(key[..20])
+    h.update("abc")
+    h.update("def")
+    let d = h.final()
+    @expect(mem.eql(d[..], want[..]))
+}

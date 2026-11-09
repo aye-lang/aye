@@ -1,0 +1,11 @@
+test "sha512 vectors of FIPS 180-4" ... ok (N ms)
+test "sha512 at the padding boundaries" ... ok (N ms)
+test "sha384 vectors of FIPS 180-4" ... ok (N ms)
+test "sha384 at the padding boundaries" ... ok (N ms)
+test "streaming in two pieces equals one shot, at every split" ... ok (N ms)
+test "hmacSha512 cases 1 to 7 of RFC 4231" ... ok (N ms)
+test "hmacSha384 cases 1 to 7 of RFC 4231" ... ok (N ms)
+test "hmacSha512 keys of 0, 128 and 129 bytes, streaming" ... ok (N ms)
+test "hmacSha384 keys of 0, 128 and 129 bytes, streaming" ... ok (N ms)
+
+9 passed; 0 failed; 1 modules; N ms
