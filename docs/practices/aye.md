@@ -364,6 +364,46 @@ fn sum(xs: []u8) u8 {
 checks (as `fast` mode does), not those of the functions it calls, and not
 the allocator's debug checks. `+` then wraps: be sure that is wanted.
 
+### Index a local slice in a loop, not a field behind a pointer
+**Context:** a hot loop over a list or a field, run in a debug build (the
+browser's tests) or written to need no `@setSafety(false)`.
+**Bad:** the slice is read through `self` on every iteration; a store or
+call in the loop may change it, so each `self.buf[i]` keeps its check:
+```aye
+struct Buf {
+    buf: []u32
+}
+
+fn total(self: *Buf) u32 {
+    var t: u32 = 0
+    for i in 0..self.buf.len {
+        t +%= self.buf[i]
+    }
+    return t
+}
+```
+**Good:** copy it to a local first; the loop condition then proves
+`buf[i]` and the check is left out (O7.7, `tests/cases/bce_loops.aye`):
+```aye
+struct Buf {
+    buf: []u32
+}
+
+fn total(self: *Buf) u32 {
+    let buf = self.buf
+    var t: u32 = 0
+    for i in 0..buf.len {
+        t +%= buf[i]
+    }
+    return t
+}
+```
+`for x in xs` and `while i < s.len { ...; i += 1 }` are proved the same
+way; taking `&mut` of the local turns it off.
+**Why:** the compiler keeps facts only about locals that nothing but an
+assignment can change. At `-O2` clang often proves the same, so the gain
+is mostly in debug builds.
+
 ### Pick the build mode for the job
 **Context:** testing, measuring, shipping.
 **Bad:** timing a debug build. Debug mode gives every `General` block a

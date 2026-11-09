@@ -1,0 +1,12 @@
+// The index changes after the test: `i < s.len` held for the old `i`.
+pub fn main() {
+    var a = [3]u32{1, 2, 3}
+    let s = a[..]
+    var i: usize = 0
+    var t: u32 = 0
+    while i < s.len {
+        i += 1
+        t += s[i]
+        @println(t)
+    }
+}
