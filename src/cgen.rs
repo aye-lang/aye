@@ -56,7 +56,12 @@ void __asan_unpoison_memory_region(void const volatile *, size_t);
 #define AYE_ASAN_UNPOISON(p, n) ((void)0)
 #endif
 
+#ifdef AYE_COVERAGE
+/* `--coverage` counts the edges of the Aye code, not of this runtime. */
+#define AYE_RT static __attribute__((unused, no_sanitize("coverage")))
+#else
 #define AYE_RT static __attribute__((unused))
+#endif
 #define AYE_STR_(x) #x
 #define AYE_STR(x) AYE_STR_(x)
 #ifdef AYE_FREESTANDING
@@ -1395,6 +1400,41 @@ AYE_RT void aye_std_on_stop(void) {
 #endif
 }
 AYE_RT bool aye_std_stop_requested(void) { return __atomic_load_n(&aye_stop_flag, __ATOMIC_RELAXED) != 0; }
+
+/* std.coverage: the regions of edge counters that clang's
+   `-fsanitize-coverage=inline-8bit-counters` (`--coverage`, which also
+   defines AYE_COVERAGE) registers from a constructor in each unit before
+   `main`. The linker merges the units' counters into one section, so every
+   unit reports the same range; ranges that overlap or touch are joined.
+   Without `--coverage` there are no regions. */
+#ifdef AYE_COVERAGE
+#define AYE_COV_MAX 8
+AYE_DATA uint8_t *aye_cov_start[AYE_COV_MAX], *aye_cov_stop[AYE_COV_MAX];
+AYE_DATA size_t aye_cov_n;
+#if !defined(AYE_UNIT) || AYE_UNIT == 0
+__attribute__((no_sanitize("coverage"), used)) void __sanitizer_cov_8bit_counters_init(uint8_t *s, uint8_t *e) {
+    if (s >= e) return;
+    for (size_t i = 0; i < aye_cov_n; i++) {
+        if (s <= aye_cov_stop[i] && e >= aye_cov_start[i]) {
+            if (s < aye_cov_start[i]) aye_cov_start[i] = s;
+            if (e > aye_cov_stop[i]) aye_cov_stop[i] = e;
+            return;
+        }
+    }
+    if (aye_cov_n < AYE_COV_MAX) {
+        aye_cov_start[aye_cov_n] = s;
+        aye_cov_stop[aye_cov_n++] = e;
+    }
+}
+#endif
+AYE_RT size_t aye_std_cov_regions(void) { return aye_cov_n; }
+AYE_RT size_t aye_std_cov_len(size_t i) { return i < aye_cov_n ? (size_t)(aye_cov_stop[i] - aye_cov_start[i]) : 0; }
+AYE_RT uint8_t *aye_std_cov_ptr(size_t i) { return i < aye_cov_n ? aye_cov_start[i] : 0; }
+#else
+AYE_RT size_t aye_std_cov_regions(void) { return 0; }
+AYE_RT size_t aye_std_cov_len(size_t i) { (void)i; return 0; }
+AYE_RT uint8_t *aye_std_cov_ptr(size_t i) { (void)i; return 0; }
+#endif
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds

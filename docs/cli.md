@@ -119,6 +119,23 @@ checks on in `safe` and `fast` mode too (`aye build --mode safe
 --leak-check`), at `-O2` speed; in debug mode it changes nothing. It does not
 turn on the error return trace.
 
+`build`, `run` and `test` take `--coverage` to count which branches run, for
+a fuzzer that keeps the inputs which reach new code (the coverage
+instrumentation of libFuzzer and AFL, "sanitizer coverage"). clang compiles
+the generated C with `-fsanitize-coverage=edge,inline-8bit-counters`: one
+byte per edge of the control-flow graph, incremented inline (no call, a
+few percent of run time), and `std.coverage` reads the bytes as a `[]u8`
+(`counters()`, `setCount()`, `reset()`). Instrumented: all code that Aye
+compiles to C, which is the program, its dependencies and the std functions
+written in Aye. Not instrumented: the C runtime of the prelude, libc and the
+`@link` libraries (libcurl, SDL). The edges are those after clang's
+optimizations, so `--mode debug` has one per branch and `safe` and `fast`
+fewer (a branch that clang turns into a select has no edge); an inlined
+function has edges of its own in each caller. Without `--coverage` nothing
+is added: no counters, no symbol, and `std.coverage` sees an empty region
+(`enabled()` is false, every count is 0). It has no effect on the wasm
+targets. The flags are those of macOS's clang too (untested there).
+
 Compile errors are reported as `file:line:col: error[E0023]: <message>`. Every
 error has a stable code; `aye explain E0023` prints what it means, a program
 with the error and the fixed program (the table is `src/codes.rs`). The

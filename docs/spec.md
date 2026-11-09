@@ -1717,6 +1717,7 @@ std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn, wait      below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON: parse, get, asString, asNumber, at; write, stringify     below
+std.coverage  --coverage edge counters, for fuzzers                          below
 std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
 std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
 ```
@@ -2190,6 +2191,20 @@ pub fn main() !void {
 
 ```
 std.testing.allocator() Allocator          the test's leak-checked allocator (as @testAllocator()); test blocks only
+```
+
+### std.coverage
+
+`aye build|run|test --coverage` adds clang's edge counters (`-fsanitize-coverage=edge,inline-8bit-counters`: one byte per edge) to every function that Aye compiles to C: the program, its dependencies and the std written in Aye; not the C runtime, libc or `@link` libraries. A fuzzer keeps an input when its run sets an edge that no earlier run set. Without the flag the module compiles and sees no region. See `docs/cli.md`.
+
+```
+std.coverage.enabled() bool        was the program built with --coverage?
+std.coverage.regions() usize       the number of counter regions (1 with --coverage, else 0)
+std.coverage.region(i) []u8        the counters of region i (a byte that is not 0 is an edge that ran); empty past the end
+std.coverage.counters() []u8       region(0)
+std.coverage.edgeCount() usize     the edges, run or not
+std.coverage.setCount() usize      the edges that ran since the start or the last reset
+std.coverage.reset()               zero every counter
 ```
 
 ### std.log

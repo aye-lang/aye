@@ -7,6 +7,13 @@ may still change between minor versions.
 
 ## [Unreleased]
 
+### Added
+
+- `aye build|run|test --coverage` adds clang's edge counters to the Aye
+  code, and the new `std.coverage` reads them (`counters`, `setCount`,
+  `reset`), for fuzzers that keep the inputs which reach new code. Without
+  the flag nothing changes and `std.coverage` sees no counters.
+
 ### Tools
 
 - A VS Code extension, `editors/vscode/`: syntax colors, brackets,

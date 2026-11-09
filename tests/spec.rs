@@ -178,7 +178,7 @@ fn aye_spec_all_prints_the_spec() {
 fn aye_spec_core_is_small() {
     let core = aye_spec(&[]);
     assert!(
-        core.len() <= 28_000,
+        core.len() <= 28_200,
         "`aye spec` prints {} bytes",
         core.len()
     );

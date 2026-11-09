@@ -522,6 +522,10 @@ pub struct CProgram {
     /// on macOS, a `.dSYM` next to the executable). `aye test` leaves it
     /// out unless `--cflags` is given.
     pub debug: bool,
+    /// Instrument the Aye code for coverage (`--coverage`): clang adds an
+    /// edge counter to every branch (`-fsanitize-coverage`), and
+    /// `std.coverage` reads them.
+    pub coverage: bool,
     pub target: &'static Target,
 }
 
@@ -559,6 +563,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         links,
         cflags: Vec::new(),
         debug: true,
+        coverage: false,
         target,
     })
 }
@@ -686,6 +691,7 @@ pub fn compile_tests_to_c(
             links,
             cflags: Vec::new(),
             debug: true,
+            coverage: false,
             target,
         },
         typed.tests,
@@ -779,7 +785,8 @@ fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// module relative to `path`) contains `filter` run, and with `module`,
 /// only those of that module. `cflags` are more flags for clang; `no_link`
 /// are `@linkOptional` libraries to treat as absent; `leak_check` turns on
-/// the checks of `General` in any mode (`Root::leak_check`). Up to
+/// the checks of `General` in any mode (`Root::leak_check`); `coverage`
+/// instruments the Aye code (`CProgram::coverage`). Up to
 /// `jobs` test processes run at once; `results` stay in test order. A test
 /// process that uses more than `time_limit` seconds of CPU time (0: no
 /// limit) is killed and fails. Of several directory roots, one that does
@@ -794,6 +801,7 @@ pub fn run_tests(
     cflags: &[String],
     no_link: &[String],
     leak_check: bool,
+    coverage: bool,
     jobs: usize,
     time_limit: u64,
 ) -> Result<TestRun, TestError> {
@@ -861,6 +869,7 @@ pub fn run_tests(
             Err(ds) => return Err(TestError::Compile(ds)),
         };
         c.cflags = cflags.to_vec();
+        c.coverage = coverage;
         // The failure positions of a test come from constants, not from
         // DWARF; only `--cflags` (a sanitizer's report) needs the symbols,
         // and `-g` is 45% of the compile time of a big test executable.
@@ -1433,6 +1442,14 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode, link: bool) -> Resu
     Ok(())
 }
 
+/// What `--coverage` adds: one 8-bit counter per edge of the control-flow
+/// graph in every function clang compiles from the generated C, and
+/// `AYE_COVERAGE` for the runtime's callbacks (`std.coverage`).
+const COVERAGE_FLAGS: &[&str] = &[
+    "-fsanitize-coverage=edge,inline-8bit-counters",
+    "-DAYE_COVERAGE",
+];
+
 /// The clang command with the flags of the target, the mode and
 /// `--cflags`, before the input; `link` is whether it links.
 fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
@@ -1472,6 +1489,9 @@ fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
     if link {
         let sysroot = std::env::var_os("AYE_SYSROOT").map(PathBuf::from);
         cmd.args(cross_link_args(p.target, host_target(), sysroot.as_deref()));
+    }
+    if p.coverage && !p.target.is_wasm() {
+        cmd.args(COVERAGE_FLAGS);
     }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags().iter().filter(|f| p.debug || **f != "-g"))
