@@ -2448,6 +2448,10 @@ pub fn main() !void {
   another thread than the one that made it`).
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
+- A check that cannot fail is left out in every mode: `s[i]` after `i <
+  s.len` was tested (or `s[i]` was checked) with neither `i` nor `s`
+  assigned since, and `i += 1` after `i < n`. What panics, and where, does
+  not change.
 - `@setSafety(false)`, as the first statement of a block (a function body
   too), removes the checks of that block and the blocks in it, as `fast`
   mode does; `@setSafety(true)` in an inner block brings back the build

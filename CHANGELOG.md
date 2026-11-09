@@ -7,6 +7,13 @@ may still change between minor versions.
 
 ## [Unreleased]
 
+### Compiler
+
+- Index, slice and `+ 1` / `- 1` overflow checks that cannot fail are left
+  out (`for i in 0..s.len { s[i] }`, `while i < s.len { ...; i += 1 }`,
+  a second `s[i]`): debug builds of such loops run about half the
+  instructions. What panics does not change.
+
 ### Tools
 
 - A VS Code extension, `editors/vscode/`: syntax colors, brackets,
