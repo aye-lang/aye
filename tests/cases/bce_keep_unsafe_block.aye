@@ -1,0 +1,16 @@
+// An access in a `@setSafety(false)` block is not checked, so it proves
+// nothing about the checked access after it.
+fn get(s: []u32, i: usize) u32 {
+    var x: u32 = 0
+    {
+        @setSafety(false)
+        x = s[i]
+    }
+    return x +% s[i]
+}
+
+pub fn main() {
+    var a = [4]u32{1, 2, 3, 4}
+    @println(get(a[..2], 1))
+    @println(get(a[..2], 2))
+}

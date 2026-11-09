@@ -1,0 +1,10 @@
+// The loop runs to the length of another slice.
+pub fn main() {
+    var a = [4]u32{1, 2, 3, 4}
+    var b = [2]u32{5, 6}
+    let s = a[..]
+    let u = b[..]
+    for i in 0..s.len {
+        @println(s[i] + u[i])
+    }
+}

@@ -1,0 +1,17 @@
+// The slice is changed through a pointer to it, in a call: its address is
+// taken, so no fact is kept about it.
+fn shrink(p: *mut []u32) {
+    p.* = p.*[..1]
+}
+
+pub fn main() {
+    var a = [3]u32{1, 2, 3}
+    var s: []u32 = a[..]
+    let p = &mut s
+    var i: usize = 1
+    while i < s.len {
+        shrink(p)
+        @println(s[i])
+        i += 1
+    }
+}
