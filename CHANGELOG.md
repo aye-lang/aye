@@ -7,6 +7,13 @@ may still change between minor versions.
 
 ## [Unreleased]
 
+### Added
+
+- `aye build|run|test --coverage` adds clang's edge counters to the Aye
+  code, and the new `std.coverage` reads them (`counters`, `setCount`,
+  `reset`), for fuzzers that keep the inputs which reach new code. Without
+  the flag nothing changes and `std.coverage` sees no counters.
+
 ### Standard library
 
 - `std.crypto`: `sha384`, `sha512` (and the streaming `Sha384`, `Sha512`),
