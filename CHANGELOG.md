@@ -7,6 +7,11 @@ may still change between minor versions.
 
 ## [Unreleased]
 
+### Standard library
+
+- `std.crypto`: `sha384`, `sha512` (and the streaming `Sha384`, `Sha512`),
+  `hmacSha384`, `hmacSha512` (and `HmacSha384`, `HmacSha512`).
+
 ### Tools
 
 - A VS Code extension, `editors/vscode/`: syntax colors, brackets,

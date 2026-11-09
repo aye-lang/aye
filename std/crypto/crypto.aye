@@ -1,9 +1,11 @@
-// std.crypto: hash functions (SHA-256, SHA-1), HMAC-SHA-256, OS random
-// bytes and a constant-time compare. The hashes are plain Aye.
+// std.crypto: hash functions (SHA-256, SHA-384, SHA-512, SHA-1), HMAC over
+// the SHA-2 ones, OS random bytes and a constant-time compare. The hashes
+// are plain Aye.
 //
 // Each hash is a struct fed with `update` and ended with `final`; the
 // one-shot functions do both. Words are `u32`: sums wrap (`+%`) and
-// rotations are two shifts, as FIPS 180-4 defines them. SHA-1 is broken
+// rotations are two shifts, as FIPS 180-4 defines them. SHA-384 and SHA-512
+// use `u64` words and 128-byte blocks. SHA-1 is broken
 // as a signature or collision-resistant hash; it is here for protocols
 // that name it (the WebSocket handshake).
 
@@ -23,6 +25,39 @@ let K256 = [64]u32{
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
     0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+}
+
+let K512 = [80]u64{
+    0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc,
+    0x3956c25bf348b538, 0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118,
+    0xd807aa98a3030242, 0x12835b0145706fbe, 0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2,
+    0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235, 0xc19bf174cf692694,
+    0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+    0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5,
+    0x983e5152ee66dfab, 0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4,
+    0xc6e00bf33da88fc2, 0xd5a79147930aa725, 0x06ca6351e003826f, 0x142929670a0e6e70,
+    0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed, 0x53380d139d95b3df,
+    0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+    0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30,
+    0xd192e819d6ef5218, 0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8,
+    0x19a4c116b8d2d0c8, 0x1e376c085141ab53, 0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8,
+    0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373, 0x682e6ff3d6b2b8a3,
+    0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+    0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b,
+    0xca273eceea26619c, 0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178,
+    0x06f067aa72176fba, 0x0a637dc5a2c898a6, 0x113f9804bef90dae, 0x1b710b35131c471b,
+    0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc, 0x431d67c49c100d4c,
+    0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
+}
+
+let IV512 = [8]u64{
+    0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+    0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
+}
+
+let IV384 = [8]u64{
+    0xcbbb9d5dc1059ed8, 0x629a292a367cd507, 0x9159015a3070dd17, 0x152fecd8f70e5939,
+    0x67332667ffc00b31, 0x8eb44a8768581511, 0xdb0c2e0d64f98fa7, 0x47b5481dbefa4fa4,
 }
 
 fn rotr(x: u32, n: u32) u32 {
@@ -274,6 +309,163 @@ pub fn sha1(data: []u8) [20]u8 {
     return h.final()
 }
 
+fn rotr64(x: u64, n: u64) u64 {
+    return (x >> n) | (x << (64 - n))
+}
+
+/// Big-endian 64-bit word at byte offset `p` of a 128-byte block.
+fn word64(block: []u8, p: usize) u64 {
+    var x: u64 = 0
+    for i in 0..8 {
+        x = (x << 8) | (block[p + i] as u64)
+    }
+    return x
+}
+
+/// Writes `x` big-endian at `out[at..at + 8]`.
+fn putWord64(out: []mut u8, at: usize, x: u64) {
+    for i in 0..8 {
+        out[at + i] = ((x >> ((7 - i) * 8) as u64) & 255) as u8
+    }
+}
+
+/// Pads the message in `buf[..used]` for a 128-byte block hash (FIPS
+/// 180-4 5.1.2: a 1 bit, zeros, the length in bits as 128 bits
+/// big-endian) and returns how many 128-byte blocks the padding makes: 1,
+/// or 2 when it does not fit in one. `buf` is 256 bytes.
+fn pad128(buf: []mut u8, used: usize, total: u64) usize {
+    buf[used] = 0x80
+    var blocks: usize = 1
+    if used >= 112 {
+        blocks = 2
+    }
+    let end = blocks * 128
+    mem.set(buf[used + 1..end], 0)
+    putWord64(buf, end - 8, total *% 8)
+    putWord64(buf, end - 16, total >> 61)
+    return blocks
+}
+
+/// SHA-512 (FIPS 180-4) state. Make it with `Sha512.init()`.
+pub struct Sha512 {
+    state: [8]u64
+    buf: [256]u8
+    used: usize
+    total: u64
+
+    /// A hash of the empty message so far.
+    pub fn init() Sha512 {
+        return Sha512 { state: IV512, buf: [256]u8{0, ..}, used: 0, total: 0 }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        var i: usize = 0
+        while i < data.len {
+            var n = 128 - self.used
+            if n > data.len - i {
+                n = data.len - i
+            }
+            mem.copy(self.buf[self.used..], data[i..i + n])
+            self.used += n
+            i += n
+            if self.used == 128 {
+                self.block(self.buf[..128])
+                self.used = 0
+            }
+        }
+        self.total += data.len as u64
+    }
+
+    /// The digest of everything added. The hash is spent afterwards: make a
+    /// new one with `init` for the next message.
+    pub fn final(self: *mut Self) [64]u8 {
+        let blocks = pad128(self.buf[..], self.used, self.total)
+        for b in 0..blocks {
+            self.block(self.buf[b * 128..b * 128 + 128])
+        }
+        var out = [64]u8{0, ..}
+        for i in 0..8 {
+            putWord64(out[..], i * 8, self.state[i])
+        }
+        return out
+    }
+
+    fn block(self: *mut Self, data: []u8) {
+        var w = [80]u64{0, ..}
+        for t in 0..16 {
+            w[t] = word64(data, t * 8)
+        }
+        for t in 16..80 {
+            let x = w[t - 15]
+            let y = w[t - 2]
+            let s0 = rotr64(x, 1) ^ rotr64(x, 8) ^ (x >> 7)
+            let s1 = rotr64(y, 19) ^ rotr64(y, 61) ^ (y >> 6)
+            w[t] = w[t - 16] +% s0 +% w[t - 7] +% s1
+        }
+        var v = self.state
+        for t in 0..80 {
+            let s1 = rotr64(v[4], 14) ^ rotr64(v[4], 18) ^ rotr64(v[4], 41)
+            let ch = (v[4] & v[5]) ^ (~v[4] & v[6])
+            let t1 = v[7] +% s1 +% ch +% K512[t] +% w[t]
+            let s0 = rotr64(v[0], 28) ^ rotr64(v[0], 34) ^ rotr64(v[0], 39)
+            let maj = (v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2])
+            v[7] = v[6]
+            v[6] = v[5]
+            v[5] = v[4]
+            v[4] = v[3] +% t1
+            v[3] = v[2]
+            v[2] = v[1]
+            v[1] = v[0]
+            v[0] = t1 +% s0 +% maj
+        }
+        for i in 0..8 {
+            self.state[i] +%= v[i]
+        }
+    }
+}
+
+/// The SHA-512 digest of `data`.
+pub fn sha512(data: []u8) [64]u8 {
+    var h = Sha512.init()
+    h.update(data)
+    return h.final()
+}
+
+/// SHA-384 (FIPS 180-4) state: SHA-512 from other initial words, cut to 48
+/// bytes. Make it with `Sha384.init()`.
+pub struct Sha384 {
+    core: Sha512
+
+    /// A hash of the empty message so far.
+    pub fn init() Sha384 {
+        var core = Sha512.init()
+        core.state = IV384
+        return Sha384 { core: core }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        self.core.update(data)
+    }
+
+    /// The digest of everything added. The hash is spent afterwards: make a
+    /// new one with `init` for the next message.
+    pub fn final(self: *mut Self) [48]u8 {
+        let full = self.core.final()
+        var out = [48]u8{0, ..}
+        mem.copy(out[..], full[..48])
+        return out
+    }
+}
+
+/// The SHA-384 digest of `data`.
+pub fn sha384(data: []u8) [48]u8 {
+    var h = Sha384.init()
+    h.update(data)
+    return h.final()
+}
+
 /// HMAC-SHA-256 (RFC 2104, RFC 4231) state. Make it with
 /// `HmacSha256.init(key)`.
 pub struct HmacSha256 {
@@ -319,6 +511,104 @@ pub struct HmacSha256 {
 /// The HMAC-SHA-256 of `msg` under `key`.
 pub fn hmacSha256(key: []u8, msg: []u8) [32]u8 {
     var h = HmacSha256.init(key)
+    h.update(msg)
+    return h.final()
+}
+
+/// HMAC-SHA-512 (RFC 2104, RFC 4231) state. Make it with
+/// `HmacSha512.init(key)`.
+pub struct HmacSha512 {
+    inner: Sha512
+    opad: [128]u8
+
+    /// A MAC under `key`; any key length (a key over 128 bytes is hashed
+    /// first).
+    pub fn init(key: []u8) HmacSha512 {
+        var k = [128]u8{0, ..}
+        if key.len > 128 {
+            let hk = sha512(key)
+            mem.copy(k[..], hk[..])
+        } else {
+            mem.copy(k[..], key)
+        }
+        var ipad = [128]u8{0, ..}
+        var opad = [128]u8{0, ..}
+        for i in 0..128 {
+            ipad[i] = k[i] ^ 0x36
+            opad[i] = k[i] ^ 0x5c
+        }
+        var inner = Sha512.init()
+        inner.update(ipad[..])
+        return HmacSha512 { inner: inner, opad: opad }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        self.inner.update(data)
+    }
+
+    /// The MAC of everything added. The state is spent afterwards.
+    pub fn final(self: *mut Self) [64]u8 {
+        let ih = self.inner.final()
+        var outer = Sha512.init()
+        outer.update(self.opad[..])
+        outer.update(ih[..])
+        return outer.final()
+    }
+}
+
+/// The HMAC-SHA-512 of `msg` under `key`.
+pub fn hmacSha512(key: []u8, msg: []u8) [64]u8 {
+    var h = HmacSha512.init(key)
+    h.update(msg)
+    return h.final()
+}
+
+/// HMAC-SHA-384 (RFC 2104, RFC 4231) state. Make it with
+/// `HmacSha384.init(key)`.
+pub struct HmacSha384 {
+    inner: Sha384
+    opad: [128]u8
+
+    /// A MAC under `key`; any key length (a key over 128 bytes is hashed
+    /// first).
+    pub fn init(key: []u8) HmacSha384 {
+        var k = [128]u8{0, ..}
+        if key.len > 128 {
+            let hk = sha384(key)
+            mem.copy(k[..], hk[..])
+        } else {
+            mem.copy(k[..], key)
+        }
+        var ipad = [128]u8{0, ..}
+        var opad = [128]u8{0, ..}
+        for i in 0..128 {
+            ipad[i] = k[i] ^ 0x36
+            opad[i] = k[i] ^ 0x5c
+        }
+        var inner = Sha384.init()
+        inner.update(ipad[..])
+        return HmacSha384 { inner: inner, opad: opad }
+    }
+
+    /// Adds `data` to the message.
+    pub fn update(self: *mut Self, data: []u8) {
+        self.inner.update(data)
+    }
+
+    /// The MAC of everything added. The state is spent afterwards.
+    pub fn final(self: *mut Self) [48]u8 {
+        let ih = self.inner.final()
+        var outer = Sha384.init()
+        outer.update(self.opad[..])
+        outer.update(ih[..])
+        return outer.final()
+    }
+}
+
+/// The HMAC-SHA-384 of `msg` under `key`.
+pub fn hmacSha384(key: []u8, msg: []u8) [48]u8 {
+    var h = HmacSha384.init(key)
     h.update(msg)
     return h.final()
 }

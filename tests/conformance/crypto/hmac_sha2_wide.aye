@@ -1,0 +1,90 @@
+import std.encoding
+import std.heap.General
+import std.mem.Allocator
+import std.crypto.HmacSha384
+import std.crypto.HmacSha512
+import std.crypto.hmacSha384
+import std.crypto.hmacSha512
+
+fn hex(alloc: Allocator, d: []u8) {
+    let text = encoding.hexEncode(alloc, d) catch {
+        @println("alloc failed")
+        return
+    }
+    @println(text)
+    alloc.free(text)
+}
+
+pub fn main() {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let k5120 = [20]u8{11, ..}
+    let m5120 = "Hi There"
+    let d5120 = hmacSha512(k5120[..], m5120[..])
+    hex(alloc, d5120[..])
+    let k5121 = "Jefe"
+    let m5121 = "what do ya want for nothing?"
+    let d5121 = hmacSha512(k5121[..], m5121[..])
+    hex(alloc, d5121[..])
+    let k5122 = [20]u8{170, ..}
+    let m5122 = [50]u8{221, ..}
+    let d5122 = hmacSha512(k5122[..], m5122[..])
+    hex(alloc, d5122[..])
+    let k5123 = [25]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
+    let m5123 = [50]u8{205, ..}
+    let d5123 = hmacSha512(k5123[..], m5123[..])
+    hex(alloc, d5123[..])
+    let k5124 = [20]u8{12, ..}
+    let m5124 = "Test With Truncation"
+    let d5124 = hmacSha512(k5124[..], m5124[..])
+    hex(alloc, d5124[..16])
+    let k5125 = [131]u8{170, ..}
+    let m5125 = "Test Using Larger Than Block-Size Key - Hash Key First"
+    let d5125 = hmacSha512(k5125[..], m5125[..])
+    hex(alloc, d5125[..])
+    let k5126 = [131]u8{170, ..}
+    let m5126 = "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+    let d5126 = hmacSha512(k5126[..], m5126[..])
+    hex(alloc, d5126[..])
+    var h512 = HmacSha512.init(k5126[..])
+    h512.update(m5126[..10])
+    h512.update(m5126[10..100])
+    h512.update(m5126[100..])
+    let ds512 = h512.final()
+    hex(alloc, ds512[..])
+    let k3840 = [20]u8{11, ..}
+    let m3840 = "Hi There"
+    let d3840 = hmacSha384(k3840[..], m3840[..])
+    hex(alloc, d3840[..])
+    let k3841 = "Jefe"
+    let m3841 = "what do ya want for nothing?"
+    let d3841 = hmacSha384(k3841[..], m3841[..])
+    hex(alloc, d3841[..])
+    let k3842 = [20]u8{170, ..}
+    let m3842 = [50]u8{221, ..}
+    let d3842 = hmacSha384(k3842[..], m3842[..])
+    hex(alloc, d3842[..])
+    let k3843 = [25]u8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25}
+    let m3843 = [50]u8{205, ..}
+    let d3843 = hmacSha384(k3843[..], m3843[..])
+    hex(alloc, d3843[..])
+    let k3844 = [20]u8{12, ..}
+    let m3844 = "Test With Truncation"
+    let d3844 = hmacSha384(k3844[..], m3844[..])
+    hex(alloc, d3844[..16])
+    let k3845 = [131]u8{170, ..}
+    let m3845 = "Test Using Larger Than Block-Size Key - Hash Key First"
+    let d3845 = hmacSha384(k3845[..], m3845[..])
+    hex(alloc, d3845[..])
+    let k3846 = [131]u8{170, ..}
+    let m3846 = "This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+    let d3846 = hmacSha384(k3846[..], m3846[..])
+    hex(alloc, d3846[..])
+    var h384 = HmacSha384.init(k3846[..])
+    h384.update(m3846[..10])
+    h384.update(m3846[10..100])
+    h384.update(m3846[100..])
+    let ds384 = h384.final()
+    hex(alloc, ds384[..])
+}
