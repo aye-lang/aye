@@ -19,6 +19,13 @@ may still change between minor versions.
 - `std.crypto`: `sha384`, `sha512` (and the streaming `Sha384`, `Sha512`),
   `hmacSha384`, `hmacSha512` (and `HmacSha384`, `HmacSha512`).
 
+### Compiler
+
+- Index, slice and `+ 1` / `- 1` overflow checks that cannot fail are left
+  out (`for i in 0..s.len { s[i] }`, `while i < s.len { ...; i += 1 }`,
+  a second `s[i]`): debug builds of such loops run about half the
+  instructions. What panics does not change.
+
 ### Tools
 
 - A VS Code extension, `editors/vscode/`: syntax colors, brackets,

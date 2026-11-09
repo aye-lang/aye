@@ -2857,7 +2857,13 @@ impl Gen {
         }
         let mut s = Self::local_name(f, p.local);
         for proj in &p.proj {
-            if let Proj::Index { index, len, span } = proj {
+            if let Proj::Index {
+                index,
+                len,
+                span,
+                checked: true,
+            } = proj
+            {
                 let n = match len {
                     Len::Array(n) | Len::Lanes(n) if matches!(index, Operand::Int(v, _) if (*v as u64) < *n) => {
                         None
@@ -2902,9 +2908,13 @@ impl Gen {
                 lo,
                 hi,
                 span,
+                checked,
                 ..
             } => {
                 self.place_checks(f, base, out);
+                if !checked {
+                    return;
+                }
                 let b = self.place(f, base);
                 let n = match len {
                     Len::Array(n) | Len::Lanes(n) => n.to_string(),

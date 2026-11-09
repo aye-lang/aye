@@ -148,11 +148,13 @@ pub struct Place {
 pub enum Proj {
     /// Struct field, or `len`/`ptr` of a slice.
     Field(String),
-    /// Bounds-checked element access.
+    /// Bounds-checked element access. `checked` is false when
+    /// `bce::func` proved the index in bounds.
     Index {
         index: Operand,
         len: Len,
         span: Span,
+        checked: bool,
     },
     /// Dereference of a `*T`.
     Deref,
@@ -335,6 +337,7 @@ pub enum Rvalue {
         val: Operand,
     },
     /// `base[lo..hi]`, producing a slice. `hi = None` means the full length.
+    /// `checked` is false when `bce::func` proved the bounds.
     Slice {
         base: Place,
         len: Len,
@@ -342,6 +345,7 @@ pub enum Rvalue {
         lo: Operand,
         hi: Option<Operand>,
         span: Span,
+        checked: bool,
     },
     /// Does the error union at `place` hold an error?
     IsErr(Place),
@@ -365,8 +369,16 @@ pub enum Rvalue {
 /// the same way. Only the functions and vtables that the program can reach
 /// are kept (from `main`, the tests, exported functions and globals; with
 /// tests, not from `main`), so a function that calls into a library that
-/// is not linked is left out when nothing calls it.
+/// is not linked is left out when nothing calls it. The checks that
+/// `bce` proves are left out.
 pub fn lower(p: &sema::Program, linked: &[String], os: usize) -> Program {
+    let mut prog = lower_checked(p, linked, os);
+    crate::bce::program(&mut prog);
+    prog
+}
+
+/// `lower` with every runtime check still in (before `bce`).
+pub(crate) fn lower_checked(p: &sema::Program, linked: &[String], os: usize) -> Program {
     let structs: HashMap<&str, &sema::StructDef> =
         p.structs.iter().map(|s| (s.name.as_str(), s)).collect();
     let enums: HashMap<&str, &sema::EnumDef> =
@@ -1072,6 +1084,7 @@ impl<'a> Lower<'a> {
                     index: Operand::Local(i),
                     len,
                     span: s.span,
+                    checked: true,
                 });
                 self.push(&mut b, StmtKind::Assign(local(*elem), Rvalue::Load(p)));
                 self.block(body, true, &mut b);
@@ -1835,6 +1848,7 @@ impl<'a> Lower<'a> {
                     index,
                     len,
                     span: e.span,
+                    checked: true,
                 });
                 p
             }
@@ -2339,6 +2353,7 @@ impl<'a> Lower<'a> {
                     lo,
                     hi,
                     span: e.span,
+                    checked: true,
                 }
             }
             TExprKind::StructLit(inits) if matches!(&e.ty, Type::Struct(n) if self.structs[n.as_str()].is_union) =>

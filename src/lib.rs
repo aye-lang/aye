@@ -2,6 +2,7 @@
 //! resolution) -> sema (typed AST) -> OIR -> C.
 
 pub mod ast;
+pub mod bce;
 pub mod cgen;
 pub mod cimport;
 pub mod codes;
