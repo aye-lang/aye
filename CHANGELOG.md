@@ -25,6 +25,11 @@ may still change between minor versions.
   out (`for i in 0..s.len { s[i] }`, `while i < s.len { ...; i += 1 }`,
   a second `s[i]`): debug builds of such loops run about half the
   instructions. What panics does not change.
+- Safe mode: a failed check jumps to one panic call per kind at the end of
+  its function instead of calling the runtime where it fails, so clang
+  inlines checked helpers as it does in fast mode (Dweller's jsbench
+  richards runs 7% fewer instructions). Panic messages do not change;
+  debug and fast mode generate the same C as before.
 
 ### Tools
 
