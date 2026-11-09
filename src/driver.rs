@@ -1603,6 +1603,41 @@ mod tests {
     }
 
     #[test]
+    fn safe_mode_checks_jump_to_one_panic_call_per_kind() {
+        let src = "fn f(s: []u32, i: usize, j: usize, n: u32) u32 {
+    let t = s[i..j]
+    return s[i] + s[j] + t[0] * n
+}
+
+pub fn main() {
+    var a = [2]u32{1, 2}
+    @println(f(a[..], 0, 1, 3))
+}
+";
+        // The C of `f`, from its definition to the next function.
+        let body = |mode| {
+            let c = compile_to_c("t.aye", src, mode).unwrap().c;
+            let at = c.find("aye_f_f(aye_S_u32 s_0").unwrap();
+            let at = at + c[at..].find(") {\n").unwrap();
+            c[at..at + c[at..].find("\n}\n").unwrap()].to_string()
+        };
+        let safe = body(Mode::Safe);
+        for (go, at) in [
+            ("AYE_PANIC_INDEX_GO(", "AYE_PANIC_INDEX_AT"),
+            ("AYE_PANIC_SLICE_GO(", "AYE_PANIC_SLICE_AT"),
+            ("AYE_PANIC_GO(", "AYE_PANIC_AT"),
+        ] {
+            assert!(safe.contains(go), "{safe}");
+            assert_eq!(safe.lines().filter(|l| *l == at).count(), 1, "{safe}");
+        }
+        assert!(!safe.contains("aye_panic"), "{safe}");
+        // Debug mode keeps a call at each check, where a debugger stops.
+        let debug = body(Mode::Debug);
+        assert!(debug.contains(" aye_panic_index("), "{debug}");
+        assert!(!debug.contains("AYE_PANIC"), "{debug}");
+    }
+
+    #[test]
     fn link_flags_for_frameworks_libraries_and_packages() {
         let flags =
             |names: &[&str]| link_flags(&names.iter().map(|n| n.to_string()).collect::<Vec<_>>());

@@ -556,6 +556,28 @@ AYE_RT __attribute__((noreturn, cold)) void aye_panic_slice(int line, int col, s
     aye_rt_abort();
 }
 #define AYE_UNLIKELY(c) __builtin_expect(!!(c), 0)
+/* Safe mode: a failed check does not call the runtime where it fails but
+   stores the position and values in the function's `aye_p*_` locals and
+   jumps to the one call of its kind at the end of the function
+   (`AYE_PANIC_AT` and the others), so that a check costs clang's inliner
+   a compare and a branch, not a call with its arguments. */
+#define AYE_PANIC_VARS                                                                             \
+    __attribute__((unused)) int aye_pl_, aye_pc_;                                                  \
+    __attribute__((unused)) size_t aye_pa_, aye_pb_, aye_pn_;                                      \
+    __attribute__((unused)) const char *aye_pm_;
+#define AYE_PANIC_GO(l, c, m)                                                                      \
+    { aye_pl_ = (int)(l); aye_pc_ = (c); aye_pm_ = (m); goto aye_panic_; }
+#define AYE_PANIC_INDEX_GO(l, c, i, n)                                                             \
+    { aye_pl_ = (int)(l); aye_pc_ = (c); aye_pa_ = (i); aye_pb_ = (n); goto aye_panic_index_; }
+#define AYE_PANIC_SLICE_GO(l, c, lo, hi, n)                                                        \
+    {                                                                                              \
+        aye_pl_ = (int)(l); aye_pc_ = (c); aye_pa_ = (lo); aye_pb_ = (hi); aye_pn_ = (n);          \
+        goto aye_panic_slice_;                                                                     \
+    }
+#define AYE_PANIC_AT aye_panic_: aye_panic(aye_pl_, aye_pc_, aye_pm_);
+#define AYE_PANIC_INDEX_AT aye_panic_index_: aye_panic_index(aye_pl_, aye_pc_, aye_pa_, aye_pb_);
+#define AYE_PANIC_SLICE_AT                                                                         \
+    aye_panic_slice_: aye_panic_slice(aye_pl_, aye_pc_, aye_pa_, aye_pb_, aye_pn_);
 
 /* `@hash`: each scalar is mixed in with SplitMix64's finalizer. A float
    hashes its bits, with -0.0 as 0.0 (they are `==`). */
@@ -1887,6 +1909,9 @@ pub fn emit(
         loops: Vec::new(),
         next_label: 0,
         layout: p.layout,
+        // `trace` is on in debug mode only.
+        join: checks && !trace,
+        joined: std::cell::Cell::new(0),
     };
     g.program(p, checks, track, tests);
     (g.out, g.parts)
@@ -1979,7 +2004,19 @@ struct Gen {
     next_label: usize,
     /// The target's integer widths.
     layout: Layout,
+    /// A failed check jumps to one panic call per kind at the end of the
+    /// function (`AYE_PANIC_GO`): safe mode. Debug mode keeps a call at
+    /// each check, where a debugger stops.
+    join: bool,
+    /// The kinds of panic the current function jumps to (`PANIC_MSG`,
+    /// `PANIC_INDEX`, `PANIC_SLICE`), for the calls at its end.
+    joined: std::cell::Cell<u8>,
 }
+
+/// The kinds of panic call at the end of a function (`Gen::joined`).
+const PANIC_MSG: u8 = 1;
+const PANIC_INDEX: u8 = 2;
+const PANIC_SLICE: u8 = 4;
 
 const C_KEYWORDS: &[&str] = &[
     "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else",
@@ -2645,9 +2682,55 @@ impl Gen {
                 self.line(1, &s);
             }
         }
+        if self.join {
+            self.line(1, "AYE_PANIC_VARS");
+            self.joined.set(0);
+        }
         self.line(1, "AYE_STACK_CHECK();");
         self.block(f, &f.body, 1);
+        let joined = self.joined.get();
+        // The body of a function that returns nothing may end without a
+        // `return`: it must not run into the calls.
+        if joined != 0 && c_type(&f.ret) == "void" {
+            self.line(1, "return;");
+        }
+        for (kind, at) in [
+            (PANIC_MSG, "AYE_PANIC_AT"),
+            (PANIC_INDEX, "AYE_PANIC_INDEX_AT"),
+            (PANIC_SLICE, "AYE_PANIC_SLICE_AT"),
+        ] {
+            if joined & kind != 0 {
+                self.line(0, at);
+            }
+        }
         self.out.push_str("}\n");
+    }
+
+    /// The statement that panics at `span` with `msg` (a C string literal).
+    fn panic(&self, span: Span, msg: &str) -> String {
+        if self.join {
+            self.joined.set(self.joined.get() | PANIC_MSG);
+            return format!("AYE_PANIC_GO({}, {msg});", line_col(span));
+        }
+        format!("aye_panic({}, {msg});", line_col(span))
+    }
+
+    /// The statement that panics at `span`: index `i` out of `0..n`.
+    fn panic_index(&self, span: Span, i: &str, n: &str) -> String {
+        if self.join {
+            self.joined.set(self.joined.get() | PANIC_INDEX);
+            return format!("AYE_PANIC_INDEX_GO({}, {i}, {n});", line_col(span));
+        }
+        format!("aye_panic_index({}, {i}, {n});", line_col(span))
+    }
+
+    /// The statement that panics at `span`: slice `lo..hi` of `n`.
+    fn panic_slice(&self, span: Span, lo: &str, hi: &str, n: &str) -> String {
+        if self.join {
+            self.joined.set(self.joined.get() | PANIC_SLICE);
+            return format!("AYE_PANIC_SLICE_GO({}, {lo}, {hi}, {n});", line_col(span));
+        }
+        format!("aye_panic_slice({}, {lo}, {hi}, {n});", line_col(span))
     }
 
     fn block(&mut self, f: &Func, b: &Block, ind: usize) {
@@ -2683,9 +2766,9 @@ impl Gen {
                     } if self.checks => {
                         let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
                         format!(
-                            "if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) aye_panic({}, \"integer overflow\");",
+                            "if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) {}",
                             overflow_builtin(*op),
-                            line_col(*span)
+                            self.panic(*span, "\"integer overflow\"")
                         )
                     }
                     _ => format!("{p} = {};", self.rvalue(f, rv)),
@@ -2768,9 +2851,9 @@ impl Gen {
             } => {
                 if self.checks {
                     let line = format!(
-                        "if (AYE_UNLIKELY(!{})) aye_panic({}, \"{msg}\");",
+                        "if (AYE_UNLIKELY(!{})) {}",
                         self.operand(f, c),
-                        line_col(*span)
+                        self.panic(*span, &format!("\"{msg}\""))
                     );
                     self.line(ind, &line);
                 }
@@ -2787,7 +2870,8 @@ impl Gen {
                 span,
             } => {
                 if self.checks {
-                    self.line(ind, &format!("aye_panic({}, \"{msg}\");", line_col(*span)));
+                    let line = self.panic(*span, &format!("\"{msg}\""));
+                    self.line(ind, &line);
                 } else {
                     self.line(ind, "__builtin_unreachable();");
                 }
@@ -2875,8 +2959,8 @@ impl Gen {
                 if let Some(n) = n {
                     let i = self.operand(f, index);
                     out.push(format!(
-                        "if (AYE_UNLIKELY((size_t){i} >= {n})) aye_panic_index({}, {i}, {n});",
-                        line_col(*span)
+                        "if (AYE_UNLIKELY((size_t){i} >= {n})) {}",
+                        self.panic_index(*span, &i, &n)
                     ));
                 }
             }
@@ -2893,8 +2977,8 @@ impl Gen {
         }
         let panic = |cond: String, span: Span, msg: &str| {
             format!(
-                "if (AYE_UNLIKELY({cond})) aye_panic({}, \"{msg}\");",
-                line_col(span)
+                "if (AYE_UNLIKELY({cond})) {}",
+                self.panic(span, &format!("\"{msg}\""))
             )
         };
         match rv {
@@ -2928,8 +3012,8 @@ impl Gen {
                     .map(|h| self.operand(f, h))
                     .unwrap_or_else(|| n.clone());
                 out.push(format!(
-                    "if (AYE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) aye_panic_slice({}, {lo}, {hi}, {n});",
-                    line_col(*span)
+                    "if (AYE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) {}",
+                    self.panic_slice(*span, &lo, &hi, &n)
                 ));
             }
             // A constant divisor other than 0 and -1 needs no check.
@@ -3050,10 +3134,10 @@ impl Gen {
                 match (op, ty) {
                     (BinOp::Add | BinOp::Sub | BinOp::Mul, Type::Int(it)) if self.checks => {
                         format!(
-                            "({{ {} r_; if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) aye_panic({}, \"integer overflow\"); r_; }})",
+                            "({{ {} r_; if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) {} r_; }})",
                             int_c(*it),
                             overflow_builtin(*op),
-                            line_col(*span)
+                            self.panic(*span, "\"integer overflow\"")
                         )
                     }
                     (BinOp::Add | BinOp::AddWrap, Type::Int(it)) => {
