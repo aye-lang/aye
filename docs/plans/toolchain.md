@@ -201,6 +201,30 @@ What is left of edit-to-main after TC3: the wait after green (p90 118 min: nobod
 - **TC5b flaky handling.** A failed test is re-run once in the same job; if it passes, the job passes with a `::warning::flaky` line and a report artifact, and a flaky card is opened. Never silent.
 - **TC5c tree-hash evidence.** A tree that already passed is not re-tested (key: tree hash + workflow file hash + `AYE_REV` + runner image). Saves compute, not latency, so last.
 
+## Re-measure (2026-11-11)
+
+Dweller, 335 `ci` runs and 116 merged PRs from 2026-11-04 to 11-09
+(numbers and method in dweller `docs/plans/velocity.md`):
+
+- PR open to merge, median: 69 min on 11-04, 90 min on 11-08 (72 PRs,
+  one per card, p90 365 min), 17 min on 11-09 (10 PRs of 1 to 3 cards
+  from one branch).
+- A green `ci` run is 15 to 23 min of wall time at the median, not the
+  8.2 min of TC3i: the macOS test step grew from 7.1 to 14.8 min (150 to
+  about 231 tests, `tests/browser-times.txt` not refreshed), and on
+  11-08 a macOS job waited 9.8 min for a runner at the median (p90 43).
+- A landed PR runs `ci` three times (pull request, merge group, push),
+  nine macOS jobs in all.
+- Flaky re-runs: 4 of 1 817 green shard jobs. Failures are real test
+  failures (27 of 28 failed jobs).
+
+What is slow is no longer the run but what is around it: macOS runners,
+one PR per card, and shared files. The cards for that are the DV lane in
+dweller (`docs/plans/velocity.md`: DV1 one macOS run per landing, DV2
+shard times, DV3 docs-only changes). TC5c (tree-hash evidence) would
+remove the same repeated runs in a general way; DV1 does it by trigger.
+TC5a and TC5b are closed in their dweller cards.
+
 ## Backlog (cards written when their phase comes up)
 
 - TC3g test build mode: the harness builds the browser in debug (`-O0`); measure the suite with `--mode safe` (`-O2` + checks) and list what debug adds that tests rely on (empty stderr also catches leak reports).
