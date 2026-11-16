@@ -23,8 +23,9 @@
 //!
 //! In test mode the C `main` runs the test whose index is its argument.
 //!
-//! A source position reaches the runtime as two `int`s: the line, with the
-//! file's index in its upper bits (`AYE_FILE`, `AYE_LINE`), and the column.
+//! A source position reaches the runtime as two `int`s: the line, and the
+//! column with the file's index in its upper 16 bits (`AYE_FILE`,
+//! `AYE_COL`). A program may have as many files as `Span::file` counts.
 
 use crate::ast::BinOp;
 use crate::diag::Span;
@@ -535,24 +536,23 @@ extern uint8_t *aye_rt_opendir(const char *) __asm__(AYE_SYM("opendir" AYE_INODE
 extern uint8_t *aye_rt_readdir(uint8_t *) __asm__(AYE_SYM("readdir" AYE_INODE64));
 extern int aye_rt_closedir(uint8_t *) __asm__(AYE_SYM("closedir"));
 extern void aye_rt_rewinddir(uint8_t *) __asm__(AYE_SYM("rewinddir"));
-#define AYE_FILE(l) aye_files[(l) >> 20]
-#define AYE_LINE(l) ((l) & 0xfffff)
+#define AYE_FILE(c) aye_files[(unsigned)(c) >> 16]
+#define AYE_COL(c) ((c) & 0xffff)
 
 AYE_RT __attribute__((noreturn, cold)) void aye_panic(int line, int col, const char *msg) {
     aye_rt_fflush(0);
-    aye_rt_dprintf(2, "%s:%d:%d: panic: %s\n", AYE_FILE(line), AYE_LINE(line), col, msg);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: %s\n", AYE_FILE(col), line, AYE_COL(col), msg);
     aye_rt_abort();
 }
 AYE_RT __attribute__((noreturn, cold)) void aye_panic_index(int line, int col, size_t i, size_t len) {
     aye_rt_fflush(0);
-    aye_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", AYE_FILE(line), AYE_LINE(line), col,
+    aye_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", AYE_FILE(col), line, AYE_COL(col),
                    (unsigned long long)i, (unsigned long long)len);
     aye_rt_abort();
 }
 AYE_RT __attribute__((noreturn, cold)) void aye_panic_slice(int line, int col, size_t lo, size_t hi, size_t len) {
     aye_rt_fflush(0);
-    aye_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", AYE_FILE(line),
-                   AYE_LINE(line), col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", AYE_FILE(col), line, AYE_COL(col), (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
     aye_rt_abort();
 }
 #define AYE_UNLIKELY(c) __builtin_expect(!!(c), 0)
@@ -616,7 +616,7 @@ AYE_RT int aye_main_error(uint16_t e) {
     if (AYE_TRACE) {
         aye_rt_dprintf(2, "error return trace:\n");
         for (uint32_t i = 0; i < aye_trace_len && i < AYE_TRACE_MAX; i++) {
-            aye_rt_dprintf(2, "%s:%d:%d\n", AYE_FILE(aye_trace[i].line), AYE_LINE(aye_trace[i].line), aye_trace[i].col);
+            aye_rt_dprintf(2, "%s:%d:%d\n", AYE_FILE(aye_trace[i].col), aye_trace[i].line, AYE_COL(aye_trace[i].col));
         }
         if (aye_trace_len > AYE_TRACE_MAX) aye_rt_dprintf(2, "(%u more)\n", aye_trace_len - AYE_TRACE_MAX);
     }
@@ -703,7 +703,7 @@ AYE_RT void aye_general_release(aye_alloc_hdr *h) {
         if (b[i] != AYE_POISON) {
             aye_rt_fflush(0);
             aye_rt_dprintf(2, "%s:%d:%d: panic: use after free: memory allocated at %s:%d:%d and freed here was written after it was freed\n",
-                           AYE_FILE(h->free_line), AYE_LINE(h->free_line), h->free_col, AYE_FILE(h->line), AYE_LINE(h->line), h->col);
+                           AYE_FILE(h->free_col), h->free_line, AYE_COL(h->free_col), AYE_FILE(h->col), h->line, AYE_COL(h->col));
             aye_rt_abort();
         }
     }
@@ -724,8 +724,8 @@ AYE_RT void aye_general_free(void *self, void *p, size_t size, int line, int col
     if (h->state == AYE_FREED) {
         aye_rt_fflush(0);
         aye_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
-                       AYE_FILE(line), AYE_LINE(line), col, AYE_FILE(h->line), AYE_LINE(h->line), h->col,
-                       AYE_FILE(h->free_line), AYE_LINE(h->free_line), h->free_col);
+                       AYE_FILE(col), line, AYE_COL(col), AYE_FILE(h->col), h->line, AYE_COL(h->col),
+                       AYE_FILE(h->free_col), h->free_line, AYE_COL(h->free_col));
         aye_rt_abort();
     }
     if (h->prev) h->prev->next = h->next; else g->head = h->next;
@@ -758,8 +758,7 @@ AYE_RT size_t aye_general_deinit(aye_General *g) {
     for (aye_alloc_hdr *h = g->head, *next; h; h = next) {
         next = h->next;
         if (!leaks) aye_rt_fflush(0);
-        aye_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", AYE_FILE(h->line),
-                       AYE_LINE(h->line), h->col, (unsigned long long)h->size);
+        aye_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", AYE_FILE(h->col), h->line, AYE_COL(h->col), (unsigned long long)h->size);
         leaks++;
         h->state = 0;
         aye_rt_free(h);
@@ -834,7 +833,7 @@ AYE_RT aye_Allocator aye_test_allocator(void) { return aye_general_allocator(&ay
 #define AYE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
     do {                                                                                                         \
         aye_rt_fflush(0);                                                                                        \
-        aye_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", AYE_FILE(line), AYE_LINE(line), col, __VA_ARGS__); \
+        aye_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", AYE_FILE(col), line, AYE_COL(col), __VA_ARGS__); \
         aye_rt_exit(1);                                                                                          \
     } while (0)
 AYE_RT void aye_expect(bool c, int line, int col) {
@@ -2227,7 +2226,31 @@ fn global_name(name: &str) -> String {
 /// A position for the runtime: the line with the file index in its upper
 /// bits, and the column.
 fn line_col(span: Span) -> String {
-    format!("{}, {}", (span.file as u32) << 20 | span.line, span.col)
+    let col = (span.file as u32) << 16 | span.col.min(0xffff);
+
+    format!("{}, {}", span.line, col as i32)
+}
+
+#[cfg(test)]
+mod line_col_tests {
+    use super::*;
+
+    #[test]
+    fn the_file_index_is_in_the_upper_half_of_the_column() {
+        let at = |file, col| {
+            line_col(Span {
+                line: 473,
+                col,
+                file,
+            })
+        };
+        assert_eq!(at(0, 14), "473, 14");
+        assert_eq!(at(2589, 14), format!("473, {}", (2589 << 16) | 14));
+        assert_eq!(
+            at(40000, 70000),
+            format!("473, {}", (40000u32 << 16 | 0xffff) as i32)
+        );
+    }
 }
 
 impl Gen {

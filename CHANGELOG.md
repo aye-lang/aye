@@ -21,6 +21,11 @@ may still change between minor versions.
 
 ### Compiler
 
+- A panic, a leak report, an error trace or a failed `@expect` in the
+  2049th or a later file of a program names its file again. The file's
+  index shared an `int` with the line and overflowed it, so the report
+  crashed with SIGSEGV or printed a wrong name. The index is now in the
+  upper 16 bits of the column argument.
 - Index, slice and `+ 1` / `- 1` overflow checks that cannot fail are left
   out (`for i in 0..s.len { s[i] }`, `while i < s.len { ...; i += 1 }`,
   a second `s[i]`): debug builds of such loops run about half the
