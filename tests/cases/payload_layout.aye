@@ -1,0 +1,48 @@
+// `?T` holds the payload first, at offset 0 (aligned to its own
+// alignment), then the flag, as Zig lays it out (`E!T` likewise, with the
+// error after the payload: see `payload_layout` in tests/golden.rs).
+
+struct Pair {
+    a: u64
+    b: u64
+}
+
+struct Quad {
+    a: u32
+    b: u32
+    c: u32
+    d: u32
+}
+
+let OU8 = ?u8
+let OU64 = ?u64
+let OPair = ?Pair
+let OQuad = ?Quad
+
+fn byteAt(p: [*]u8, i: usize) u8 {
+    return p[i]
+}
+
+pub fn main() {
+    @println(@sizeOf(OU8))
+    @println(@sizeOf(OU64))
+    @println(@sizeOf(OPair))
+    @println(@sizeOf(OQuad))
+
+    // The payload's first byte is at offset 0; the flag follows it.
+    var a: ?u64 = 7
+    let pa = @ptrCast([*]u8, &a)
+    @println(byteAt(pa, 0))
+    @println(byteAt(pa, 8))
+    var c: ?Pair = Pair { a: 3, b: 4 }
+    let pc = @ptrCast([*]u8, &c)
+    @println(byteAt(pc, 0))
+    @println(byteAt(pc, 8))
+    @println(byteAt(pc, 16))
+    var n: ?u64 = null
+    let pn = @ptrCast([*]u8, &n)
+    @println(byteAt(pn, 8))
+    a = null
+    c = null
+    @println(a == null && c == null)
+}
