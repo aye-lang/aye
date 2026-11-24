@@ -1,0 +1,91 @@
+// std opens every descriptor close-on-exec: a file from std.fs.open and
+// std.fs.create, and a socket from std.net.listen, are closed in a program
+// that std.process spawns; a `dup` of the file (not close-on-exec) is the
+// control that the child would see a leaked one. Then std.fs.stat gives
+// the owner and mode of a file chmod-ed to 0600. Runs in a directory under
+// /tmp named after the process id (removed at the end).
+
+import std
+import std.heap.General
+import std.mem.Allocator
+import std.process
+import std.process.Stdio
+import std.text.Builder
+
+extern fn getpid() i32
+extern fn getuid() u32
+extern fn chmod(path: [*]u8, mode: u32) i32
+extern fn dup(fd: i32) i32
+extern fn close(fd: i32) i32
+
+// "open" or "closed": whether `fd` is open in a spawned shell. The
+// redirection runs in a subshell: dash (Linux's /bin/sh) exits on a failed
+// redirection of a special builtin such as `:`.
+fn inChild(alloc: Allocator, fd: i32) ![]u8 {
+    var cmd = Builder.init(alloc)
+    defer cmd.deinit()
+    try cmd.append("(true <&")
+    try cmd.appendInt(fd as i64)
+    try cmd.append(") 2>/dev/null && echo open || echo closed")
+    let argv = [_][]u8{"/bin/sh", "-c", cmd.bytes()}
+    var child = try process.spawn(alloc, argv[..], Stdio.Inherit, Stdio.Pipe, Stdio.Inherit)
+    let out = try child.stdout.?.readAll(alloc)
+    child.stdout.?.close()
+    _ = try child.wait()
+    return out
+}
+
+fn show(alloc: Allocator, label: []u8, fd: i32) !void {
+    let out = try inChild(alloc, fd)
+    defer alloc.free(out)
+    @print(label)
+    @print(" ")
+    @print(out)
+}
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+
+    var d = Builder.init(alloc)
+    defer d.deinit()
+    try d.append("/tmp/aye-std-fs-cloexec-")
+    try d.appendInt(getpid() as i64)
+    let dir = d.bytes()
+    var p = Builder.init(alloc)
+    defer p.deinit()
+    try p.append(dir)
+    try p.append("/file")
+    try p.append("\x00")
+    let file = p.bytes()[0..p.bytes().len - 1]
+
+    try std.fs.mkdir(dir)
+    let w = try std.fs.create(file)
+    try show(alloc, "create", w.fd)
+    try w.write("abc")
+    w.close()
+
+    let f = try std.fs.open(file)
+    try show(alloc, "open", f.fd)
+    let copy = dup(f.fd)
+    try show(alloc, "dup", copy)
+    _ = close(copy)
+    f.close()
+
+    let l = try std.net.listen("127.0.0.1", 0)
+    try show(alloc, "listen", l.fd())
+    l.close()
+
+    @println(chmod(p.bytes().ptr, 0o600))
+    let s = try std.fs.stat(file)
+    @println(s.mode & 0o7777 == 0o600)
+    @println(s.mode & 0o170000 == 0o100000)
+    @println(s.uid == getuid())
+    let ds = try std.fs.stat(dir)
+    @println(ds.mode & 0o170000 == 0o040000)
+    @println(s.gid == ds.gid)
+
+    try std.fs.remove(file)
+    try std.fs.remove(dir)
+}

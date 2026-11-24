@@ -305,6 +305,9 @@ pub struct Root {
     /// `--no-link lib`: the `@linkOptional` libraries to treat as absent
     /// even where they are installed.
     pub no_link: Vec<String>,
+    /// `--leak-check`: the leak, double-free and use-after-free checks of
+    /// `General` in any mode (debug mode has them anyway).
+    pub leak_check: bool,
 }
 
 impl Root {
@@ -364,6 +367,7 @@ impl Root {
             cache: None,
             members: false,
             no_link: Vec::new(),
+            leak_check: false,
         })
     }
 
@@ -387,6 +391,7 @@ impl Root {
             cache: None,
             members: false,
             no_link: Vec::new(),
+            leak_check: false,
         }
     }
 }
@@ -517,6 +522,10 @@ pub struct CProgram {
     /// on macOS, a `.dSYM` next to the executable). `aye test` leaves it
     /// out unless `--cflags` is given.
     pub debug: bool,
+    /// Instrument the Aye code for coverage (`--coverage`): clang adds an
+    /// edge counter to every branch (`-fsanitize-coverage`), and
+    /// `std.coverage` reads them.
+    pub coverage: bool,
     pub target: &'static Target,
 }
 
@@ -532,6 +541,7 @@ pub fn compile_to_c(file_name: &str, src: &str, mode: Mode) -> Result<CProgram, 
 pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
     let target = root.target;
     let no_link = root.no_link.clone();
+    let track = mode == Mode::Debug || root.leak_check;
     // A freestanding program may only export functions.
     let checked = front_end(root, Some(target.os != Os::Freestanding));
     let mut typed = checked.result?;
@@ -544,6 +554,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         &file_names(&checked.files),
         mode != Mode::Fast,
         mode == Mode::Debug,
+        track,
         false,
     );
     Ok(CProgram {
@@ -552,6 +563,7 @@ pub fn compile_root(root: Root, mode: Mode) -> Result<CProgram, Vec<Diag>> {
         links,
         cflags: Vec::new(),
         debug: true,
+        coverage: false,
         target,
     })
 }
@@ -641,6 +653,7 @@ pub fn compile_tests_to_c(
 ) -> Result<(CProgram, Vec<sema::TestDef>, Vec<String>, Vec<PathBuf>), Vec<Diag>> {
     let target = root.target;
     let no_link = root.no_link.clone();
+    let track = mode == Mode::Debug || root.leak_check;
     let checked = front_end(
         Root {
             doc_tests: true,
@@ -663,7 +676,14 @@ pub fn compile_tests_to_c(
             dirs.push(dir);
         }
     }
-    let (c, parts) = cgen::emit(&ir, &files, mode != Mode::Fast, mode == Mode::Debug, true);
+    let (c, parts) = cgen::emit(
+        &ir,
+        &files,
+        mode != Mode::Fast,
+        mode == Mode::Debug,
+        track,
+        true,
+    );
     Ok((
         CProgram {
             c,
@@ -671,6 +691,7 @@ pub fn compile_tests_to_c(
             links,
             cflags: Vec::new(),
             debug: true,
+            coverage: false,
             target,
         },
         typed.tests,
@@ -763,7 +784,9 @@ fn module_roots(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// tested once. Only tests whose shown name (`name`, `module: name`, the
 /// module relative to `path`) contains `filter` run, and with `module`,
 /// only those of that module. `cflags` are more flags for clang; `no_link`
-/// are `@linkOptional` libraries to treat as absent. Up to
+/// are `@linkOptional` libraries to treat as absent; `leak_check` turns on
+/// the checks of `General` in any mode (`Root::leak_check`); `coverage`
+/// instruments the Aye code (`CProgram::coverage`). Up to
 /// `jobs` test processes run at once; `results` stay in test order. A test
 /// process that uses more than `time_limit` seconds of CPU time (0: no
 /// limit) is killed and fails. Of several directory roots, one that does
@@ -777,6 +800,8 @@ pub fn run_tests(
     module: Option<&str>,
     cflags: &[String],
     no_link: &[String],
+    leak_check: bool,
+    coverage: bool,
     jobs: usize,
     time_limit: u64,
 ) -> Result<TestRun, TestError> {
@@ -806,6 +831,7 @@ pub fn run_tests(
             .map_err(TestError::Run)?;
         root.target = target;
         root.no_link = no_link.to_vec();
+        root.leak_check = leak_check;
         let base = root.base.clone();
         let prefix: Vec<String> = base
             .strip_prefix(top)
@@ -843,6 +869,7 @@ pub fn run_tests(
             Err(ds) => return Err(TestError::Compile(ds)),
         };
         c.cflags = cflags.to_vec();
+        c.coverage = coverage;
         // The failure positions of a test come from constants, not from
         // DWARF; only `--cflags` (a sanitizer's report) needs the symbols,
         // and `-g` is 45% of the compile time of a big test executable.
@@ -1263,6 +1290,12 @@ pub fn cc_obj(p: &CProgram, out: &Path, mode: Mode) -> Result<(), String> {
     compile(p, out, mode, false)
 }
 
+/// In an optimized build split into units, a function whose C is at most
+/// this many bytes is defined `static inline` in the header, so that every
+/// unit can inline it (`List(T).items`, `len`): without LTO clang inlines
+/// only within a unit.
+const SMALL_FN: usize = 1024;
+
 /// `cc` and `cc_obj`: `link` is whether clang links.
 fn compile(p: &CProgram, out: &Path, mode: Mode, link: bool) -> Result<(), String> {
     // The C goes to a file, not to clang's stdin: a pipe holds 64 KiB, and
@@ -1280,7 +1313,8 @@ fn compile(p: &CProgram, out: &Path, mode: Mode, link: bool) -> Result<(), Strin
     if link && p.target.is_host() {
         let k = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
         let header = format!("{name}.h");
-        if let Some((h, units)) = p.parts.split(&p.c, &header, k) {
+        let small = if mode == Mode::Debug { 0 } else { SMALL_FN };
+        if let Some((h, units)) = p.parts.split(&p.c, &header, k, small) {
             return compile_parts(p, &name, &h, &units, out, mode);
         }
     }
@@ -1408,6 +1442,14 @@ fn cc_file(p: &CProgram, src: &Path, out: &Path, mode: Mode, link: bool) -> Resu
     Ok(())
 }
 
+/// What `--coverage` adds: one 8-bit counter per edge of the control-flow
+/// graph in every function clang compiles from the generated C, and
+/// `AYE_COVERAGE` for the runtime's callbacks (`std.coverage`).
+const COVERAGE_FLAGS: &[&str] = &[
+    "-fsanitize-coverage=edge,inline-8bit-counters",
+    "-DAYE_COVERAGE",
+];
+
 /// The clang command with the flags of the target, the mode and
 /// `--cflags`, before the input; `link` is whether it links.
 fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
@@ -1447,6 +1489,9 @@ fn clang_cmd(p: &CProgram, mode: Mode, link: bool) -> Result<Command, String> {
     if link {
         let sysroot = std::env::var_os("AYE_SYSROOT").map(PathBuf::from);
         cmd.args(cross_link_args(p.target, host_target(), sysroot.as_deref()));
+    }
+    if p.coverage && !p.target.is_wasm() {
+        cmd.args(COVERAGE_FLAGS);
     }
     cmd.arg("-Wno-incompatible-library-redeclaration")
         .args(mode.clang_flags().iter().filter(|f| p.debug || **f != "-g"))
@@ -1555,6 +1600,41 @@ mod tests {
         assert!(cross_link_args(t("x86_64-linux"), t("aarch64-linux"), Some(dir)).is_empty());
         assert!(cross_link_args(t("x86_64-macos"), t("aarch64-macos"), Some(dir)).is_empty());
         assert!(cross_link_args(t("wasm32-wasip1"), t("aarch64-macos"), Some(dir)).is_empty());
+    }
+
+    #[test]
+    fn safe_mode_checks_jump_to_one_panic_call_per_kind() {
+        let src = "fn f(s: []u32, i: usize, j: usize, n: u32) u32 {
+    let t = s[i..j]
+    return s[i] + s[j] + t[0] * n
+}
+
+pub fn main() {
+    var a = [2]u32{1, 2}
+    @println(f(a[..], 0, 1, 3))
+}
+";
+        // The C of `f`, from its definition to the next function.
+        let body = |mode| {
+            let c = compile_to_c("t.aye", src, mode).unwrap().c;
+            let at = c.find("aye_f_f(aye_S_u32 s_0").unwrap();
+            let at = at + c[at..].find(") {\n").unwrap();
+            c[at..at + c[at..].find("\n}\n").unwrap()].to_string()
+        };
+        let safe = body(Mode::Safe);
+        for (go, at) in [
+            ("AYE_PANIC_INDEX_GO(", "AYE_PANIC_INDEX_AT"),
+            ("AYE_PANIC_SLICE_GO(", "AYE_PANIC_SLICE_AT"),
+            ("AYE_PANIC_GO(", "AYE_PANIC_AT"),
+        ] {
+            assert!(safe.contains(go), "{safe}");
+            assert_eq!(safe.lines().filter(|l| *l == at).count(), 1, "{safe}");
+        }
+        assert!(!safe.contains("aye_panic"), "{safe}");
+        // Debug mode keeps a call at each check, where a debugger stops.
+        let debug = body(Mode::Debug);
+        assert!(debug.contains(" aye_panic_index("), "{debug}");
+        assert!(!debug.contains("AYE_PANIC"), "{debug}");
     }
 
     #[test]

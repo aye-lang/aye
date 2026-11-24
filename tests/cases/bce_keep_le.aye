@@ -1,0 +1,10 @@
+// `i <= s.len` lets `i` reach the length.
+pub fn main() {
+    var a = [3]u32{1, 2, 3}
+    let s = a[..]
+    var i: usize = 0
+    while i <= s.len {
+        @println(s[i])
+        i += 1
+    }
+}

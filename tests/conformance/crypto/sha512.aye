@@ -1,0 +1,38 @@
+import std.encoding
+import std.heap.General
+import std.mem.Allocator
+import std.crypto.Sha512
+import std.crypto.sha512
+
+fn hex(alloc: Allocator, d: []u8) {
+    let text = encoding.hexEncode(alloc, d) catch {
+        @println("alloc failed")
+        return
+    }
+    @println(text)
+    alloc.free(text)
+}
+
+/// One million "a", fed in chunks of 1000 bytes.
+fn million() [64]u8 {
+    var h = Sha512.init()
+    let chunk = [1000]u8{97, ..}
+    for i in 0..1000 {
+        h.update(chunk[..])
+    }
+    return h.final()
+}
+
+pub fn main() {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let d0 = sha512("abc")
+    hex(alloc, d0[..])
+    let d1 = sha512("")
+    hex(alloc, d1[..])
+    let d2 = sha512("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu")
+    hex(alloc, d2[..])
+    let dm = million()
+    hex(alloc, dm[..])
+}

@@ -17,11 +17,16 @@ pub error ReadLinkError = PathError || AllocError
 pub enum Kind { File, Dir, Symlink, Other }
 
 /// What `stat` knows about a path: the size in bytes, the modification time
-/// in nanoseconds since 1970-01-01 UTC, and the kind.
+/// in nanoseconds since 1970-01-01 UTC, the kind, the owner's user and
+/// group ids, and `st_mode`: the permission bits (`mode & 0o7777`, setuid,
+/// setgid and sticky included) and the type bits (`mode & 0o170000`).
 pub struct Stat {
     size: u64
     mtime: i64
     kind: Kind
+    uid: u32
+    gid: u32
+    mode: u32
 }
 
 /// An entry of a directory: its name (without the directory) and kind.
@@ -205,7 +210,9 @@ pub struct Reader {
     }
 }
 
-/// Open the file at `path` for reading.
+/// Open the file at `path` for reading. Like every descriptor std opens,
+/// it is close-on-exec: a program that `std.process` spawns does not
+/// inherit it.
 pub fn open(path: []u8) OpenError!File {
     return openResult(aye_std_open(path.ptr, path.len))
 }
@@ -224,7 +231,8 @@ fn openResult(fd: i32) OpenError!File {
     return File { fd: fd }
 }
 
-/// Create the file at `path` for writing, or empty it if it exists.
+/// Create the file at `path` for writing, or empty it if it exists
+/// (close-on-exec, like `open`).
 pub fn create(path: []u8) OpenError!File {
     return openResult(aye_std_create(path.ptr, path.len))
 }
@@ -429,27 +437,45 @@ fn statPath(path: []u8, follow: bool) PathError!Stat {
     var sec: i64 = 0
     var nsec: i64 = 0
     var mode: i64 = 0
+    var uid: i64 = 0
+    var gid: i64 = 0
     if @targetOs() is .linux {
-        // stx_mode (16 bits) at byte 28, stx_size at 40, stx_mtime at 112.
-        mode = st[3] >> 32
+        // stx_uid at byte 20, stx_gid at 24, stx_mode (16 bits) at 28,
+        // stx_size at 40, stx_mtime at 112.
+        uid = st[2] >> 32
+        gid = st[3]
+        mode = st[3] >> 32 & 0xffff
         size = st[5]
         sec = st[14]
         nsec = st[15] & 0xffffffff
     } else if @targetOs() is .macos {
-        // st_mode (16 bits) at byte 4, st_mtimespec at 48, st_size at 96.
-        mode = st[0] >> 32
+        // st_mode (16 bits) at byte 4, st_uid at 16, st_gid at 20,
+        // st_mtimespec at 48, st_size at 96.
+        mode = st[0] >> 32 & 0xffff
+        uid = st[2]
+        gid = st[2] >> 32
         sec = st[6]
         nsec = st[7]
         size = st[12]
     } else {
-        // wasi-libc: st_mode at byte 24, st_size at 48, st_mtim at 88 (its
-        // tv_nsec is a 32-bit long; the padding is not zeroed).
-        mode = st[3]
+        // wasi-libc: st_mode at byte 24, st_uid at 28, st_gid at 32,
+        // st_size at 48, st_mtim at 88 (its tv_nsec is a 32-bit long; the
+        // padding is not zeroed).
+        mode = st[3] & 0xffffffff
+        uid = st[3] >> 32
+        gid = st[4]
         size = st[6]
         sec = st[11]
         nsec = st[12] & 0xffffffff
     }
-    return Stat { size: size as u64, mtime: sec * 1000000000 + nsec, kind: kindOfMode(mode & 0xf000) }
+    return Stat {
+        size: size as u64,
+        mtime: sec * 1000000000 + nsec,
+        kind: kindOfMode(mode & 0xf000),
+        uid: (uid & 0xffffffff) as u32,
+        gid: (gid & 0xffffffff) as u32,
+        mode: mode as u32,
+    }
 }
 
 // The S_IFMT bits of a mode: S_IFREG, S_IFDIR, S_IFLNK.

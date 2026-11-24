@@ -1,0 +1,12 @@
+// The slice is assigned in the loop: `i < s.len` at the start of the loop
+// says nothing about the new `s`, so `s[i]` keeps its check.
+pub fn main() {
+    var a = [4]u32{1, 2, 3, 4}
+    var s = a[..]
+    var t: u32 = 0
+    for i in 0..s.len {
+        s = a[..2]
+        t += s[i]
+        @println(t)
+    }
+}

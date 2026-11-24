@@ -1,0 +1,85 @@
+// std.coverage: the edge counters of `--coverage`, for a fuzzer that keeps
+// the inputs which reach new code.
+//
+// `aye build|run|test --coverage` makes clang keep, in one byte per edge of
+// the control-flow graph (sanitizer coverage, `inline-8bit-counters`), how
+// many times each branch of the Aye code ran (the count wraps at 256; a
+// byte that is not 0 is an edge that ran). This module reads those bytes.
+// Without `--coverage` there are no counters: `enabled` is false and every
+// function here sees an empty region (a count of 0). The generated C is
+// the same either way; only the clang flags differ.
+//
+// Instrumented: every function that Aye compiles to C: the program, its
+// dependencies and the std functions written in Aye. Not instrumented: the
+// C runtime of the prelude (allocators, the `extern` helpers under `std.fs`,
+// `std.net`, ...), libc, and the C libraries of `@link` (libcurl, SDL).
+
+/// Was the program built with `--coverage`?
+pub fn enabled() bool {
+    return aye_std_cov_regions() > 0
+}
+
+/// The number of counter regions. The linker merges the counters of the
+/// units of one program into a single region, so this is 1 with `--coverage`
+/// (0 without), unless a toolchain keeps them apart.
+pub fn regions() usize {
+    return aye_std_cov_regions()
+}
+
+/// The counters of region `i`, one byte per edge, in memory that the
+/// instrumented code updates as it runs (there is no copy; read-only for the
+/// caller, `reset` clears it). An empty slice
+/// for `i >= regions()`.
+pub fn region(i: usize) []u8 {
+    let n = aye_std_cov_len(i)
+    if n == 0 {
+        return []u8{}
+    }
+    return aye_std_cov_ptr(i)[0..n]
+}
+
+/// The counters of the first region: all of them where the linker merges
+/// the units (`regions() == 1`).
+pub fn counters() []u8 {
+    return region(0)
+}
+
+/// The number of edges, run or not, in all regions.
+pub fn edgeCount() usize {
+    var total: usize = 0
+    for r in 0..aye_std_cov_regions() {
+        total += aye_std_cov_len(r)
+    }
+    return total
+}
+
+/// The number of edges that have run since the start or the last `reset`,
+/// in all regions.
+pub fn setCount() usize {
+    var total: usize = 0
+    for r in 0..aye_std_cov_regions() {
+        let c = region(r)
+        for i in 0..c.len {
+            if c[i] != 0 {
+                total += 1
+            }
+        }
+    }
+    return total
+}
+
+/// Set every counter to 0, to measure one input on its own. Not safe while
+/// another thread runs instrumented code (the counters are plain bytes).
+pub fn reset() {
+    for r in 0..aye_std_cov_regions() {
+        let n = aye_std_cov_len(r)
+        if n > 0 {
+            memset(aye_std_cov_ptr(r), 0, n)
+        }
+    }
+}
+
+extern fn aye_std_cov_regions() usize
+extern fn aye_std_cov_len(i: usize) usize
+extern fn aye_std_cov_ptr(i: usize) [*]u8
+extern fn memset(dst: [*]u8, c: i32, n: usize) [*]u8

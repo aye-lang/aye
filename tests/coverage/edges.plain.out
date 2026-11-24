@@ -1,0 +1,11 @@
+enabled: false
+regions: 0
+counters is the first region: true
+region past the end is empty: true
+some edges exist: false
+input 2: the count stays
+input 3: the count stays
+input 4: the count stays
+input 5: the count stays
+input 6: the count stays
+reset: back to the baseline: true

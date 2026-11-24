@@ -1,0 +1,13 @@
+// TC3h: the same block is freed twice; with tracking (debug mode, or
+// `--leak-check`) the second free panics.
+
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let p = try alloc.create(7 as i64)
+    alloc.destroy(p)
+    alloc.destroy(p)
+}

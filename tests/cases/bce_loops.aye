@@ -1,0 +1,142 @@
+// Loops whose bounds checks the compiler proves and leaves out (bce in
+// docs/decisions.md): the output is the same in every mode.
+struct Bag {
+    items: []u32
+    n: usize
+}
+
+fn double(x: u32) u32 {
+    return x * 2
+}
+
+fn forRange(s: []u32) u32 {
+    var t: u32 = 0
+    for i in 0..s.len {
+        t += s[i]
+    }
+    return t
+}
+
+fn whileLt(s: []u32) u32 {
+    var t: u32 = 0
+    var i: usize = 0
+    while i < s.len {
+        t += s[i]
+        i += 1
+    }
+    return t
+}
+
+fn copiedLen(s: []mut u32) u32 {
+    let n = s.len
+    for i in 0..n {
+        s[i] = double(s[i])
+    }
+    return forRange(s)
+}
+
+fn forEachIndex(xs: []u32) u32 {
+    var t: u32 = 0
+    for i, x in xs {
+        t += x * xs[i]
+    }
+    return t
+}
+
+fn firstZero(s: []u32) usize {
+    var i: usize = 0
+    while i < s.len && s[i] != 0 {
+        i += 1
+    }
+    return i
+}
+
+fn breakAtEnd(s: []u32) u32 {
+    var t: u32 = 0
+    var i: usize = 0
+    while true {
+        if i >= s.len || s[i] == 0 {
+            break
+        }
+        t += s[i]
+        i += 1
+    }
+    return t
+}
+
+fn notGe(s: []u32, i: usize) u32 {
+    if !(i >= s.len) {
+        return s[i] + s[i]
+    }
+    return 0
+}
+
+fn tails(s: []u32) u32 {
+    var t: u32 = 0
+    for i in 0..s.len {
+        t += forRange(s[i..]) + forRange(s[..i])
+    }
+    return t
+}
+
+fn reversed(s: []u32) u32 {
+    var t: u32 = 0
+    var i = s.len
+    while i > 0 {
+        i -= 1
+        t = t * 3 + s[i]
+    }
+    return t
+}
+
+fn field(b: Bag) u32 {
+    var t: u32 = 0
+    for i in 0..b.items.len {
+        t += b.items[i]
+    }
+    return t
+}
+
+fn array() u32 {
+    var a = [5]u32{1, 2, 3, 4, 5}
+    for i in 0..a.len {
+        a[i] = a[i] * a[i]
+    }
+    var t: u32 = 0
+    var i: usize = 0
+    while i < 5 {
+        t += a[i]
+        i += 1
+    }
+    return t
+}
+
+fn nonEmpty(s: []u32) u32 {
+    if s.len > 0 {
+        return s[0]
+    }
+    return 0
+}
+
+pub fn main() {
+    var a = [6]u32{3, 1, 4, 1, 5, 9}
+    let s = a[..]
+    @println(forRange(s))
+    @println(whileLt(s))
+    @println(forEachIndex(s))
+    @println(tails(s))
+    @println(reversed(s))
+    @println(notGe(s, 5))
+    @println(notGe(s, 6))
+    @println(nonEmpty(s))
+    @println(nonEmpty(s[..0]))
+    @println(field(Bag { items: s, n: 6 }))
+    @println(array())
+    var z = [5]u32{7, 8, 0, 9, 1}
+    @println(firstZero(z[..]))
+    @println(firstZero(z[..2]))
+    @println(breakAtEnd(z[..]))
+    @println(breakAtEnd(z[3..]))
+    var m = [3]u32{1, 2, 3}
+    @println(copiedLen(m[..]))
+}

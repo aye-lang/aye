@@ -1,0 +1,58 @@
+// std.coverage: run with `aye run --coverage` (golden `cli/aye --coverage`)
+// and without; `edges.out` and `edges.plain.out` are the two outputs.
+import std.coverage
+import std.log
+
+/// A function with branches: which edges run depends on the input.
+fn classify(s: []u8) i32 {
+    if s.len == 0 {
+        return 0
+    }
+    if s[0] == 'a' {
+        return 1
+    }
+    if s[0] == 'b' {
+        return 2
+    }
+    return 3
+}
+
+pub fn main() {
+    log.line("enabled: {}", coverage.enabled())
+    log.line("regions: {}", coverage.regions())
+    log.line("counters is the first region: {}", coverage.counters().len == coverage.region(0).len)
+    log.line("region past the end is empty: {}", coverage.region(9).len == 0)
+    log.line("some edges exist: {}", coverage.edgeCount() > 0)
+
+    coverage.reset()
+    // The edges of `setCount` itself are set by the first call: a baseline.
+    let base = coverage.setCount()
+    // The inputs, one after the other through the same call: the first two
+    // `a` warm up the loop and the measuring; the third takes no new
+    // branch; `b`, `z` and the empty input each take a new one. (Clang counts after its optimizations: in
+    // `debug` mode a branch is an edge; at -O2 `classify` may become
+    // selects, and two call sites of an inlined `classify` have edges
+    // of their own.)
+    let inputs = "aaaabz"
+    var counts = @zeroed([7]usize)
+    for i in 0..7 {
+        var n: usize = 1
+        if i == 6 {
+            n = 0
+        }
+        classify(inputs[i % 6..i % 6 + n])
+        counts[i] = coverage.setCount()
+    }
+    // Printed after the loop, so that the printing adds no edge.
+    var last = counts[1]
+    for i in 2..7 {
+        if counts[i] > last {
+            log.line("input {}: the count rises", i)
+        } else {
+            log.line("input {}: the count stays", i)
+        }
+        last = counts[i]
+    }
+    coverage.reset()
+    log.line("reset: back to the baseline: {}", coverage.setCount() == base)
+}

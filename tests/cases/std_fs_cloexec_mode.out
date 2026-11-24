@@ -1,0 +1,10 @@
+create closed
+open closed
+dup open
+listen closed
+0
+true
+true
+true
+true
+true

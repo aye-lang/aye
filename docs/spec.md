@@ -1717,7 +1717,8 @@ std.path      paths: join, dirname, basename, extension, normalize, isUnder  aye
 std.net       TCP over IPv4/IPv6: listen, connect, Listener, Conn, wait      below
 std.http      HTTP/1.1 server and client (https: libcurl): listen, Server.run, get, post; parse  aye doc --signatures std.http
 std.json      JSON: parse, get, asString, asNumber, at; write, stringify     below
-std.crypto    SHA-256, SHA-1, HMAC-SHA-256, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
+std.coverage  --coverage edge counters, for fuzzers                          below
+std.crypto    SHA-256/384/512, SHA-1, HMAC-SHA-256/384/512, randomBytes, constantTimeEqual   aye doc --signatures std.crypto
 std.encoding  base64, base64url, hex: encode and decode (RFC 4648)           aye doc --signatures std.encoding
 ```
 
@@ -1806,16 +1807,16 @@ error PathError { NotFound, AccessDenied, NotADirectory, Exists, NotEmpty, PathF
 error ReadDirError = PathError || AllocError
 error ReadLinkError = PathError || AllocError
 enum Kind { File, Dir, Symlink, Other }
-struct Stat { size: u64, mtime: i64, kind: Kind }
+struct Stat { size: u64, mtime: i64, kind: Kind, uid: u32, gid: u32, mode: u32 }   (mode: st_mode, permission and type bits)
 struct DirEntry { name: []u8, kind: Kind }
 struct DirEntries { items: []mut DirEntry }   (and private fields)
 struct File { fd: i32 }
-std.fs.open(path: []u8) OpenError!File      open a file for reading
+std.fs.open(path: []u8) OpenError!File      open a file for reading (close-on-exec, as every fd std opens)
 std.fs.create(path: []u8) OpenError!File    create (or empty) a file for writing
 std.fs.exists(path: []u8) bool              is there a file or directory at path?
 std.fs.mtime(path: []u8) ?i64               its modification time in ns since 1970; null if stat fails
 std.fs.readFile(alloc: Allocator, path: []u8) ReadFileError![]mut u8   the whole file; free with alloc.free
-std.fs.stat(path: []u8) PathError!Stat                  size, mtime (ns since 1970) and kind; a symlink is not followed
+std.fs.stat(path: []u8) PathError!Stat                  size, mtime (ns since 1970), kind, uid, gid and mode; a symlink is not followed
 std.fs.statFollow(path: []u8) PathError!Stat            like stat, but follows symlinks
 std.fs.readDir(alloc: Allocator, path: []u8) ReadDirError!DirEntries   the entries, no "." or ".."; unordered; free with deinit
 std.fs.mkdir(path: []u8) PathError!void                  create a directory (the parent must exist)
@@ -2192,6 +2193,20 @@ pub fn main() !void {
 std.testing.allocator() Allocator          the test's leak-checked allocator (as @testAllocator()); test blocks only
 ```
 
+### std.coverage
+
+`aye build|run|test --coverage` adds clang's edge counters (`-fsanitize-coverage=edge,inline-8bit-counters`: one byte per edge) to every function that Aye compiles to C: the program, its dependencies and the std written in Aye; not the C runtime, libc or `@link` libraries. A fuzzer keeps an input when its run sets an edge that no earlier run set. Without the flag the module compiles and sees no region. See `docs/cli.md`.
+
+```
+std.coverage.enabled() bool        was the program built with --coverage?
+std.coverage.regions() usize       the number of counter regions (1 with --coverage, else 0)
+std.coverage.region(i) []u8        the counters of region i (a byte that is not 0 is an edge that ran); empty past the end
+std.coverage.counters() []u8       region(0)
+std.coverage.edgeCount() usize     the edges, run or not
+std.coverage.setCount() usize      the edges that ran since the start or the last reset
+std.coverage.reset()               zero every counter
+```
+
 ### std.log
 
 ```
@@ -2448,6 +2463,10 @@ pub fn main() !void {
   another thread than the one that made it`).
 - `fast` mode removes the checks: overflow wraps, out-of-bounds access is
   undefined behavior.
+- A check that cannot fail is left out in every mode: `s[i]` after `i <
+  s.len` was tested (or `s[i]` was checked) with neither `i` nor `s`
+  assigned since, and `i += 1` after `i < n`. What panics, and where, does
+  not change.
 - `@setSafety(false)`, as the first statement of a block (a function body
   too), removes the checks of that block and the blocks in it, as `fast`
   mode does; `@setSafety(true)` in an inner block brings back the build

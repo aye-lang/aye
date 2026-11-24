@@ -17,13 +17,15 @@
 //! `@setSafety(false)` blocks leave them out (`AYE_CHECKS` is 0 in `fast`
 //! mode, for the runtime's own checks).
 //! `AYE_TRACE` (debug mode) keeps the error return trace that is printed when
-//! `main` returns an error, and turns on the leak, double-free and
-//! use-after-free checks of `General`.
+//! `main` returns an error. `AYE_TRACK` (debug mode, or `--leak-check` in
+//! any mode) turns on the leak, double-free and use-after-free checks of
+//! `General`.
 //!
 //! In test mode the C `main` runs the test whose index is its argument.
 //!
-//! A source position reaches the runtime as two `int`s: the line, with the
-//! file's index in its upper bits (`AYE_FILE`, `AYE_LINE`), and the column.
+//! A source position reaches the runtime as two `int`s: the line, and the
+//! column with the file's index in its upper 16 bits (`AYE_FILE`,
+//! `AYE_COL`). A program may have as many files as `Span::file` counts.
 
 use crate::ast::BinOp;
 use crate::diag::Span;
@@ -55,7 +57,12 @@ void __asan_unpoison_memory_region(void const volatile *, size_t);
 #define AYE_ASAN_UNPOISON(p, n) ((void)0)
 #endif
 
+#ifdef AYE_COVERAGE
+/* `--coverage` counts the edges of the Aye code, not of this runtime. */
+#define AYE_RT static __attribute__((unused, no_sanitize("coverage")))
+#else
 #define AYE_RT static __attribute__((unused))
+#endif
 #define AYE_STR_(x) #x
 #define AYE_STR(x) AYE_STR_(x)
 #ifdef AYE_FREESTANDING
@@ -529,27 +536,48 @@ extern uint8_t *aye_rt_opendir(const char *) __asm__(AYE_SYM("opendir" AYE_INODE
 extern uint8_t *aye_rt_readdir(uint8_t *) __asm__(AYE_SYM("readdir" AYE_INODE64));
 extern int aye_rt_closedir(uint8_t *) __asm__(AYE_SYM("closedir"));
 extern void aye_rt_rewinddir(uint8_t *) __asm__(AYE_SYM("rewinddir"));
-#define AYE_FILE(l) aye_files[(l) >> 20]
-#define AYE_LINE(l) ((l) & 0xfffff)
+#define AYE_FILE(c) aye_files[(unsigned)(c) >> 16]
+#define AYE_COL(c) ((c) & 0xffff)
 
 AYE_RT __attribute__((noreturn, cold)) void aye_panic(int line, int col, const char *msg) {
     aye_rt_fflush(0);
-    aye_rt_dprintf(2, "%s:%d:%d: panic: %s\n", AYE_FILE(line), AYE_LINE(line), col, msg);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: %s\n", AYE_FILE(col), line, AYE_COL(col), msg);
     aye_rt_abort();
 }
 AYE_RT __attribute__((noreturn, cold)) void aye_panic_index(int line, int col, size_t i, size_t len) {
     aye_rt_fflush(0);
-    aye_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", AYE_FILE(line), AYE_LINE(line), col,
+    aye_rt_dprintf(2, "%s:%d:%d: panic: index out of bounds: index %llu, len %llu\n", AYE_FILE(col), line, AYE_COL(col),
                    (unsigned long long)i, (unsigned long long)len);
     aye_rt_abort();
 }
 AYE_RT __attribute__((noreturn, cold)) void aye_panic_slice(int line, int col, size_t lo, size_t hi, size_t len) {
     aye_rt_fflush(0);
-    aye_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", AYE_FILE(line),
-                   AYE_LINE(line), col, (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
+    aye_rt_dprintf(2, "%s:%d:%d: panic: slice bounds out of range: [%llu..%llu] with len %llu\n", AYE_FILE(col), line, AYE_COL(col), (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)len);
     aye_rt_abort();
 }
 #define AYE_UNLIKELY(c) __builtin_expect(!!(c), 0)
+/* Safe mode: a failed check does not call the runtime where it fails but
+   stores the position and values in the function's `aye_p*_` locals and
+   jumps to the one call of its kind at the end of the function
+   (`AYE_PANIC_AT` and the others), so that a check costs clang's inliner
+   a compare and a branch, not a call with its arguments. */
+#define AYE_PANIC_VARS                                                                             \
+    __attribute__((unused)) int aye_pl_, aye_pc_;                                                  \
+    __attribute__((unused)) size_t aye_pa_, aye_pb_, aye_pn_;                                      \
+    __attribute__((unused)) const char *aye_pm_;
+#define AYE_PANIC_GO(l, c, m)                                                                      \
+    { aye_pl_ = (int)(l); aye_pc_ = (c); aye_pm_ = (m); goto aye_panic_; }
+#define AYE_PANIC_INDEX_GO(l, c, i, n)                                                             \
+    { aye_pl_ = (int)(l); aye_pc_ = (c); aye_pa_ = (i); aye_pb_ = (n); goto aye_panic_index_; }
+#define AYE_PANIC_SLICE_GO(l, c, lo, hi, n)                                                        \
+    {                                                                                              \
+        aye_pl_ = (int)(l); aye_pc_ = (c); aye_pa_ = (lo); aye_pb_ = (hi); aye_pn_ = (n);          \
+        goto aye_panic_slice_;                                                                     \
+    }
+#define AYE_PANIC_AT aye_panic_: aye_panic(aye_pl_, aye_pc_, aye_pm_);
+#define AYE_PANIC_INDEX_AT aye_panic_index_: aye_panic_index(aye_pl_, aye_pc_, aye_pa_, aye_pb_);
+#define AYE_PANIC_SLICE_AT                                                                         \
+    aye_panic_slice_: aye_panic_slice(aye_pl_, aye_pc_, aye_pa_, aye_pb_, aye_pn_);
 
 /* `@hash`: each scalar is mixed in with SplitMix64's finalizer. A float
    hashes its bits, with -0.0 as 0.0 (they are `==`). */
@@ -588,7 +616,7 @@ AYE_RT int aye_main_error(uint16_t e) {
     if (AYE_TRACE) {
         aye_rt_dprintf(2, "error return trace:\n");
         for (uint32_t i = 0; i < aye_trace_len && i < AYE_TRACE_MAX; i++) {
-            aye_rt_dprintf(2, "%s:%d:%d\n", AYE_FILE(aye_trace[i].line), AYE_LINE(aye_trace[i].line), aye_trace[i].col);
+            aye_rt_dprintf(2, "%s:%d:%d\n", AYE_FILE(aye_trace[i].col), aye_trace[i].line, AYE_COL(aye_trace[i].col));
         }
         if (aye_trace_len > AYE_TRACE_MAX) aye_rt_dprintf(2, "(%u more)\n", aye_trace_len - AYE_TRACE_MAX);
     }
@@ -619,8 +647,8 @@ AYE_RT void aye_free_n(aye_Allocator a, void *p, size_t n, size_t size, int line
     if (n) aye_free(a, p, n * size, line, col);
 }
 
-/* General: libc malloc/free. With `track` (debug mode, and the test
-   allocator) each block has a header before it: its allocator, size,
+/* General: libc malloc/free. With `track` (AYE_TRACK: debug mode or
+   `--leak-check`; and always the test allocator) each block has a header before it: its allocator, size,
    state, and where it was allocated and freed. Live blocks are in a
    doubly linked list, oldest first, for the leak report. A freed block is
    filled with AYE_POISON and kept in a FIFO quarantine of at most
@@ -675,7 +703,7 @@ AYE_RT void aye_general_release(aye_alloc_hdr *h) {
         if (b[i] != AYE_POISON) {
             aye_rt_fflush(0);
             aye_rt_dprintf(2, "%s:%d:%d: panic: use after free: memory allocated at %s:%d:%d and freed here was written after it was freed\n",
-                           AYE_FILE(h->free_line), AYE_LINE(h->free_line), h->free_col, AYE_FILE(h->line), AYE_LINE(h->line), h->col);
+                           AYE_FILE(h->free_col), h->free_line, AYE_COL(h->free_col), AYE_FILE(h->col), h->line, AYE_COL(h->col));
             aye_rt_abort();
         }
     }
@@ -696,8 +724,8 @@ AYE_RT void aye_general_free(void *self, void *p, size_t size, int line, int col
     if (h->state == AYE_FREED) {
         aye_rt_fflush(0);
         aye_rt_dprintf(2, "%s:%d:%d: panic: double free of memory allocated at %s:%d:%d and already freed at %s:%d:%d\n",
-                       AYE_FILE(line), AYE_LINE(line), col, AYE_FILE(h->line), AYE_LINE(h->line), h->col,
-                       AYE_FILE(h->free_line), AYE_LINE(h->free_line), h->free_col);
+                       AYE_FILE(col), line, AYE_COL(col), AYE_FILE(h->col), h->line, AYE_COL(h->col),
+                       AYE_FILE(h->free_col), h->free_line, AYE_COL(h->free_col));
         aye_rt_abort();
     }
     if (h->prev) h->prev->next = h->next; else g->head = h->next;
@@ -720,7 +748,7 @@ AYE_RT void aye_general_free(void *self, void *p, size_t size, int line, int col
     }
 }
 AYE_DATA __attribute__((unused)) const aye_alloc_vt aye_general_vt AYE_INIT({aye_general_alloc, aye_general_free});
-AYE_RT aye_General aye_general_init(void) { return (aye_General){.track = AYE_TRACE}; }
+AYE_RT aye_General aye_general_init(void) { return (aye_General){.track = AYE_TRACK}; }
 AYE_RT aye_Allocator aye_general_allocator(aye_General *g) { return (aye_Allocator){g, &aye_general_vt}; }
 /* Report each allocation that was not freed, in allocation order, then
    free all memory (checking the quarantined blocks). Returns the number of
@@ -730,8 +758,7 @@ AYE_RT size_t aye_general_deinit(aye_General *g) {
     for (aye_alloc_hdr *h = g->head, *next; h; h = next) {
         next = h->next;
         if (!leaks) aye_rt_fflush(0);
-        aye_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", AYE_FILE(h->line),
-                       AYE_LINE(h->line), h->col, (unsigned long long)h->size);
+        aye_rt_dprintf(2, "%s:%d:%d: leak: %llu bytes allocated here were never freed\n", AYE_FILE(h->col), h->line, AYE_COL(h->col), (unsigned long long)h->size);
         leaks++;
         h->state = 0;
         aye_rt_free(h);
@@ -806,7 +833,7 @@ AYE_RT aye_Allocator aye_test_allocator(void) { return aye_general_allocator(&ay
 #define AYE_ASSERT_FAILED(line, col, fmt, ...)                                                                  \
     do {                                                                                                         \
         aye_rt_fflush(0);                                                                                        \
-        aye_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", AYE_FILE(line), AYE_LINE(line), col, __VA_ARGS__); \
+        aye_rt_dprintf(2, "%s:%d:%d: assertion failed: " fmt "\n", AYE_FILE(col), line, AYE_COL(col), __VA_ARGS__); \
         aye_rt_exit(1);                                                                                          \
     } while (0)
 AYE_RT void aye_expect(bool c, int line, int col) {
@@ -873,8 +900,8 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__error"));
 extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #endif
 #ifdef __APPLE__
-#define AYE_O_RDONLY 0
-#define AYE_O_CREATE 0x601 /* O_WRONLY | O_CREAT | O_TRUNC */
+#define AYE_O_RDONLY 0x01000000 /* O_CLOEXEC */
+#define AYE_O_CREATE 0x01000601 /* O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC */
 #define AYE_CLOCK_MONOTONIC 6
 #define AYE_ENOTEMPTY 66
 #define AYE_D_TYPE 20 /* dirent: d_type, then d_name */
@@ -887,8 +914,8 @@ extern int *aye_rt_errno_loc(void) __asm__(AYE_SYM("__errno_location"));
 #define AYE_D_TYPE 8 /* dirent: d_ino, d_type, then d_name */
 #define AYE_NSEC(v) ((int64_t)(uint32_t)(v)) /* tv_nsec is a 32-bit long; the padding is not zeroed */
 #else
-#define AYE_O_RDONLY 0
-#define AYE_O_CREATE 01101
+#define AYE_O_RDONLY 02000000 /* O_CLOEXEC */
+#define AYE_O_CREATE 02001101 /* O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC */
 #define AYE_CLOCK_MONOTONIC 1
 #define AYE_ENOTEMPTY 39
 #define AYE_D_TYPE 18
@@ -1033,7 +1060,8 @@ AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
    pipe). `out` gets the process id, then the parent's end of the stdin,
    stdout and stderr pipes (-1 where there is none). Returns 0 or the errno
    of the failure, including that of `execvp` in the child, which reports it
-   through a close-on-exec pipe. Every pipe end is close-on-exec; `dup2`
+   through a close-on-exec pipe. Every pipe end is close-on-exec (made so
+   atomically by `pipe2` on Linux, by `fcntl` after `pipe` on macOS); `dup2`
    clears the flag on the child's 0, 1 and 2. `args` goes on with `envc`
    NUL-terminated `NAME=value` strings (`envc` < 0: the child inherits this
    process's environment) and, when `hascwd` is set, one more string, the
@@ -1041,6 +1069,9 @@ AYE_RT uint8_t *aye_std_getenv(uint8_t *name, size_t len) {
    this process, so that a write to an exited child's stdin fails with
    EPIPE; the child gets the default action back before `execvp`. */
 extern int aye_rt_pipe(int *) __asm__(AYE_SYM("pipe"));
+#ifdef __linux__
+extern int aye_rt_pipe2(int *, int) __asm__(AYE_SYM("pipe2"));
+#endif
 extern int aye_rt_close(int) __asm__(AYE_SYM("close"));
 extern int aye_rt_dup2(int, int) __asm__(AYE_SYM("dup2"));
 extern int aye_rt_fork(void) __asm__(AYE_SYM("fork"));
@@ -1053,6 +1084,16 @@ extern int aye_rt_chdir(const char *) __asm__(AYE_SYM("chdir"));
 extern void (*aye_rt_signal(int, void (*)(int)))(int) __asm__(AYE_SYM("signal"));
 extern char **aye_rt_environ __asm__(AYE_SYM("environ"));
 extern void aye_rt_exit_now(int) __asm__(AYE_SYM("_exit")) __attribute__((noreturn));
+static __attribute__((unused)) int aye_cloexec_pipe(int *p) {
+#ifdef __linux__
+    return aye_rt_pipe2(p, 02000000);
+#else
+    if (aye_rt_pipe(p) != 0) return -1;
+    aye_rt_fcntl(p[0], 2, 1);
+    aye_rt_fcntl(p[1], 2, 1);
+    return 0;
+#endif
+}
 AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t envc, int32_t hascwd, int32_t modes, int32_t *out) {
     int pp[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
     int ep[2] = {-1, -1};
@@ -1079,13 +1120,9 @@ AYE_RT int32_t aye_std_spawn(uint8_t *args, int32_t argc, int32_t envc, int32_t 
     aye_rt_signal(13, (void (*)(int))1);
     for (int s = 0; s < 3; s++) {
         if (((modes >> (2 * s)) & 3) == 0) continue;
-        if (aye_rt_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
-        aye_rt_fcntl(pp[s][0], 2, 1);
-        aye_rt_fcntl(pp[s][1], 2, 1);
+        if (aye_cloexec_pipe(pp[s]) != 0) { err = *aye_rt_errno_loc(); goto fail; }
     }
-    if (aye_rt_pipe(ep) != 0) { err = *aye_rt_errno_loc(); goto fail; }
-    aye_rt_fcntl(ep[0], 2, 1);
-    aye_rt_fcntl(ep[1], 2, 1);
+    if (aye_cloexec_pipe(ep) != 0) { err = *aye_rt_errno_loc(); goto fail; }
     aye_rt_fflush(0);
     pid = aye_rt_fork();
     if (pid < 0) { err = *aye_rt_errno_loc(); goto fail; }
@@ -1384,6 +1421,41 @@ AYE_RT void aye_std_on_stop(void) {
 #endif
 }
 AYE_RT bool aye_std_stop_requested(void) { return __atomic_load_n(&aye_stop_flag, __ATOMIC_RELAXED) != 0; }
+
+/* std.coverage: the regions of edge counters that clang's
+   `-fsanitize-coverage=inline-8bit-counters` (`--coverage`, which also
+   defines AYE_COVERAGE) registers from a constructor in each unit before
+   `main`. The linker merges the units' counters into one section, so every
+   unit reports the same range; ranges that overlap or touch are joined.
+   Without `--coverage` there are no regions. */
+#ifdef AYE_COVERAGE
+#define AYE_COV_MAX 8
+AYE_DATA uint8_t *aye_cov_start[AYE_COV_MAX], *aye_cov_stop[AYE_COV_MAX];
+AYE_DATA size_t aye_cov_n;
+#if !defined(AYE_UNIT) || AYE_UNIT == 0
+__attribute__((no_sanitize("coverage"), used)) void __sanitizer_cov_8bit_counters_init(uint8_t *s, uint8_t *e) {
+    if (s >= e) return;
+    for (size_t i = 0; i < aye_cov_n; i++) {
+        if (s <= aye_cov_stop[i] && e >= aye_cov_start[i]) {
+            if (s < aye_cov_start[i]) aye_cov_start[i] = s;
+            if (e > aye_cov_stop[i]) aye_cov_stop[i] = e;
+            return;
+        }
+    }
+    if (aye_cov_n < AYE_COV_MAX) {
+        aye_cov_start[aye_cov_n] = s;
+        aye_cov_stop[aye_cov_n++] = e;
+    }
+}
+#endif
+AYE_RT size_t aye_std_cov_regions(void) { return aye_cov_n; }
+AYE_RT size_t aye_std_cov_len(size_t i) { return i < aye_cov_n ? (size_t)(aye_cov_stop[i] - aye_cov_start[i]) : 0; }
+AYE_RT uint8_t *aye_std_cov_ptr(size_t i) { return i < aye_cov_n ? aye_cov_start[i] : 0; }
+#else
+AYE_RT size_t aye_std_cov_regions(void) { return 0; }
+AYE_RT size_t aye_std_cov_len(size_t i) { (void)i; return 0; }
+AYE_RT uint8_t *aye_std_cov_ptr(size_t i) { (void)i; return 0; }
+#endif
 
 /* std.thread and std.sync: pthreads. A `pthread_t` is 8 bytes on macOS and
    Linux; a mutex or condition variable lives on the C heap (128 bytes holds
@@ -1747,41 +1819,80 @@ pub struct Parts {
 impl Parts {
     /// The C `c` (from `emit`) as a header, which a unit includes as
     /// `header`, and at most `k` units that each define a contiguous run
-    /// of the functions, balanced by size (unit 0 also has `main`). `None`
-    /// when the program has too few functions to gain from it.
-    pub fn split(&self, c: &str, header: &str, k: usize) -> Option<(String, Vec<String>)> {
+    /// of the functions, balanced by size (unit 0 also has `main`). A
+    /// function whose C is at most `small` bytes is instead defined `static
+    /// inline` at the end of the header, a copy in each unit that calls it.
+    /// `None` when the program has too few functions to gain from it.
+    pub fn split(
+        &self,
+        c: &str,
+        header: &str,
+        k: usize,
+        small: usize,
+    ) -> Option<(String, Vec<String>)> {
         if k < 2 || self.funcs.len() < SPLIT_MIN_FUNCS {
             return None;
         }
         let first = self.funcs[0].0;
         let total = self.tail.0 - first;
+        let mut inline = String::new();
+        let mut sigs = std::collections::HashSet::new();
         let mut units: Vec<String> = Vec::new();
+        let mut moved = false;
         for (i, (start, line)) in self.funcs.iter().enumerate() {
             let end = self.funcs.get(i + 1).map_or(self.tail.0, |f| f.0);
+            let body = &c[*start..end];
+            if end - start <= small && body.starts_with("\nAYE_FN ") {
+                let sig = &body[1..body.find(" {\n").unwrap()];
+                sigs.insert(sig);
+                inline.push_str(line);
+                inline.push_str("\nstatic inline ");
+                inline.push_str(&body["\nAYE_FN ".len()..]);
+                moved = true;
+                continue;
+            }
             // A new unit once this one has its share of the bodies.
             if units.is_empty() || ((start - first) * k >= total * units.len() && units.len() < k) {
                 units.push(format!(
                     "#define AYE_UNIT {}\n#include \"{header}\"\n{line}",
                     units.len()
                 ));
+            } else if moved {
+                units.last_mut().unwrap().push_str(line);
             }
-            units.last_mut().unwrap().push_str(&c[*start..end]);
+            moved = false;
+            units.last_mut().unwrap().push_str(body);
         }
         units[0].push_str(&self.tail.1);
         units[0].push_str(&c[self.tail.0..]);
-        Some((c[..first].to_string(), units))
+        let mut h = String::with_capacity(first + inline.len());
+        for l in c[..first].split_inclusive('\n') {
+            match l.strip_suffix(";\n").filter(|sig| sigs.contains(sig)) {
+                Some(sig) => {
+                    h.push_str("static inline ");
+                    h.push_str(&sig["AYE_FN ".len()..]);
+                    h.push_str(";\n");
+                }
+                None => h.push_str(l),
+            }
+        }
+        h.push_str(&inline);
+        Some((h, units))
     }
 }
 
 /// Emit the C translation unit for `p`. `files` are the Aye source names
 /// (indexed by `Span::file`) used in `#line` directives and panic messages;
-/// `checks` enables runtime checks and `trace` the error return trace (debug
-/// mode). With `tests`, `main` runs one test instead of `aye_f_main`.
+/// `checks` enables runtime checks, `trace` the error return trace (debug
+/// mode) and `track` the leak, double-free and use-after-free checks of
+/// `General` (debug mode, or `--leak-check`). With `tests`, `main` runs one
+/// test instead of `aye_f_main`.
 pub fn emit(
     p: &Program,
     files: &[String],
     checks: bool,
     trace: bool,
+    track: bool,
     tests: bool,
 ) -> (String, Parts) {
     let files = files.iter().map(|f| c_str(f.as_bytes())).collect();
@@ -1797,8 +1908,11 @@ pub fn emit(
         loops: Vec::new(),
         next_label: 0,
         layout: p.layout,
+        // `trace` is on in debug mode only.
+        join: checks && !trace,
+        joined: std::cell::Cell::new(0),
     };
-    g.program(p, checks, tests);
+    g.program(p, checks, track, tests);
     (g.out, g.parts)
 }
 
@@ -1889,7 +2003,19 @@ struct Gen {
     next_label: usize,
     /// The target's integer widths.
     layout: Layout,
+    /// A failed check jumps to one panic call per kind at the end of the
+    /// function (`AYE_PANIC_GO`): safe mode. Debug mode keeps a call at
+    /// each check, where a debugger stops.
+    join: bool,
+    /// The kinds of panic the current function jumps to (`PANIC_MSG`,
+    /// `PANIC_INDEX`, `PANIC_SLICE`), for the calls at its end.
+    joined: std::cell::Cell<u8>,
 }
+
+/// The kinds of panic call at the end of a function (`Gen::joined`).
+const PANIC_MSG: u8 = 1;
+const PANIC_INDEX: u8 = 2;
+const PANIC_SLICE: u8 = 4;
 
 const C_KEYWORDS: &[&str] = &[
     "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else",
@@ -2100,7 +2226,31 @@ fn global_name(name: &str) -> String {
 /// A position for the runtime: the line with the file index in its upper
 /// bits, and the column.
 fn line_col(span: Span) -> String {
-    format!("{}, {}", (span.file as u32) << 20 | span.line, span.col)
+    let col = (span.file as u32) << 16 | span.col.min(0xffff);
+
+    format!("{}, {}", span.line, col as i32)
+}
+
+#[cfg(test)]
+mod line_col_tests {
+    use super::*;
+
+    #[test]
+    fn the_file_index_is_in_the_upper_half_of_the_column() {
+        let at = |file, col| {
+            line_col(Span {
+                line: 473,
+                col,
+                file,
+            })
+        };
+        assert_eq!(at(0, 14), "473, 14");
+        assert_eq!(at(2589, 14), format!("473, {}", (2589 << 16) | 14));
+        assert_eq!(
+            at(40000, 70000),
+            format!("473, {}", (40000u32 << 16 | 0xffff) as i32)
+        );
+    }
 }
 
 impl Gen {
@@ -2126,7 +2276,7 @@ impl Gen {
         self.out.push('\n');
     }
 
-    fn program(&mut self, p: &Program, checks: bool, tests: bool) {
+    fn program(&mut self, p: &Program, checks: bool, track: bool, tests: bool) {
         self.enum_names = p
             .enums
             .iter()
@@ -2141,6 +2291,7 @@ impl Gen {
             .push_str("/* Generated by the Aye stage0 compiler. Do not edit. */\n");
         let _ = writeln!(self.out, "#define AYE_CHECKS {}", checks as u8);
         let _ = writeln!(self.out, "#define AYE_TRACE {}", self.trace as u8);
+        let _ = writeln!(self.out, "#define AYE_TRACK {}", track as u8);
         self.out.push_str(LINKAGE);
         let _ = writeln!(
             self.out,
@@ -2558,9 +2709,55 @@ impl Gen {
                 self.line(1, &s);
             }
         }
+        if self.join {
+            self.line(1, "AYE_PANIC_VARS");
+            self.joined.set(0);
+        }
         self.line(1, "AYE_STACK_CHECK();");
         self.block(f, &f.body, 1);
+        let joined = self.joined.get();
+        // The body of a function that returns nothing may end without a
+        // `return`: it must not run into the calls.
+        if joined != 0 && c_type(&f.ret) == "void" {
+            self.line(1, "return;");
+        }
+        for (kind, at) in [
+            (PANIC_MSG, "AYE_PANIC_AT"),
+            (PANIC_INDEX, "AYE_PANIC_INDEX_AT"),
+            (PANIC_SLICE, "AYE_PANIC_SLICE_AT"),
+        ] {
+            if joined & kind != 0 {
+                self.line(0, at);
+            }
+        }
         self.out.push_str("}\n");
+    }
+
+    /// The statement that panics at `span` with `msg` (a C string literal).
+    fn panic(&self, span: Span, msg: &str) -> String {
+        if self.join {
+            self.joined.set(self.joined.get() | PANIC_MSG);
+            return format!("AYE_PANIC_GO({}, {msg});", line_col(span));
+        }
+        format!("aye_panic({}, {msg});", line_col(span))
+    }
+
+    /// The statement that panics at `span`: index `i` out of `0..n`.
+    fn panic_index(&self, span: Span, i: &str, n: &str) -> String {
+        if self.join {
+            self.joined.set(self.joined.get() | PANIC_INDEX);
+            return format!("AYE_PANIC_INDEX_GO({}, {i}, {n});", line_col(span));
+        }
+        format!("aye_panic_index({}, {i}, {n});", line_col(span))
+    }
+
+    /// The statement that panics at `span`: slice `lo..hi` of `n`.
+    fn panic_slice(&self, span: Span, lo: &str, hi: &str, n: &str) -> String {
+        if self.join {
+            self.joined.set(self.joined.get() | PANIC_SLICE);
+            return format!("AYE_PANIC_SLICE_GO({}, {lo}, {hi}, {n});", line_col(span));
+        }
+        format!("aye_panic_slice({}, {lo}, {hi}, {n});", line_col(span))
     }
 
     fn block(&mut self, f: &Func, b: &Block, ind: usize) {
@@ -2596,9 +2793,9 @@ impl Gen {
                     } if self.checks => {
                         let (a, b) = (self.operand(f, lhs), self.operand(f, rhs));
                         format!(
-                            "if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) aye_panic({}, \"integer overflow\");",
+                            "if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &{p}))) {}",
                             overflow_builtin(*op),
-                            line_col(*span)
+                            self.panic(*span, "\"integer overflow\"")
                         )
                     }
                     _ => format!("{p} = {};", self.rvalue(f, rv)),
@@ -2681,9 +2878,9 @@ impl Gen {
             } => {
                 if self.checks {
                     let line = format!(
-                        "if (AYE_UNLIKELY(!{})) aye_panic({}, \"{msg}\");",
+                        "if (AYE_UNLIKELY(!{})) {}",
                         self.operand(f, c),
-                        line_col(*span)
+                        self.panic(*span, &format!("\"{msg}\""))
                     );
                     self.line(ind, &line);
                 }
@@ -2700,7 +2897,8 @@ impl Gen {
                 span,
             } => {
                 if self.checks {
-                    self.line(ind, &format!("aye_panic({}, \"{msg}\");", line_col(*span)));
+                    let line = self.panic(*span, &format!("\"{msg}\""));
+                    self.line(ind, &line);
                 } else {
                     self.line(ind, "__builtin_unreachable();");
                 }
@@ -2770,7 +2968,13 @@ impl Gen {
         }
         let mut s = Self::local_name(f, p.local);
         for proj in &p.proj {
-            if let Proj::Index { index, len, span } = proj {
+            if let Proj::Index {
+                index,
+                len,
+                span,
+                checked: true,
+            } = proj
+            {
                 let n = match len {
                     Len::Array(n) | Len::Lanes(n) if matches!(index, Operand::Int(v, _) if (*v as u64) < *n) => {
                         None
@@ -2782,8 +2986,8 @@ impl Gen {
                 if let Some(n) = n {
                     let i = self.operand(f, index);
                     out.push(format!(
-                        "if (AYE_UNLIKELY((size_t){i} >= {n})) aye_panic_index({}, {i}, {n});",
-                        line_col(*span)
+                        "if (AYE_UNLIKELY((size_t){i} >= {n})) {}",
+                        self.panic_index(*span, &i, &n)
                     ));
                 }
             }
@@ -2800,8 +3004,8 @@ impl Gen {
         }
         let panic = |cond: String, span: Span, msg: &str| {
             format!(
-                "if (AYE_UNLIKELY({cond})) aye_panic({}, \"{msg}\");",
-                line_col(span)
+                "if (AYE_UNLIKELY({cond})) {}",
+                self.panic(span, &format!("\"{msg}\""))
             )
         };
         match rv {
@@ -2815,9 +3019,13 @@ impl Gen {
                 lo,
                 hi,
                 span,
+                checked,
                 ..
             } => {
                 self.place_checks(f, base, out);
+                if !checked {
+                    return;
+                }
                 let b = self.place(f, base);
                 let n = match len {
                     Len::Array(n) | Len::Lanes(n) => n.to_string(),
@@ -2831,8 +3039,8 @@ impl Gen {
                     .map(|h| self.operand(f, h))
                     .unwrap_or_else(|| n.clone());
                 out.push(format!(
-                    "if (AYE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) aye_panic_slice({}, {lo}, {hi}, {n});",
-                    line_col(*span)
+                    "if (AYE_UNLIKELY((size_t){lo} > (size_t){hi} || (size_t){hi} > {n})) {}",
+                    self.panic_slice(*span, &lo, &hi, &n)
                 ));
             }
             // A constant divisor other than 0 and -1 needs no check.
@@ -2953,10 +3161,10 @@ impl Gen {
                 match (op, ty) {
                     (BinOp::Add | BinOp::Sub | BinOp::Mul, Type::Int(it)) if self.checks => {
                         format!(
-                            "({{ {} r_; if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) aye_panic({}, \"integer overflow\"); r_; }})",
+                            "({{ {} r_; if (AYE_UNLIKELY(__builtin_{}_overflow({a}, {b}, &r_))) {} r_; }})",
                             int_c(*it),
                             overflow_builtin(*op),
-                            line_col(*span)
+                            self.panic(*span, "\"integer overflow\"")
                         )
                     }
                     (BinOp::Add | BinOp::AddWrap, Type::Int(it)) => {
@@ -3555,4 +3763,57 @@ fn collect_type(t: &Type, seen: &mut HashSet<Type>, all: &mut Vec<Type>) {
         _ => {}
     }
     all.push(t.clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 200 one-line functions and one big one, as `emit` lays them out.
+    fn program() -> (String, Parts) {
+        let mut c = String::from("#include <stdint.h>\n");
+        for i in 0..=200 {
+            c.push_str(&format!("AYE_FN int f{i}(void);\n"));
+        }
+        let mut parts = Parts::default();
+        for i in 0..=200 {
+            parts
+                .funcs
+                .push((c.len(), format!("#line {i} \"a.aye\"\n")));
+            let body = if i == 200 {
+                "    f0();\n".repeat(100)
+            } else {
+                String::new()
+            };
+            c.push_str(&format!(
+                "\nAYE_FN int f{i}(void) {{\n{body}    return {i};\n}}\n"
+            ));
+        }
+        parts.tail = (c.len(), String::new());
+        c.push_str("\nint main(void) { return f200(); }\n");
+        (c, parts)
+    }
+
+    #[test]
+    fn split_defines_small_functions_inline_in_the_header() {
+        let (c, parts) = program();
+        let (h, units) = parts.split(&c, "p.h", 4, 100).unwrap();
+        assert!(h.contains("\nstatic inline int f0(void);\n"));
+        assert!(
+            h.contains("#line 0 \"a.aye\"\n\nstatic inline int f0(void) {\n    return 0;\n}\n")
+        );
+        assert!(h.contains("\nAYE_FN int f200(void);\n"));
+        assert_eq!(units.len(), 1);
+        assert!(units[0].contains("\nAYE_FN int f200(void) {\n"));
+        assert!(!units.iter().any(|u| u.contains("int f0(void) {")));
+    }
+
+    #[test]
+    fn split_without_small_keeps_every_function_in_a_unit() {
+        let (c, parts) = program();
+        let (h, units) = parts.split(&c, "p.h", 4, 0).unwrap();
+        assert_eq!(h, c[..parts.funcs[0].0]);
+        assert!(!units.concat().contains("static inline"));
+        assert_eq!(units.len(), 4);
+    }
 }

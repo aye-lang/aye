@@ -7,7 +7,8 @@
 // The C constants that differ between macOS and Linux (the layout of
 // `struct addrinfo`, SOL_SOCKET and its options, errno values, MSG_NOSIGNAL
 // or SO_NOSIGPIPE) are chosen by `@targetOs()` when the program is built.
-// Writes never raise SIGPIPE: a closed peer is an error.
+// Writes never raise SIGPIPE: a closed peer is an error. Every socket is
+// close-on-exec, so a spawned program does not inherit it.
 
 import std.text
 
@@ -25,7 +26,7 @@ pub struct Listener {
     /// Waits for the next connection.
     pub fn accept(self: Self) AcceptError!Conn {
         while true {
-            let fd = accept(self.sock, null, null)
+            let fd = acceptCloexec(self.sock)
             if fd >= 0 {
                 noSigpipe(fd)
                 return Conn { sock: fd }
@@ -63,7 +64,7 @@ pub struct Listener {
             return ListenError.ListenFailed
         }
         // Linux's sa_family is a u16 at byte 0.
-        let fd = socket(addr[0] as i32 | (addr[1] as i32) << 8, SOCK_STREAM, 0)
+        let fd = newSocket(addr[0] as i32 | (addr[1] as i32) << 8)
         if fd < 0 {
             return ListenError.ListenFailed
         }
@@ -254,7 +255,7 @@ fn listenOn(host: []u8, port: u16, shared: bool) ListenError!Listener {
     var e: i32 = 0
     var cur = head
     while cur |ai| {
-        let fd = socket(ai.family, SOCK_STREAM, 0)
+        let fd = newSocket(ai.family)
         if fd >= 0 {
             var one = [4]u8{1, 0, 0, 0}
             var reuse: i32 = 2
@@ -310,7 +311,7 @@ pub fn connect(host: []u8, port: u16) ConnectError!Conn {
     var e: i32 = 0
     var cur = head
     while cur |ai| {
-        let fd = socket(ai.family, SOCK_STREAM, 0)
+        let fd = newSocket(ai.family)
         if fd >= 0 {
             if cConnect(fd, sockAddr(ai), ai.addrlen) == 0 {
                 freeaddrinfo(head)
@@ -357,7 +358,7 @@ pub fn connectTimeout(host: []u8, port: u16, ms: u32) ConnectError!Conn {
     var e: i32 = 0
     var cur = head
     while cur |ai| {
-        let fd = socket(ai.family, SOCK_STREAM, 0)
+        let fd = newSocket(ai.family)
         if fd >= 0 {
             let flags = fcntl(fd, F_GETFL)
             if flags < 0 || fcntl(fd, F_SETFL, flags | pick(0x4, 0x800)) != 0 {
@@ -489,6 +490,9 @@ let EACCES: i32 = 13
 let EPIPE: i32 = 32
 let F_GETFL: i32 = 3
 let F_SETFL: i32 = 4
+let F_SETFD: i32 = 2
+let FD_CLOEXEC: i32 = 1
+let SOCK_CLOEXEC_LINUX: i32 = 0x80000
 // Linux: send's flag; macOS: the socket option.
 let MSG_NOSIGNAL_LINUX: i32 = 0x4000
 let SO_NOSIGPIPE_DARWIN: i32 = 0x1022
@@ -526,6 +530,32 @@ fn readError(e: i32) ReadError {
     return ReadError.ReadFailed
 }
 
+// A close-on-exec stream socket: SOCK_CLOEXEC on Linux; macOS has no such
+// flag, so FD_CLOEXEC is set right after.
+fn newSocket(family: i32) i32 {
+    if @targetOs() is .macos {
+        let fd = socket(family, SOCK_STREAM, 0)
+        if fd >= 0 {
+            _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        }
+        return fd
+    }
+    return socket(family, SOCK_STREAM | SOCK_CLOEXEC_LINUX, 0)
+}
+
+// `accept`, close-on-exec: `accept4` with SOCK_CLOEXEC on Linux, FD_CLOEXEC
+// right after on macOS.
+fn acceptCloexec(sock: i32) i32 {
+    if @targetOs() is .macos {
+        let fd = accept(sock, null, null)
+        if fd >= 0 {
+            _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
+        }
+        return fd
+    }
+    return accept4(sock, null, null, SOCK_CLOEXEC_LINUX)
+}
+
 // No SIGPIPE for writes to `fd` on macOS (Linux: `write`'s flag).
 fn noSigpipe(fd: i32) {
     if @targetOs() is .macos {
@@ -550,6 +580,7 @@ extern("connect") fn cConnect(fd: i32, addr: [*]u8, len: u32) i32
 extern fn socket(domain: i32, kind: i32, protocol: i32) i32
 extern fn bind(fd: i32, addr: [*]u8, len: u32) i32
 extern fn accept(fd: i32, addr: ?[*]u8, len: ?[*]u32) i32
+extern fn accept4(fd: i32, addr: ?[*]u8, len: ?[*]u32, flags: i32) i32
 extern fn getsockname(fd: i32, addr: [*]u8, len: *mut u32) i32
 extern fn setsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: u32) i32
 extern fn getsockopt(fd: i32, level: i32, name: i32, value: [*]u8, len: *mut u32) i32

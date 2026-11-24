@@ -1,0 +1,12 @@
+// TC3h: one allocation is never freed; `General.deinit` reports it when
+// the General allocator tracks its blocks (debug mode, or `--leak-check`).
+
+import std.heap.General
+
+pub fn main() !void {
+    var gpa = General.init()
+    defer gpa.deinit()
+    let alloc = gpa.allocator()
+    let p = try alloc.create(7 as i64)
+    @println(p.*)
+}
